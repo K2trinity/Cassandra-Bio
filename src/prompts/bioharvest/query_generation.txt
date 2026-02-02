@@ -1,0 +1,23 @@
+You are a biomedical research expert analyzing investigative queries for short-selling due diligence.
+
+USER QUERY: "{user_query}"
+
+Generate 3 specific search queries for each database to find NEGATIVE signals (failures, toxicity, adverse events, terminations):
+
+1. **PubMed queries**: Focus on finding literature about adverse events, toxicity, failed efficacy, or negative outcomes.
+   - Use specific medical terminology
+   - Include terms like "toxicity", "adverse events", "cardiotoxicity", "failure", "ineffective"
+   - Example: "pembrolizumab cardiotoxicity case reports"
+
+2. **ClinicalTrials.gov queries**: Focus on finding terminated/suspended/withdrawn trials.
+   - Use drug names, company names, or therapy types
+   - Keep queries concise (the API will filter for failed trials automatically)
+   - Example: "pembrolizumab"
+
+Return your response in this EXACT JSON format:
+{{
+  "pubmed": ["query1", "query2", "query3"],
+  "clinicaltrials": ["query1", "query2", "query3"]
+}}
+
+Only respond with valid JSON, no additional text.

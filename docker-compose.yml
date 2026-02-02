@@ -1,39 +1,55 @@
 version: "3.9"
 
 services:
-  bettafish:
-    image: ghcr.io/666ghj/bettafish:latest
-    # Speed up mirror
-    # image: ghcr.nju.edu.cn/666ghj/bettafish:latest
-    container_name: bettafish
+  # 1. 你的主程序 (Cassandra / Bio-Short-Seller)
+  app:
+    container_name: bio-short-seller-app
+    build: .  # 使用当前目录的 Dockerfile 构建
     restart: unless-stopped
-    environment:
-      - PYTHONUNBUFFERED=1
-      - STREAMLIT_SERVER_ENABLE_FILE_WATCHER=false
     ports:
-      - "5000:5000"
-      - "8501:8501"
-      - "8502:8502"
-      - "8503:8503"
-    volumes:
-      - ./logs:/app/logs
-      - ./final_reports:/app/final_reports
-      - ./.env:/app/.env  
-      - ./insight_engine_streamlit_reports:/app/insight_engine_streamlit_reports
-      - ./media_engine_streamlit_reports:/app/media_engine_streamlit_reports
-      - ./query_engine_streamlit_reports:/app/query_engine_streamlit_reports
-
-  db:
-    image: postgres:15
-    container_name: bettafish-db
-    restart: unless-stopped
+      - "7897:5000"  # Flask API
+      - "8501:8501"  # Streamlit (如果有)
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
     env_file:
       - .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-bettafish}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bettafish}
-      POSTGRES_DB: ${POSTGRES_DB:-bettafish}
-    ports:
-      - "${POSTGRES_PORT:-5444}:5432"
     volumes:
-      - ./db_data:/var/lib/postgresql/data
+      - .:/app            # 挂载当前代码，方便开发调试
+      - ./logs:/app/logs
+      - ./final_reports:/app/final_reports
+    depends_on:
+      - neo4j
+      - redis
+
+  # 2. Neo4j 图数据库 (核心大脑)
+  neo4j:
+    image: neo4j:5.19.0
+    container_name: bio-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # HTTP 管理界面
+      - "7687:7687"   # Bolt 协议端口 (代码连接用)
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      # 开启 APOC 插件 (图算法库，可选但推荐)
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
+
+  # 3. Redis (解决 State Bloat 的关键)
+  redis:
+    image: redis:7.2-alpine
+    container_name: bio-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
