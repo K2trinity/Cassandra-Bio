@@ -1,0 +1,559 @@
+{% extends "base.html" %}
+
+{% block title %}System Configuration - Cassandra{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<header class="bg-slate-950 border-b border-slate-800 px-8 py-4">
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-white">System Configuration</h2>
+            <p class="text-sm text-gray-400 mt-1">Configure intelligence core and infrastructure connections</p>
+        </div>
+        <button id="saveAllBtn" class="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors">
+            Save All Settings
+        </button>
+    </div>
+</header>
+
+<!-- Main Content -->
+<div class="flex-1 overflow-y-auto p-8">
+    <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- Intelligence Core (Gemini) -->
+        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <div class="p-6 bg-gradient-to-r from-purple-600/20 to-blue-600/20 border-b border-slate-700">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+                            <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-white">Intelligence Core</h3>
+                            <p class="text-sm text-gray-300">Google Gemini 3 Pro Preview Configuration</p>
+                        </div>
+                    </div>
+                    <div id="geminiStatus" class="flex items-center gap-2 px-4 py-2 bg-slate-900/50 rounded-lg">
+                        <div class="w-2 h-2 bg-gray-500 rounded-full"></div>
+                        <span class="text-sm text-gray-400">Not tested</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- API Key -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">API Key</label>
+                    <div class="flex gap-3">
+                        <input 
+                            type="password" 
+                            id="geminiApiKey"
+                            placeholder="AIza..."
+                            class="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+                        />
+                        <button id="testGeminiBtn" class="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-lg transition-colors">
+                            Test Connection
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">Get your API key from <a href="https://makersuite.google.com/app/apikey" target="_blank" class="text-purple-400 hover:underline">Google AI Studio</a></p>
+                </div>
+                
+                <!-- Model Selection -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Model</label>
+                    <select id="geminiModel" class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <optgroup label="Gemini 3 Series (Preview - Latest)">
+                            <option value="gemini-3-pro-preview" selected>Gemini 3 Pro Preview (Most Powerful)</option>
+                            <option value="gemini-3-flash-preview">Gemini 3 Flash Preview (Fast & Scalable)</option>
+                        </optgroup>
+                        
+                        <optgroup label="Gemini 2.5 Series (Stable)">
+                            <option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced Reasoning)</option>
+                            <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast & Cost Effective)</option>
+                            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite (Ultra Fast)</option>
+                        </optgroup>
+                        
+                        <optgroup label="Gemini 2.0 Series">
+                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (Versatile)</option>
+                            <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite (Lightweight)</option>
+                        </optgroup>
+                        
+                        <optgroup label="Latest Aliases">
+                            <option value="gemini-pro-latest">Gemini Pro Latest (Auto-updated)</option>
+                            <option value="gemini-flash-latest">Gemini Flash Latest (Auto-updated)</option>
+                            <option value="gemini-flash-lite-latest">Gemini Flash-Lite Latest (Auto-updated)</option>
+                        </optgroup>
+                    </select>
+                </div>
+                
+                <!-- Temperature -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">
+                        Temperature: <span id="tempValue" class="text-purple-400">0.7</span>
+                    </label>
+                    <input 
+                        type="range" 
+                        id="geminiTemp" 
+                        min="0" 
+                        max="1" 
+                        step="0.1" 
+                        value="0.7"
+                        class="w-full h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                    />
+                    <div class="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>Precise (0.0)</span>
+                        <span>Balanced</span>
+                        <span>Creative (1.0)</span>
+                    </div>
+                </div>
+                
+                <!-- Max Tokens -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Max Output Tokens</label>
+                    <input 
+                        type="number" 
+                        id="geminiMaxTokens" 
+                        value="8192"
+                        min="1024"
+                        max="32768"
+                        class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Memory Cortex (Neo4j) -->
+        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <div class="p-6 bg-gradient-to-r from-emerald-600/20 to-teal-600/20 border-b border-slate-700">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
+                            <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-white">Memory Cortex</h3>
+                            <p class="text-sm text-gray-300">Neo4j Knowledge Graph Database</p>
+                        </div>
+                    </div>
+                    <div id="neo4jStatus" class="flex items-center gap-2 px-4 py-2 bg-slate-900/50 rounded-lg">
+                        <div class="w-2 h-2 bg-gray-500 rounded-full"></div>
+                        <span class="text-sm text-gray-400">Not tested</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- Connection URI -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Connection URI</label>
+                    <div class="flex gap-3">
+                        <input 
+                            type="text" 
+                            id="neo4jUri"
+                            placeholder="bolt://localhost:7687"
+                            value="bolt://localhost:7687"
+                            class="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
+                        />
+                        <button id="testNeo4jBtn" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors">
+                            Test Connection
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Credentials -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-300 mb-2">Username</label>
+                        <input 
+                            type="text" 
+                            id="neo4jUser"
+                            placeholder="neo4j"
+                            value="neo4j"
+                            class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-300 mb-2">Password</label>
+                        <input 
+                            type="password" 
+                            id="neo4jPassword"
+                            placeholder="password"
+                            class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                    </div>
+                </div>
+                
+                <!-- Database -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Database Name</label>
+                    <input 
+                        type="text" 
+                        id="neo4jDatabase"
+                        placeholder="neo4j"
+                        value="neo4j"
+                        class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Cache Layer (Redis) -->
+        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <div class="p-6 bg-gradient-to-r from-red-600/20 to-orange-600/20 border-b border-slate-700">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 bg-gradient-to-br from-red-500 to-orange-500 rounded-lg flex items-center justify-center">
+                            <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-xl font-bold text-white">Cache Layer</h3>
+                            <p class="text-sm text-gray-300">Redis State Management</p>
+                        </div>
+                    </div>
+                    <div id="redisStatus" class="flex items-center gap-2 px-4 py-2 bg-slate-900/50 rounded-lg">
+                        <div class="w-2 h-2 bg-gray-500 rounded-full"></div>
+                        <span class="text-sm text-gray-400">Not tested</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- Connection URI -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Connection URI</label>
+                    <div class="flex gap-3">
+                        <input 
+                            type="text" 
+                            id="redisUri"
+                            placeholder="redis://localhost:6379/0"
+                            value="redis://localhost:6379/0"
+                            class="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500 font-mono text-sm"
+                        />
+                        <button id="testRedisBtn" class="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition-colors">
+                            Test Connection
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Engine Tuning -->
+        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <div class="p-6 border-b border-slate-700">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
+                        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-bold text-white">Engine Tuning</h3>
+                        <p class="text-sm text-gray-300">Configure analysis workflow parameters</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <!-- Engine Toggles -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                        <div>
+                            <p class="font-semibold text-white">BioHarvest Engine</p>
+                            <p class="text-xs text-gray-500">PubMed + Clinical Trials</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="enableBioHarvest" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                    
+                    <div class="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                        <div>
+                            <p class="font-semibold text-white">Evidence Miner</p>
+                            <p class="text-xs text-gray-500">Extract key findings</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="enableEvidence" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                    
+                    <div class="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                        <div>
+                            <p class="font-semibold text-white">Forensic Auditor</p>
+                            <p class="text-xs text-gray-500">Safety verification</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="enableForensic" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                    
+                    <div class="flex items-center justify-between p-4 bg-slate-900 rounded-lg">
+                        <div>
+                            <p class="font-semibold text-white">Report Writer</p>
+                            <p class="text-xs text-gray-500">Final synthesis</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="enableReport" class="sr-only peer" checked>
+                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Max Results -->
+                <div>
+                    <label class="block text-sm font-semibold text-gray-300 mb-2">Max Evidence Items per Source</label>
+                    <input 
+                        type="number" 
+                        id="maxResults" 
+                        value="50"
+                        min="10"
+                        max="200"
+                        class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Temperature slider
+    document.getElementById('geminiTemp').addEventListener('input', (e) => {
+        document.getElementById('tempValue').textContent = e.target.value;
+    });
+    
+    // Test Gemini connection
+    document.getElementById('testGeminiBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('testGeminiBtn');
+        const status = document.getElementById('geminiStatus');
+        const apiKey = document.getElementById('geminiApiKey').value;
+        
+        if (!apiKey) {
+            updateStatus(status, 'error', 'API key required');
+            return;
+        }
+        
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        updateStatus(status, 'testing', 'Testing connection...');
+        
+        try {
+            const response = await fetch('/api/test-gemini', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ api_key: apiKey })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                updateStatus(status, 'success', 'Connected');
+            } else {
+                updateStatus(status, 'error', result.error || 'Connection failed');
+            }
+        } catch (error) {
+            updateStatus(status, 'error', 'Connection failed');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        }
+    });
+    
+    // Test Neo4j connection
+    document.getElementById('testNeo4jBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('testNeo4jBtn');
+        const status = document.getElementById('neo4jStatus');
+        
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        updateStatus(status, 'testing', 'Testing connection...');
+        
+        try {
+            const response = await fetch('/api/test-neo4j', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    uri: document.getElementById('neo4jUri').value,
+                    user: document.getElementById('neo4jUser').value,
+                    password: document.getElementById('neo4jPassword').value,
+                    database: document.getElementById('neo4jDatabase').value
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                updateStatus(status, 'success', 'Connected');
+            } else {
+                updateStatus(status, 'error', result.error || 'Connection failed');
+            }
+        } catch (error) {
+            updateStatus(status, 'error', 'Connection failed');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        }
+    });
+    
+    // Test Redis connection
+    document.getElementById('testRedisBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('testRedisBtn');
+        const status = document.getElementById('redisStatus');
+        
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        updateStatus(status, 'testing', 'Testing connection...');
+        
+        try {
+            const response = await fetch('/api/test-redis', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    uri: document.getElementById('redisUri').value
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                updateStatus(status, 'success', 'Connected');
+            } else {
+                updateStatus(status, 'error', result.error || 'Connection failed');
+            }
+        } catch (error) {
+            updateStatus(status, 'error', 'Connection failed');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        }
+    });
+    
+    // Update status indicator
+    function updateStatus(element, type, message) {
+        const dot = element.querySelector('div');
+        const text = element.querySelector('span');
+        
+        dot.className = 'w-2 h-2 rounded-full';
+        
+        if (type === 'success') {
+            dot.classList.add('bg-emerald-500', 'pulse-safe');
+            text.className = 'text-sm text-emerald-400';
+        } else if (type === 'error') {
+            dot.classList.add('bg-red-500');
+            text.className = 'text-sm text-red-400';
+        } else if (type === 'testing') {
+            dot.classList.add('bg-yellow-500', 'animate-pulse');
+            text.className = 'text-sm text-yellow-400';
+        } else {
+            dot.classList.add('bg-gray-500');
+            text.className = 'text-sm text-gray-400';
+        }
+        
+        text.textContent = message;
+    }
+    
+    // Save all settings
+    document.getElementById('saveAllBtn').addEventListener('click', async () => {
+        const btn = document.getElementById('saveAllBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        
+        const config = {
+            gemini: {
+                api_key: document.getElementById('geminiApiKey').value,
+                model: document.getElementById('geminiModel').value,
+                temperature: parseFloat(document.getElementById('geminiTemp').value),
+                max_tokens: parseInt(document.getElementById('geminiMaxTokens').value)
+            },
+            neo4j: {
+                uri: document.getElementById('neo4jUri').value,
+                user: document.getElementById('neo4jUser').value,
+                password: document.getElementById('neo4jPassword').value,
+                database: document.getElementById('neo4jDatabase').value
+            },
+            redis: {
+                uri: document.getElementById('redisUri').value
+            },
+            engines: {
+                bioharvest: document.getElementById('enableBioHarvest').checked,
+                evidence: document.getElementById('enableEvidence').checked,
+                forensic: document.getElementById('enableForensic').checked,
+                report: document.getElementById('enableReport').checked
+            },
+            max_results: parseInt(document.getElementById('maxResults').value)
+        };
+        
+        try {
+            const response = await fetch('/api/save-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                btn.textContent = '✓ Saved';
+                btn.className = 'px-6 py-2 bg-emerald-600 text-white font-semibold rounded-lg';
+                setTimeout(() => {
+                    btn.textContent = 'Save All Settings';
+                    btn.className = 'px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors';
+                }, 2000);
+            } else {
+                btn.textContent = '✗ Failed';
+                btn.className = 'px-6 py-2 bg-red-600 text-white font-semibold rounded-lg';
+            }
+        } catch (error) {
+            btn.textContent = '✗ Error';
+            btn.className = 'px-6 py-2 bg-red-600 text-white font-semibold rounded-lg';
+        } finally {
+            btn.disabled = false;
+        }
+    });
+    
+    // Load current settings on page load
+    window.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const response = await fetch('/api/get-config');
+            const config = await response.json();
+            
+            if (config.gemini) {
+                if (config.gemini.api_key) document.getElementById('geminiApiKey').value = config.gemini.api_key;
+                if (config.gemini.model) document.getElementById('geminiModel').value = config.gemini.model;
+                if (config.gemini.temperature) {
+                    document.getElementById('geminiTemp').value = config.gemini.temperature;
+                    document.getElementById('tempValue').textContent = config.gemini.temperature;
+                }
+                if (config.gemini.max_tokens) document.getElementById('geminiMaxTokens').value = config.gemini.max_tokens;
+            }
+            
+            if (config.neo4j) {
+                if (config.neo4j.uri) document.getElementById('neo4jUri').value = config.neo4j.uri;
+                if (config.neo4j.user) document.getElementById('neo4jUser').value = config.neo4j.user;
+                if (config.neo4j.database) document.getElementById('neo4jDatabase').value = config.neo4j.database;
+            }
+            
+            if (config.redis && config.redis.uri) {
+                document.getElementById('redisUri').value = config.redis.uri;
+            }
+            
+            if (config.max_results) {
+                document.getElementById('maxResults').value = config.max_results;
+            }
+        } catch (error) {
+            console.error('Failed to load config:', error);
+        }
+    });
+</script>
+{% endblock %}
