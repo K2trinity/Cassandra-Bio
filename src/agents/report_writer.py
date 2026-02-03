@@ -56,6 +56,7 @@ class ReportOutput:
     
     Attributes:
         markdown_content: Rendered markdown report
+        markdown_path: Path to saved markdown file
         html_path: Path to generated HTML (if rendered)
         pdf_path: Path to generated PDF (if rendered)
         recommendation: Final investment recommendation
@@ -63,6 +64,7 @@ class ReportOutput:
         risk_score: Aggregated risk score (0-10)
     """
     markdown_content: str
+    markdown_path: Optional[str] = None
     html_path: Optional[str] = None
     pdf_path: Optional[str] = None
     recommendation: str = "AVOID"
@@ -153,10 +155,20 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
         forensic_data: Optional[List[Dict[str, Any]]] = None,
         evidence_data: Optional[List[Dict[str, Any]]] = None,
         project_name: Optional[str] = None,
-        output_dir: str = "reports"
+        output_dir: str = "reports",
+        # 🚨 PHASE 2: New parameters for honest reporting
+        compiled_evidence_text: str = "",
+        failed_count: int = 0,
+        total_files: int = 0,
+        risk_override: Optional[str] = None,
+        analysis_status: str = "UNKNOWN",
+        failed_files: Optional[List[str]] = None
     ) -> ReportOutput:
         """
         Generate comprehensive biomedical due diligence report.
+        
+        🚨 PHASE 2: Now accepts failure metadata to enforce honest reporting
+        when PDFs fail to process.
         
         Args:
             user_query: Original user query (e.g., "Analyze CAR-T therapy X")
@@ -165,13 +177,21 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             evidence_data: Results from EvidenceEngine (dark data)
             project_name: Drug/therapy name (auto-extracted if None)
             output_dir: Directory for saving reports
+            
+            # 🚨 PHASE 2: Honest reporting parameters
+            compiled_evidence_text: Aggregated text content of evidence
+            failed_count: Number of PDFs that failed to process
+            total_files: Total number of PDFs attempted
+            risk_override: Forced risk level when data is incomplete
+            analysis_status: COMPLETE | PARTIAL_SUCCESS | CRITICAL_FAILURE
+            failed_files: List of failed filenames
         
         Returns:
             ReportOutput object with markdown content and paths
         
         Workflow:
             Step A: Data aggregation and validation
-            Step B: Gemini-powered evidence synthesis
+            Step B: Gemini-powered evidence synthesis (with failure awareness)
             Step C: Risk scoring and recommendation generation
             Step D: Template rendering (Markdown)
             Step E: Optional HTML/PDF conversion
@@ -182,7 +202,10 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             ...     user_query="Analyze drug X safety",
             ...     harvest_data=bioharvest_results,
             ...     forensic_data=forensic_results,
-            ...     evidence_data=evidence_results
+            ...     evidence_data=evidence_results,
+            ...     failed_count=2,  # 🚨 PHASE 2
+            ...     total_files=5,   # 🚨 PHASE 2
+            ...     risk_override="UNCERTAIN (40% data missing)"  # 🚨 PHASE 2
             ... )
             >>> print(f"Recommendation: {report.recommendation}")
             >>> print(f"Risk Score: {report.risk_score}/10")
@@ -190,6 +213,13 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
         logger.info(f"\n{'='*60}")
         logger.info(f"📊 Report Generation: {user_query}")
         logger.info(f"{'='*60}")
+        
+        # 🚨 PHASE 2: Log failure context
+        if failed_count > 0:
+            logger.warning(f"⚠️ HONEST REPORTING MODE: {failed_count}/{total_files} files failed")
+            logger.warning(f"   Analysis Status: {analysis_status}")
+            if risk_override:
+                logger.warning(f"   Risk Override: {risk_override}")
         
         try:
             # ===== STEP A: Data Aggregation =====
@@ -209,17 +239,46 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
                 f"{len(report_data.evidence_results)} evidence items"
             )
             
+            # ===== STEP A.5: Mathematical Confidence Score =====
+            # 🧮 THE FIX: ENFORCE DETERMINISTIC MATH
+            if total_files > 0:
+                success_count = max(0, total_files - failed_count)
+                # Base Score: 10 * (Success Rate)
+                raw_score = (success_count / total_files) * 10
+                # Cap at 10.0, Floor at 1.0 (unless 0 files processed)
+                confidence_score = round(raw_score, 1)
+            else:
+                confidence_score = 0.0
+            
+            logger.info(f"🧮 Calculated Confidence: {confidence_score}/10 (Success: {total_files - failed_count}/{total_files})")
+            # ----------------------------------------------
+            
             # ===== STEP B: Evidence Synthesis =====
             logger.info("\n[Step B] Synthesizing evidence with Gemini...")
-            synthesized_sections = self._synthesize_evidence(report_data)
+            # 🚨 PHASE 2: Pass failure context to synthesis
+            # 🧠 THE FIX: Pass mathematical confidence score to prevent AI hallucination
+            synthesized_sections = self._synthesize_evidence(
+                report_data,
+                compiled_evidence_text=compiled_evidence_text,
+                failed_count=failed_count,
+                total_files=total_files,
+                risk_override=risk_override,
+                analysis_status=analysis_status,
+                failed_files=failed_files or [],
+                confidence_score=confidence_score  # 🔥 INJECT MATHEMATICAL SCORE
+            )
             
             logger.success(f"Synthesized {len(synthesized_sections)} report sections")
             
             # ===== STEP C: Risk Scoring =====
             logger.info("\n[Step C] Calculating risk scores...")
+            # 🚨 PHASE 2: Pass risk_override to scoring
             risk_analysis = self._calculate_risk_scores(
                 report_data,
-                synthesized_sections
+                synthesized_sections,
+                risk_override=risk_override,
+                failed_count=failed_count,
+                total_files=total_files
             )
             
             logger.success(
@@ -266,6 +325,7 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             # Create output object
             report_output = ReportOutput(
                 markdown_content=markdown_content,
+                markdown_path=str(markdown_file),  # PHASE 3.1 FIX: Add markdown path
                 html_path=str(pdf_file) if pdf_path else None,  # Store PDF path in html_path for now
                 pdf_path=str(pdf_path) if pdf_path else None,
                 recommendation=risk_analysis['recommendation'],
@@ -326,12 +386,33 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             }
         )
     
-    def _synthesize_evidence(self, report_data: ReportData) -> Dict[str, str]:
+    def _synthesize_evidence(
+        self, 
+        report_data: ReportData,
+        # 🚨 PHASE 2: Add failure awareness parameters
+        compiled_evidence_text: str = "",
+        failed_count: int = 0,
+        total_files: int = 0,
+        risk_override: Optional[str] = None,
+        analysis_status: str = "COMPLETE",
+        failed_files: List[str] = None,
+        confidence_score: float = 0.0  # 🧠 NEW: Mathematical confidence score
+    ) -> Dict[str, str]:
         """
         Use Gemini to synthesize evidence into narrative sections.
         
+        🚨 PHASE 2: Enforces honest reporting when data is incomplete.
+        🧠 THE FIX: confidence_score is now mathematically calculated, not AI-generated.
+        
         Args:
             report_data: Aggregated report data
+            compiled_evidence_text: Actual text content of evidence
+            failed_count: Number of files that failed processing
+            total_files: Total files attempted
+            risk_override: Forced risk level when data incomplete
+            analysis_status: COMPLETE | PARTIAL_SUCCESS | CRITICAL_FAILURE
+            failed_files: List of failed filenames
+            confidence_score: CALCULATED confidence score (0-10) - DO NOT LET LLM OVERRIDE
         
         Returns:
             Dictionary mapping section names to synthesized text
@@ -339,27 +420,101 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
         # Prepare evidence summary for LLM
         evidence_summary = self._prepare_evidence_summary(report_data)
         
+        # 🚨 PHASE 2: Build mandatory failure disclosure
+        failure_disclosure = ""
+        if failed_count > 0:
+            failure_rate = (failed_count / total_files * 100) if total_files > 0 else 0
+            failure_disclosure = f"""
+⚠️ **CRITICAL DATA INTEGRITY NOTICE:**
+- **Analysis Status:** {analysis_status}
+- **Files Processed:** {total_files - failed_count}/{total_files} succeeded
+- **Files Failed:** {failed_count} ({failure_rate:.0f}% failure rate)
+- **Failed Files:** {', '.join(failed_files or ['Unknown'])}
+- **Data Completeness:** {'CRITICAL FAILURE' if failed_count == total_files else 'PARTIAL'}
+
+🚨 **MANDATORY REPORTING REQUIREMENT:**
+You MUST acknowledge this data failure in your Executive Summary with:
+- A bold warning at the top: "⚠️ **WARNING: INCOMPLETE ANALYSIS**"
+- Explicit statement: "{failed_count} out of {total_files} PDFs failed to process"
+- Clear disclaimer: "Risk assessment may be INACCURATE due to missing data"
+- If risk_override is provided, YOU MUST use it as the Risk Level instead of calculating your own
+
+**PROHIBITED:**
+- DO NOT invent data for missing files
+- DO NOT claim "Low Risk" when data is missing
+- DO NOT ignore this failure in your analysis
+- If evidence_text is empty/minimal, state "Data Extraction Failed" explicitly
+"""
+        
+        # 🧠 THE FIX: Inject Mathematical Confidence Score into System Prompt
+        confidence_instruction = f"""
+
+🧠 **CONFIDENCE SCORE MANDATE:**
+- **CALCULATED CONFIDENCE:** {confidence_score}/10 (Based on {total_files - failed_count}/{total_files} success rate)
+- **CRITICAL INSTRUCTION:** You MUST use exactly "{confidence_score}/10" as the Confidence Score in the Executive Summary.
+- **STRICTLY PROHIBITED:** DO NOT recalculate, adjust, or hallucinate this number. This is MATHEMATICAL, not subjective.
+- **Example Usage in Report:** "Confidence Score: {confidence_score}/10"
+"""
+        
+        # 💉 STEP 2 FIX: Inject compiled evidence text AFTER statistical summary
+        evidence_log_section = ""
+        if compiled_evidence_text:
+            evidence_log_section = f"""
+
+<EVIDENCE_LOG>
+### 📝 RAW EVIDENCE EXTRACTED FROM PDFs:
+{compiled_evidence_text}
+</EVIDENCE_LOG>
+
+🔍 **CRITICAL INSTRUCTION:**
+Use the specific findings, quotes, and analyses from the <EVIDENCE_LOG> above to populate:
+- "Red Flags Identified" section
+- "Dark Data" section  
+- Risk assessments
+DO NOT use "[Data not available]" if evidence exists in the log above.
+If <EVIDENCE_LOG> is empty, explicitly state "PDF extraction failed - no evidence available".
+"""
+        else:
+            evidence_log_section = """
+
+<EVIDENCE_LOG>
+⚠️ **NO EVIDENCE TEXT AVAILABLE** - PDF extraction may have failed.
+</EVIDENCE_LOG>
+
+🚨 You MUST report this as "CRITICAL DATA GAP" in the Dark Data section.
+"""
+        
         synthesis_prompt = f"""Analyze the following biomedical due diligence data and synthesize it into structured report sections.
 
 **USER QUERY:** {report_data.user_query}
 
-**EVIDENCE SUMMARY:**
+{failure_disclosure}
+
+{confidence_instruction}
+
+**EVIDENCE SUMMARY (Statistical Overview):**
 {evidence_summary}
+
+{evidence_log_section}
 
 **REQUIRED SECTIONS:**
 
 Generate JSON output with these sections:
 
 1. **executive_summary**: 3-5 paragraph overview with Go/No-Go recommendation
+   🚨 IF failed_count > 0: START with bold warning about incomplete analysis
+   🧮 MUST include: "Confidence Score: {confidence_score}/10" (DO NOT modify this number)
 2. **scientific_rationale**: Analysis of the drug's mechanism and biological plausibility
 3. **clinical_trial_analysis**: Detailed analysis of failed/terminated trials
 4. **dark_data_synthesis**: Analysis of buried negative results from supplementary materials
+   🚨 IF no evidence text available: State "Data extraction failed - unable to analyze"
 5. **forensic_findings**: Assessment of suspicious images and their implications
 6. **risk_cascade_narrative**: How individual red flags compound into systemic risk
 7. **bull_case**: Best-case scenario (be skeptical)
 8. **bear_case**: Most likely scenario based on evidence
 9. **black_swan_case**: Worst-case catastrophic scenario
 10. **analyst_verdict**: Your final professional opinion
+    🚨 IF risk_override provided: Use it as final risk level
 
 **OUTPUT FORMAT:**
 ```json
@@ -378,6 +533,7 @@ Generate JSON output with these sections:
 ```
 
 Be specific, cite evidence, and quantify risk wherever possible.
+🚨 CRITICAL: Obey the MANDATORY REPORTING REQUIREMENT and CONFIDENCE SCORE MANDATE above.
 """
         
         try:
@@ -487,14 +643,23 @@ Be specific, cite evidence, and quantify risk wherever possible.
     def _calculate_risk_scores(
         self,
         report_data: ReportData,
-        synthesized_sections: Dict[str, str]
+        synthesized_sections: Dict[str, str],
+        # 🚨 PHASE 2: Add failure awareness
+        risk_override: Optional[str] = None,
+        failed_count: int = 0,
+        total_files: int = 0
     ) -> Dict[str, Any]:
         """
         Calculate quantitative risk scores and generate recommendation.
         
+        🚨 PHASE 2: Respects risk_override when data is incomplete.
+        
         Args:
             report_data: Aggregated report data
             synthesized_sections: Synthesized narrative sections
+            risk_override: Forced risk level when data incomplete (PHASE 2)
+            failed_count: Number of failed files (PHASE 2)
+            total_files: Total files attempted (PHASE 2)
         
         Returns:
             Dictionary with risk scores and recommendation
@@ -542,19 +707,34 @@ Be specific, cite evidence, and quantify risk wherever possible.
             literature_score * 0.15
         )
         
-        # Generate recommendation
-        if total_risk_score >= 7.0:
-            recommendation = "STRONG AVOID"
-            confidence_score = 9.0
-        elif total_risk_score >= 5.0:
-            recommendation = "AVOID"
-            confidence_score = 7.5
-        elif total_risk_score >= 3.0:
-            recommendation = "PROCEED WITH EXTREME CAUTION"
-            confidence_score = 6.0
+        # 🚨 PHASE 2: Override recommendation if data is incomplete
+        if risk_override:
+            logger.warning(f"🚨 RISK OVERRIDE ACTIVE: {risk_override}")
+            recommendation = "INCONCLUSIVE - INCOMPLETE DATA"
+            confidence_score = 0.0  # Zero confidence when data is missing
+            
+            # Add disclaimer to explain the override
+            if failed_count == total_files:
+                recommendation = "CRITICAL FAILURE - NO ANALYSIS POSSIBLE"
+                confidence_score = 0.0
+            elif failed_count > 0:
+                failure_rate = (failed_count / total_files * 100) if total_files > 0 else 0
+                recommendation = f"PARTIAL ANALYSIS ONLY ({failure_rate:.0f}% data missing)"
+                confidence_score = max(0.0, 10.0 - (failure_rate / 10))  # Penalize confidence
         else:
-            recommendation = "PROCEED WITH CAUTION"
-            confidence_score = 5.0
+            # Normal recommendation logic
+            if total_risk_score >= 7.0:
+                recommendation = "STRONG AVOID"
+                confidence_score = 9.0
+            elif total_risk_score >= 5.0:
+                recommendation = "AVOID"
+                confidence_score = 7.5
+            elif total_risk_score >= 3.0:
+                recommendation = "PROCEED WITH EXTREME CAUTION"
+                confidence_score = 6.0
+            else:
+                recommendation = "PROCEED WITH CAUTION"
+                confidence_score = 5.0
         
         return {
             'clinical_failure_score': clinical_score,
@@ -567,7 +747,12 @@ Be specific, cite evidence, and quantify risk wherever possible.
             'clinical_weighted': clinical_score * 0.30,
             'dark_data_weighted': dark_data_score * 0.35,
             'forensic_weighted': forensic_score * 0.20,
-            'literature_weighted': literature_score * 0.15
+            'literature_weighted': literature_score * 0.15,
+            # 🚨 PHASE 2: Add failure metadata to risk analysis
+            'risk_override': risk_override,
+            'failed_count': failed_count,
+            'total_files': total_files,
+            'data_completeness': f"{total_files - failed_count}/{total_files}" if total_files > 0 else "N/A"
         }
     
     def _render_markdown(
@@ -587,6 +772,19 @@ Be specific, cite evidence, and quantify risk wherever possible.
         Returns:
             Rendered markdown content
         """
+        # ⚖️ STEP 3 FIX: Determine final risk label with override priority
+        risk_override = risk_analysis.get('risk_override')
+        calculated_risk = 'HIGH' if risk_analysis['total_risk_score'] >= 7 else 'MEDIUM' if risk_analysis['total_risk_score'] >= 4 else 'LOW'
+        
+        # Priority: risk_override > calculated_risk
+        if risk_override:
+            # Extract clean label from override (e.g., "UNCERTAIN (...)" -> "UNCERTAIN")
+            final_risk_label = risk_override.split('(')[0].strip()
+            logger.info(f"⚖️ Risk Override Active: {risk_override} -> Header displays: {final_risk_label}")
+        else:
+            final_risk_label = calculated_risk
+            logger.debug(f"⚖️ Using calculated risk: {calculated_risk}")
+        
         # Prepare template variables
         template_vars = {
             # Header
@@ -597,7 +795,7 @@ Be specific, cite evidence, and quantify risk wherever possible.
             # Executive Summary
             'recommendation': risk_analysis['recommendation'],
             'confidence_score': f"{risk_analysis['confidence_score']:.1f}",
-            'risk_level': 'HIGH' if risk_analysis['total_risk_score'] >= 7 else 'MEDIUM' if risk_analysis['total_risk_score'] >= 4 else 'LOW',
+            'risk_level': final_risk_label,  # ⚖️ STEP 3 FIX: Use unified risk label
             'executive_summary_text': synthesized_sections.get('executive_summary', ''),
             
             # Synthesized sections
@@ -670,6 +868,11 @@ Be specific, cite evidence, and quantify risk wherever possible.
         Returns:
             Basic markdown content
         """
+        # ⚖️ STEP 3 FIX: Apply same risk override logic in fallback
+        risk_override = risk_analysis.get('risk_override')
+        calculated_risk = 'HIGH' if risk_analysis['total_risk_score'] >= 7 else 'MEDIUM' if risk_analysis['total_risk_score'] >= 4 else 'LOW'
+        final_risk_label = risk_override.split('(')[0].strip() if risk_override else calculated_risk
+        
         lines = [
             f"# {report_data.project_name} - Biomedical Due Diligence Report",
             "",
@@ -678,6 +881,7 @@ Be specific, cite evidence, and quantify risk wherever possible.
             "",
             "## Executive Summary",
             "",
+            f"**Risk Level:** {final_risk_label}",  # ⚖️ STEP 3 FIX: Use unified label
             f"**Recommendation:** {risk_analysis['recommendation']}",
             f"**Risk Score:** {risk_analysis['total_risk_score']:.1f}/10",
             "",

@@ -22,8 +22,9 @@ Workflow:
 
 import os
 import json
+import re
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from loguru import logger
 
@@ -115,11 +116,23 @@ Pay EXTRA attention to:
 - Methods sections (may reveal protocol deviations)
 - Acknowledgments/Disclosures (funding conflicts)
 
+**CRITICAL OUTPUT INSTRUCTION:**
+You MUST return a JSON Object with exactly two keys:
+
+1. **paper_summary**: A 300-word detailed summary of the study, including:
+   - Study design and methodology
+   - Primary and secondary outcomes
+   - Key findings and results
+   - Statistical significance and confidence
+   - Study limitations and conflicts of interest
+   
+2. **risk_signals**: A list of evidence items (or an empty list if clean)
+
 **OUTPUT FORMAT:**
-Return your findings as a JSON array:
 ```json
 {
-  "evidence_items": [
+  "paper_summary": "Detailed 300-word study overview covering methodology, outcomes, results, and context...",
+  "risk_signals": [
     {
       "source": "Supplementary Table 3",
       "page_estimate": "p. 45 (appendix)",
@@ -138,10 +151,12 @@ Return your findings as a JSON array:
 - LOW: Minor statistical issues, minor transparency problems
 
 **CRITICAL RULES:**
+- ALWAYS include both paper_summary and risk_signals in your output
+- paper_summary must be comprehensive (300 words minimum)
 - Be thorough - scan the ENTIRE text including all supplementary sections
 - Extract EXACT quotes (do not paraphrase)
 - Focus on negative/neutral results, not positive claims
-- If no significant dark data found, return empty array
+- If no significant dark data found, return empty array for risk_signals
 """
     
     def mine_evidence(
@@ -149,7 +164,7 @@ Return your findings as a JSON array:
         pdf_path: str,
         include_metadata: bool = True,
         chunk_if_needed: bool = True
-    ) -> List[EvidenceItem]:
+    ) -> Dict[str, Any]:
         """
         Mine dark data from a research paper PDF.
         
@@ -159,7 +174,10 @@ Return your findings as a JSON array:
             chunk_if_needed: If PDF exceeds token limit, process in chunks
         
         Returns:
-            List of EvidenceItem objects containing extracted risk signals
+            Dict with:
+                - paper_summary: str (comprehensive study overview)
+                - risk_signals: List[EvidenceItem] (risk findings)
+                - filename: str (PDF filename for tracking)
         
         Workflow:
             Step A: Extract full text from PDF
@@ -169,24 +187,36 @@ Return your findings as a JSON array:
         
         Example:
             >>> agent = EvidenceMinerAgent()
-            >>> evidence = agent.mine_evidence("clinical_trial_paper.pdf")
-            >>> high_risk = [e for e in evidence if e.risk_level == 'HIGH']
-            >>> print(f"Found {len(high_risk)} high-risk signals")
-            >>> for e in high_risk:
-            ...     print(f"{e.risk_type}: {e.quote[:100]}...")
+            >>> result = agent.mine_evidence("clinical_trial_paper.pdf")
+            >>> print(f"Summary: {result['paper_summary'][:100]}...")
+            >>> print(f"Found {len(result['risk_signals'])} risk signals")
         """
         logger.info(f"\n{'='*60}")
         logger.info(f"📄 Evidence Mining: {Path(pdf_path).name}")
         logger.info(f"{'='*60}")
+        
+        # ===== GATEKEEPER CHECK: Prevent Null Pointer Crashes =====
+        if pdf_path is None or not Path(pdf_path).exists():
+            logger.critical("⚠️ CRITICAL FAILURE: Analysis Skipped (PDF Path Invalid or Missing)")
+            return {
+                "paper_summary": "Error: PDF path invalid or missing",
+                "risk_signals": [],
+                "filename": "unknown"
+            }
         
         try:
             # ===== STEP A: Extract Full Text =====
             logger.info("\n[Step A] Extracting full text from PDF...")
             full_text = extract_text_from_pdf(pdf_path, include_metadata=include_metadata)
             
+            # ===== GATEKEEPER: Prevent None/Empty from reaching Gemini =====
             if not full_text or len(full_text.strip()) < 100:
-                logger.warning("PDF appears to be empty or unreadable")
-                return []
+                logger.critical("⚠️ CRITICAL FAILURE: PDF appears to be empty or unreadable (Data Missing)")
+                return {
+                    "paper_summary": "Error: PDF empty or unreadable",
+                    "risk_signals": [],
+                    "filename": Path(pdf_path).name
+                }
             
             char_count = len(full_text)
             word_count = len(full_text.split())
@@ -204,7 +234,7 @@ Return your findings as a JSON array:
                         f"⚠️ PDF exceeds token limit by {estimated_tokens - MAX_INPUT_TOKENS:,} tokens"
                     )
                     logger.info("Splitting into chunks for processing...")
-                    return self._mine_evidence_chunked(full_text)
+                    return self._mine_evidence_chunked(full_text, Path(pdf_path).name)
                 else:
                     # AUDIT FIX: Truncate instead of failing completely
                     logger.warning("PDF exceeds limit and chunking disabled. Truncating to fit.")
@@ -218,16 +248,20 @@ Return your findings as a JSON array:
             
             # ===== STEP C: Mine Dark Data =====
             logger.info("\n[Step C] Mining for dark data...")
-            evidence_items = self._extract_evidence_single_pass(full_text)
+            evidence_data = self._extract_evidence_single_pass(full_text)
+            
+            # Add filename for tracking
+            evidence_data["filename"] = Path(pdf_path).name
             
             # ===== STEP D: Summarize Results =====
             logger.info(f"\n{'='*60}")
-            logger.success(f"✅ Mining Complete: {len(evidence_items)} risk signals found")
+            risk_signals = evidence_data.get("risk_signals", [])
+            logger.success(f"✅ Mining Complete: {len(risk_signals)} risk signals found")
             
-            if evidence_items:
-                high_risk = sum(1 for e in evidence_items if e.risk_level == "HIGH")
-                medium_risk = sum(1 for e in evidence_items if e.risk_level == "MEDIUM")
-                low_risk = sum(1 for e in evidence_items if e.risk_level == "LOW")
+            if risk_signals:
+                high_risk = sum(1 for e in risk_signals if e.risk_level == "HIGH")
+                medium_risk = sum(1 for e in risk_signals if e.risk_level == "MEDIUM")
+                low_risk = sum(1 for e in risk_signals if e.risk_level == "LOW")
                 
                 logger.info(f"   - High Risk: {high_risk}")
                 logger.info(f"   - Medium Risk: {medium_risk}")
@@ -235,7 +269,7 @@ Return your findings as a JSON array:
                 
                 # Log risk types
                 risk_types = {}
-                for item in evidence_items:
+                for item in risk_signals:
                     risk_types[item.risk_type] = risk_types.get(item.risk_type, 0) + 1
                 
                 logger.info("\n   Risk Type Breakdown:")
@@ -244,7 +278,17 @@ Return your findings as a JSON array:
             
             logger.info(f"{'='*60}\n")
             
-            return evidence_items
+            return evidence_data
+            
+        except Exception as e:
+            logger.error(f"Evidence mining failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "paper_summary": f"Error: {str(e)}",
+                "risk_signals": [],
+                "filename": Path(pdf_path).name
+            }
             
         except Exception as e:
             logger.error(f"Evidence mining failed: {e}")
@@ -276,7 +320,7 @@ Return your findings as a JSON array:
             # More conservative fallback than original (was //4, now //3)
             return len(text) // 3
     
-    def _extract_evidence_single_pass(self, full_text: str) -> List[EvidenceItem]:
+    def _extract_evidence_single_pass(self, full_text: str) -> Dict[str, Any]:
         """
         Extract evidence in a single LLM call (for PDFs under token limit).
         
@@ -284,7 +328,7 @@ Return your findings as a JSON array:
             full_text: Complete extracted text from PDF
         
         Returns:
-            List of EvidenceItem objects
+            Dict with 'paper_summary' and 'risk_signals' keys
         """
         user_prompt = f"""Analyze this complete biomedical research paper and extract ALL dark data risk signals.
 
@@ -302,17 +346,20 @@ Return your findings in the specified JSON format."""
                 system_instruction=self.mining_system_prompt
             )
             
-            # Parse JSON response
-            evidence_items = self._parse_evidence_response(response)
+            # Parse JSON response (returns Dict with paper_summary and risk_signals)
+            evidence_data = self._parse_evidence_response(response)
             
-            logger.success(f"Extracted {len(evidence_items)} evidence items")
-            return evidence_items
+            logger.success(
+                f"Extracted summary ({len(evidence_data.get('paper_summary', ''))} chars) "
+                f"and {len(evidence_data.get('risk_signals', []))} risk signals"
+            )
+            return evidence_data
             
         except Exception as e:
             logger.error(f"Evidence extraction failed: {e}")
             raise
     
-    def _mine_evidence_chunked(self, full_text: str) -> List[EvidenceItem]:
+    def _mine_evidence_chunked(self, full_text: str, filename: str) -> Dict[str, Any]:
         """
         Mine evidence from PDFs that exceed token limit by processing in chunks.
         
@@ -320,12 +367,14 @@ Return your findings in the specified JSON format."""
         - Split text into overlapping chunks (to avoid missing evidence at boundaries)
         - Process each chunk separately
         - Deduplicate results across chunks
+        - Merge summaries from chunks
         
         Args:
             full_text: Complete extracted text from PDF
+            filename: PDF filename for tracking
         
         Returns:
-            List of deduplicated EvidenceItem objects
+            Dict with merged 'paper_summary' and deduplicated 'risk_signals'
         """
         logger.info("Processing PDF in chunks...")
         
@@ -336,27 +385,41 @@ Return your findings in the specified JSON format."""
         chunks = self._split_text_into_chunks(full_text, max_chunk_chars, overlap_chars)
         logger.info(f"Split into {len(chunks)} chunks (overlap: {overlap_chars:,} chars)")
         
-        all_evidence = []
+        all_risks = []
+        all_summaries = []
         
         for i, chunk in enumerate(chunks, start=1):
             logger.info(f"\nProcessing chunk {i}/{len(chunks)}...")
             
             try:
-                chunk_evidence = self._extract_evidence_single_pass(chunk)
-                all_evidence.extend(chunk_evidence)
-                logger.success(f"Chunk {i}: {len(chunk_evidence)} items found")
+                chunk_data = self._extract_evidence_single_pass(chunk)
+                all_risks.extend(chunk_data.get("risk_signals", []))
+                
+                # Collect summary from each chunk
+                chunk_summary = chunk_data.get("paper_summary", "")
+                if chunk_summary and chunk_summary not in ["Summary extraction failed.", "Parsing Error"]:
+                    all_summaries.append(f"[Chunk {i}] {chunk_summary}")
+                
+                logger.success(f"Chunk {i}: {len(chunk_data.get('risk_signals', []))} risks found")
                 
             except Exception as e:
                 logger.error(f"Chunk {i} failed: {e}")
                 continue
         
         # Deduplicate evidence items
-        deduplicated = self._deduplicate_evidence(all_evidence)
+        deduplicated_risks = self._deduplicate_evidence(all_risks)
         logger.success(
-            f"Deduplication: {len(all_evidence)} items → {len(deduplicated)} unique items"
+            f"Deduplication: {len(all_risks)} items → {len(deduplicated_risks)} unique items"
         )
         
-        return deduplicated
+        # Merge summaries from chunks
+        merged_summary = "\n\n".join(all_summaries) if all_summaries else "Summary unavailable (chunked processing)"
+        
+        return {
+            "paper_summary": merged_summary,
+            "risk_signals": deduplicated_risks,
+            "filename": filename
+        }
     
     def _split_text_into_chunks(
         self, 
@@ -386,53 +449,132 @@ Return your findings in the specified JSON format."""
         
         return chunks
     
-    def _parse_evidence_response(self, response: str) -> List[EvidenceItem]:
+    def _clean_json_text(self, text: str) -> str:
         """
-        Parse LLM JSON response into EvidenceItem objects.
+        Sanitizes LLM output to extract only the valid JSON object.
+        Removes Markdown backticks, language identifiers, and surrounding text.
+        
+        Args:
+            text: Raw LLM response text
+        
+        Returns:
+            Cleaned JSON string ready for parsing
+        """
+        if not text:
+            return "{}"
+        
+        # 1. Strip Markdown code block wrappers (```json ... ```)
+        text = re.sub(r"```[a-zA-Z]*\s*", "", text)  # Remove ```json, ```python, etc.
+        text = re.sub(r"```\s*", "", text)           # Remove closing ```
+        
+        # 2. Strip generic whitespace
+        text = text.strip()
+        
+        # 3. Extract the outermost JSON object (Find first '{' and last '}')
+        # This ignores any preamble text like "Here is the JSON:"
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx : end_idx + 1]
+        
+        return text
+    
+    def _parse_evidence_response(self, response: str) -> Dict[str, Any]:
+        """
+        Parse LLM JSON response into standardized Dict format.
+        
+        PROTOCOL UPGRADE: Returns Dict with 'paper_summary' and 'risk_signals' keys.
+        Handles legacy List format for backward compatibility.
         
         Args:
             response: Raw LLM response text
         
         Returns:
-            List of EvidenceItem objects
+            Dict with:
+                - paper_summary: str (comprehensive study overview)
+                - risk_signals: List[EvidenceItem] (risk findings)
         """
         try:
-            # Extract JSON from markdown code blocks if present
-            response_text = response.strip()
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+            # --- THE FIX: IRONCLAD JSON CLEANER ---
+            # Use the new regex-based cleaner to remove all Markdown formatting
+            cleaned_text = self._clean_json_text(response)
             
             # Parse JSON
-            data = json.loads(response_text)
+            data = json.loads(cleaned_text)
+            # ---------------------------------------
             
-            # Extract evidence items
-            evidence_items = []
-            for item_data in data.get("evidence_items", []):
-                try:
-                    evidence_items.append(EvidenceItem(
-                        source=item_data.get("source", "Unknown"),
-                        page_estimate=item_data.get("page_estimate", "Unknown"),
-                        quote=item_data.get("quote", ""),
-                        risk_level=item_data.get("risk_level", "LOW"),
-                        risk_type=item_data.get("risk_type", "other"),
-                        explanation=item_data.get("explanation", "")
-                    ))
-                except Exception as e:
-                    logger.warning(f"Failed to parse evidence item: {e}")
-                    continue
+            # --- PROTOCOL FIX: STANDARDIZE OUTPUT ---
+            # Ensure output is always a Dictionary with 'paper_summary' and 'risk_signals'
+            standardized_data = {
+                "paper_summary": "",
+                "risk_signals": []
+            }
+
+            if isinstance(data, list):
+                # Legacy/Fallback handling: If LLM returns a list, assume it's just risks
+                logger.warning("⚠️ Legacy List Format Detected - Converting to Protocol")
+                standardized_data["risk_signals"] = data
+                standardized_data["paper_summary"] = "Summary not provided by LLM (Legacy List Format)."
             
-            return evidence_items
+            elif isinstance(data, dict):
+                # Extract flexible keys to handle schema drift
+                standardized_data["paper_summary"] = (
+                    data.get("paper_summary") or 
+                    data.get("summary") or 
+                    data.get("overview") or 
+                    "Summary extraction failed."
+                )
+                
+                # Handle multiple possible key names for risk signals
+                raw_risks = (
+                    data.get("risk_signals") or 
+                    data.get("evidence_items") or 
+                    data.get("findings") or 
+                    data.get("evidence") or
+                    data.get("items") or
+                    data.get("results") or
+                    []
+                )
+                
+                # Convert raw risk dicts to EvidenceItem objects
+                for item_data in raw_risks:
+                    try:
+                        standardized_data["risk_signals"].append(EvidenceItem(
+                            source=item_data.get("source", "Unknown"),
+                            page_estimate=item_data.get("page_estimate", "Unknown"),
+                            quote=item_data.get("quote", ""),
+                            risk_level=item_data.get("risk_level", "LOW"),
+                            risk_type=item_data.get("risk_type", "other"),
+                            explanation=item_data.get("explanation", "")
+                        ))
+                    except Exception as e:
+                        logger.warning(f"Failed to parse evidence item: {e}")
+                        continue
             
+            else:
+                logger.error(f"Unexpected data type: {type(data)}")
+                standardized_data["paper_summary"] = "Parsing Error: Unexpected data type"
+            
+            # Log extraction success
+            logger.success(
+                f"✅ Protocol Extraction: Summary={len(standardized_data['paper_summary'])} chars, "
+                f"Risks={len(standardized_data['risk_signals'])} items"
+            )
+            
+            return standardized_data
+            # --------------------
+
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
+            logger.critical(f"⚠️ CRITICAL FAILURE: Failed to parse JSON response: {e}")
             logger.debug(f"Raw response: {response[:500]}...")
-            return []
+            # Return safe default to prevent pipeline crash
+            return {"paper_summary": "JSON Parsing Error", "risk_signals": []}
         
         except Exception as e:
-            logger.error(f"Error parsing evidence response: {e}")
-            return []
+            logger.critical(f"⚠️ CRITICAL FAILURE: Error parsing evidence response: {e}")
+            # Return safe default to prevent pipeline crash
+            return {"paper_summary": "Parsing Error", "risk_signals": []}
     
     def _deduplicate_evidence(self, evidence_items: List[EvidenceItem]) -> List[EvidenceItem]:
         """

@@ -38,7 +38,7 @@ class ImageAuditResult:
         image_path: Full path to the image file
         page_num: PDF page number where image was found
         status: 'CLEAN', 'SUSPICIOUS', or 'ERROR'
-        tampering_risk_score: Probability of data tampering/manipulation (0.0=clean, 1.0=definitely tampered)
+        tampering_risk_score: Probability of data tampering/manipulation (0.0=clean, 1.0=definitely tampered, None=analysis failed)
         findings: Detailed description of suspicious patterns
         raw_analysis: Full LLM response for debugging
         model_confidence: Model's certainty about its judgment (optional, for self-reflection)
@@ -46,8 +46,8 @@ class ImageAuditResult:
     image_id: str
     image_path: str
     page_num: int
-    status: str  # CLEAN, SUSPICIOUS, ERROR
-    tampering_risk_score: float  # 0.0 to 1.0 (0.0 = No tampering detected, 1.0 = Definite tampering)
+    status: str  # CLEAN, SUSPICIOUS, ERROR, FAILURE
+    tampering_risk_score: Optional[float]  # 0.0 to 1.0 OR None if analysis failed
     findings: str
     raw_analysis: str
     model_confidence: float = 1.0  # Model's self-assessed reliability (default: fully confident)
@@ -150,6 +150,20 @@ Return your analysis in this exact JSON format:
         logger.info(f"🔬 Forensic Audit: {Path(pdf_path).name}")
         logger.info(f"{'='*60}")
         
+        # ===== GATEKEEPER CHECK: Prevent Null Pointer Crashes =====
+        if pdf_path is None or not Path(pdf_path).exists():
+            logger.critical("⚠️ CRITICAL FAILURE: Analysis Skipped (PDF Path Invalid or Missing)")
+            return [ImageAuditResult(
+                image_id="N/A",
+                image_path="",
+                page_num=0,
+                status="FAILURE",
+                tampering_risk_score=None,  # None = Analysis Never Happened
+                findings="CRITICAL: PDF path is invalid or file does not exist",
+                raw_analysis="",
+                model_confidence=0.0
+            )]
+        
         try:
             # ===== STEP A: Extract Images =====
             logger.info("\n[Step A] Extracting images from PDF...")
@@ -194,14 +208,14 @@ Return your analysis in this exact JSON format:
                         logger.info(f"    ℹ️  {result.status} (tampering risk: {result.tampering_risk_score:.2f})")
                     
                 except Exception as e:
-                    logger.error(f"    ❌ Analysis failed: {e}")
+                    logger.critical(f"    ❌ CRITICAL FAILURE: Analysis Skipped (Data Missing) - {e}")
                     audit_results.append(ImageAuditResult(
                         image_id=f"figure_{idx:03d}",
                         image_path=image_path,
                         page_num=self._extract_page_num(image_path),
                         status="ERROR",
-                        tampering_risk_score=0.0,
-                        findings=f"Analysis failed: {str(e)}",
+                        tampering_risk_score=None,  # None = Analysis Failed, NOT "Zero Risk"
+                        findings=f"CRITICAL: Analysis failed: {str(e)}",
                         raw_analysis="",
                         model_confidence=0.0  # Error state = no confidence
                     ))
@@ -241,26 +255,26 @@ Return your analysis in this exact JSON format:
             
             # 2. Validate image data is not empty
             if image_bytes is None or len(image_bytes) == 0:
-                logger.warning(f"⚠️ Skipping analysis for {image_path}: Image data is empty")
+                logger.critical(f"⚠️ CRITICAL FAILURE: Analysis Skipped (Image Data Missing) - {image_path}")
                 return ImageAuditResult(
                     image_id=f"figure_{image_id:03d}",
                     image_path=image_path,
                     page_num=self._extract_page_num(image_path),
                     status="ERROR",
-                    tampering_risk_score=0.0,
-                    findings="Analysis Skipped: Image data is empty (Load Failed)",
+                    tampering_risk_score=None,  # None = Analysis Failed, NOT "Zero Risk"
+                    findings="CRITICAL: Image data is empty (Load Failed)",
                     raw_analysis="Image loading failed - no data",
                     model_confidence=0.0
                 )
         except (FileNotFoundError, IOError, OSError) as e:
-            logger.warning(f"⚠️ Skipping analysis for {image_path}: {type(e).__name__}: {e}")
+            logger.critical(f"⚠️ CRITICAL FAILURE: Analysis Skipped (File Error) - {image_path}: {type(e).__name__}: {e}")
             return ImageAuditResult(
                 image_id=f"figure_{image_id:03d}",
                 image_path=image_path,
                 page_num=self._extract_page_num(image_path),
                 status="ERROR",
-                tampering_risk_score=0.0,
-                findings=f"Analysis Skipped: Image Load Failed ({type(e).__name__})",
+                tampering_risk_score=None,  # None = Analysis Failed, NOT "Zero Risk"
+                findings=f"CRITICAL: Image Load Failed ({type(e).__name__})",
                 raw_analysis=str(e),
                 model_confidence=0.0
             )
@@ -326,15 +340,15 @@ Follow the forensic analysis guidelines in the system prompt and return your ana
             )
             
         except json_module.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM JSON response: {e}")
+            logger.critical(f"⚠️ CRITICAL FAILURE: Failed to parse LLM JSON response: {e}")
             # Fallback: treat as error if parsing fails
             return ImageAuditResult(
                 image_id=f"figure_{image_id:03d}",
                 image_path=image_path,
                 page_num=self._extract_page_num(image_path),
                 status="ERROR",
-                tampering_risk_score=0.0,
-                findings=f"JSON parsing error: {str(e)}",
+                tampering_risk_score=None,  # None = Analysis Failed, NOT "Zero Risk"
+                findings=f"CRITICAL: JSON parsing error: {str(e)}",
                 raw_analysis=response if 'response' in locals() else "",
                 model_confidence=0.0  # Parsing error = no confidence
             )

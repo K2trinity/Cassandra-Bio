@@ -77,6 +77,7 @@ def harvester_node(state: AgentState) -> Dict[str, Any]:
         return {
             "harvested_data": results.get("results", []),
             "pdf_paths": pdf_paths,  # Now contains local file paths, not URLs
+            "pdf_files": pdf_paths,  # 🔥 STEP 3: Store as pdf_files for global tracking
             "status": "harvest_complete"
         }
         
@@ -103,6 +104,9 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
     Returns:
         Updated state with:
             - text_evidence: List of EvidenceItem dicts
+            - compiled_evidence_text: Aggregated text content for ReportWriter
+            - failed_files: List of files that failed to process
+            - total_files: Total number of PDFs attempted
     """
     logger.info("\n" + "="*80)
     logger.info("🕵️ NODE 2A: EVIDENCE MINER (Parallel)")
@@ -118,50 +122,163 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
             return {
                 **state,
                 "text_evidence": [],
+                "compiled_evidence_text": "",
+                "failed_files": [],
+                "total_files": 0,
                 "status": "mining_skipped"
             }
         
-        # Mine evidence from all PDFs
+        # 🚨 PHASE 2 FIX: Initialize accumulators for evidence text and failures
         all_evidence = []
+        compiled_evidence_text = []  # Store actual evidence text content
+        failed_files = []  # Track failed file processing
+        total_files = min(3, len(pdf_paths))  # Track total files attempted
+        
+        # Mine evidence from all PDFs
         for i, pdf_path in enumerate(pdf_paths[:3], 1):  # Limit to first 3 PDFs
-            logger.info(f"\n📄 Mining PDF {i}/{min(3, len(pdf_paths))}: {pdf_path}")
+            logger.info(f"\n📄 Mining PDF {i}/{total_files}: {pdf_path}")
             
             try:
                 # pdf_path is now a local file path (downloaded by BioHarvestEngine)
                 if os.path.exists(pdf_path):
-                    evidence_items = agent.mine_evidence(pdf_path)
+                    # 🔥 NEW PROTOCOL: mine_evidence now returns Dict with paper_summary and risk_signals
+                    result = agent.mine_evidence(pdf_path)
                     
-                    # Convert EvidenceItem dataclasses to dicts
-                    evidence_dicts = [
-                        {
-                            "source": e.source,
-                            "page_estimate": e.page_estimate,
-                            "quote": e.quote,
-                            "risk_level": e.risk_level,
-                            "risk_type": e.risk_type,
-                            "explanation": e.explanation
+                    # --- 🔥 DEBUG BLOCK START ---
+                    filename = result.get('filename', os.path.basename(pdf_path))
+                    print(f"\n🔥 DEBUG: Inspecting Miner Result for file: {filename}")
+                    print(f"🔥 DEBUG: Result Type: {type(result)}")
+                    print(f"🔥 DEBUG: Available Keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                    # --- 🔥 DEBUG BLOCK END ---
+                    
+                    # ============ ROBUST PROTOCOL: NORMALIZE INPUT ============
+                    # 1. Handle Failed/Null Results
+                    if result is None:
+                        logger.error(f"❌ Received None result for {filename}")
+                        failed_files.append(filename)
+                        continue
+                    
+                    # 2. Normalize Input (Handle Object vs Dict vs List)
+                    data = {}
+                    if isinstance(result, dict):
+                        data = result
+                    elif isinstance(result, list):
+                        # Legacy/Fallback case: It's just a list of risks
+                        logger.warning(f"⚠️ Legacy List Format detected for {filename}")
+                        data = {"paper_summary": "Summary not extracted (Legacy List).", "risk_signals": result, "filename": filename}
+                    elif hasattr(result, '__dict__'):
+                        data = result.__dict__
+                    else:
+                        # Last resort: Try getting attributes directly
+                        data = {
+                            "paper_summary": getattr(result, "paper_summary", getattr(result, "summary", getattr(result, "content", ""))),
+                            "risk_signals": getattr(result, "risk_signals", getattr(result, "evidence", getattr(result, "findings", []))),
+                            "filename": filename
                         }
-                        for e in evidence_items
-                    ]
+                    
+                    # 3. Extract Fields (With Safe Defaults)
+                    filename = data.get('filename', os.path.basename(pdf_path))
+                    summary = data.get('paper_summary') or data.get('summary') or "[CRITICAL WARNING: No Summary Extracted]"
+                    risks = data.get('risk_signals') or data.get('risks') or data.get('evidence_items') or []
+                    
+                    # 4. Format Output for Writer (The "Rich Text" Payload)
+                    # We construct a block that fills BOTH Overview and Red Flags
+                    entry = f"""
+--- SOURCE PDF: {filename} ---
+[PAPER SUMMARY]
+{summary}
+
+[RISK ANALYSIS FINDINGS]
+"""
+                    
+                    # Add formatted risk findings
+                    if risks:
+                        risk_details = []
+                        for idx, risk in enumerate(risks, 1):
+                            # Handle both EvidenceItem objects and dicts
+                            if hasattr(risk, '__dict__'):
+                                risk_dict = {
+                                    "risk_type": risk.risk_type,
+                                    "risk_level": risk.risk_level,
+                                    "quote": risk.quote,
+                                    "explanation": risk.explanation,
+                                    "source": risk.source,
+                                    "page_estimate": risk.page_estimate
+                                }
+                            else:
+                                risk_dict = risk
+                            
+                            risk_entry = f"**Finding {idx}:** [{risk_dict.get('risk_type', 'unknown')} - {risk_dict.get('risk_level', 'UNKNOWN')}]\n"
+                            risk_entry += f"- **Quote:** {risk_dict.get('quote', 'N/A')}\n"
+                            risk_entry += f"- **Analysis:** {risk_dict.get('explanation', 'N/A')}\n"
+                            risk_entry += f"- **Source:** {risk_dict.get('source', 'Unknown')} (Page ~{risk_dict.get('page_estimate', 'Unknown')})\n"
+                            risk_details.append(risk_entry)
+                        
+                        entry += "\n".join(risk_details)
+                    else:
+                        entry += "No specific risk signals detected.\n"
+                    
+                    entry += "------------------------------\n"
+                    
+                    compiled_evidence_text.append(entry)
+                    
+                    # Convert risks to dict format for storage
+                    evidence_dicts = []
+                    for risk in risks:
+                        if hasattr(risk, '__dict__'):
+                            evidence_dicts.append({
+                                "source": risk.source,
+                                "page_estimate": risk.page_estimate,
+                                "quote": risk.quote,
+                                "risk_level": risk.risk_level,
+                                "risk_type": risk.risk_type,
+                                "explanation": risk.explanation
+                            })
+                        else:
+                            evidence_dicts.append(risk)
                     
                     all_evidence.extend(evidence_dicts)
+                    logger.success(f"✅ Extracted {len(risks)} findings from PDF {i}")
+                        
                 else:
-                    logger.warning(f"PDF not found locally: {pdf_path}")
+                    # 🚨 PHASE 2 FIX: Track missing files as failures
+                    logger.error(f"❌ PDF not found locally: {pdf_path}")
+                    failed_files.append(os.path.basename(pdf_path))
             
             except Exception as e:
-                logger.error(f"Failed to mine PDF {i}: {e}")
+                # 🚨 PHASE 2 FIX: Catch failures and track them explicitly
+                logger.error(f"❌ Failed to mine PDF {i}: {e}")
+                import traceback
+                traceback.print_exc()
+                failed_files.append(os.path.basename(pdf_path))
                 continue
         
-        logger.success(f"✅ Mined {len(all_evidence)} evidence items from {min(3, len(pdf_paths))} PDFs")
+        # Calculate success/failure metrics
+        success_count = total_files - len(failed_files)
+        logger.success(f"✅ Mined {len(all_evidence)} evidence items from {success_count}/{total_files} PDFs")
+        
+        if failed_files:
+            logger.warning(f"⚠️ Failed to process {len(failed_files)} files: {', '.join(failed_files)}")
+        
+        # 🔥 DEBUG: Final Check
+        final_payload_len = len("".join(compiled_evidence_text))
+        print(f"🔥 DEBUG: Final Evidence Context Length: {final_payload_len} chars (Target: >5000)")
         
         return {
-            "text_evidence": all_evidence
+            "text_evidence": all_evidence,
+            "compiled_evidence_text": "\n\n".join(compiled_evidence_text),  # 🧠 NEW: Pass text to Writer
+            "failed_files": failed_files,  # 🚨 NEW: Track failures
+            "total_files": total_files,  # 🚨 NEW: Track total attempted
+            "pdf_files": state.get("pdf_paths", [])  # 🔥 STEP 3: Store global PDF list
         }
         
     except Exception as e:
         logger.error(f"❌ Evidence Miner failed: {e}")
         return {
             "text_evidence": [],
+            "compiled_evidence_text": "",
+            "failed_files": [],
+            "total_files": 0,
             "errors": [f"Miner: {str(e)}"]
         }
 
@@ -179,6 +296,7 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
     Returns:
         Updated state with:
             - forensic_evidence: List of ImageAuditResult dicts
+            - forensic_failed_files: List of files that failed forensic audit
     """
     logger.info("\n" + "="*80)
     logger.info("🔍 NODE 2B: FORENSIC AUDITOR (Parallel)")
@@ -192,13 +310,18 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
         if not pdf_paths:
             logger.warning("⚠️ No PDFs provided for forensic audit")
             return {
-                "forensic_evidence": []
+                "forensic_evidence": [],
+                "forensic_failed_files": []
             }
         
-        # Audit all PDFs
+        # 🚨 PHASE 2 FIX: Track forensic audit failures
         all_audit_results = []
+        forensic_failed_files = []
+        total_forensic_files = min(3, len(pdf_paths))
+        
+        # Audit all PDFs
         for i, pdf_path in enumerate(pdf_paths[:3], 1):  # Limit to first 3 PDFs
-            logger.info(f"\n📄 Auditing PDF {i}/{min(3, len(pdf_paths))}: {pdf_path}")
+            logger.info(f"\n📄 Auditing PDF {i}/{total_forensic_files}: {pdf_path}")
             
             try:
                 if os.path.exists(pdf_path):
@@ -219,23 +342,34 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
                     ]
                     
                     all_audit_results.extend(audit_dicts)
+                    logger.success(f"✅ Audited {len(audit_dicts)} images from PDF {i}")
                 else:
-                    logger.warning(f"PDF not found locally: {pdf_path}")
+                    # 🚨 PHASE 2 FIX: Track missing files
+                    logger.error(f"❌ PDF not found locally: {pdf_path}")
+                    forensic_failed_files.append(os.path.basename(pdf_path))
             
             except Exception as e:
-                logger.error(f"Failed to audit PDF {i}: {e}")
+                # 🚨 PHASE 2 FIX: Track forensic audit failures
+                logger.error(f"❌ Failed to audit PDF {i}: {e}")
+                forensic_failed_files.append(os.path.basename(pdf_path))
                 continue
         
-        logger.success(f"✅ Audited {len(all_audit_results)} images from {min(3, len(pdf_paths))} PDFs")
+        success_count = total_forensic_files - len(forensic_failed_files)
+        logger.success(f"✅ Audited {len(all_audit_results)} images from {success_count}/{total_forensic_files} PDFs")
+        
+        if forensic_failed_files:
+            logger.warning(f"⚠️ Forensic audit failed for {len(forensic_failed_files)} files: {', '.join(forensic_failed_files)}")
         
         return {
-            "forensic_evidence": all_audit_results
+            "forensic_evidence": all_audit_results,
+            "forensic_failed_files": forensic_failed_files  # 🚨 NEW: Track forensic failures
         }
         
     except Exception as e:
         logger.error(f"❌ Forensic Auditor failed: {e}")
         return {
             "forensic_evidence": [],
+            "forensic_failed_files": [],
             "errors": [f"Auditor: {str(e)}"],
             "status": "audit_failed"
         }
@@ -251,11 +385,15 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
     This node acts as a synchronization point and can optionally
     build knowledge graphs or perform additional data structuring.
     
+    🚨 PHASE 2: Anti-Silent-Failure Logic
+    Calculates risk_override based on failed files to prevent
+    "toxic positivity" in reports when PDFs fail to process.
+    
     Args:
         state: Current workflow state with text_evidence and forensic_evidence
     
     Returns:
-        Updated state with validated data
+        Updated state with validated data and risk_override
     """
     logger.info("\n" + "="*80)
     logger.info("🧩 NODE 3: GRAPH BUILDER (Data Aggregation)")
@@ -272,6 +410,50 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"   - Text Evidence Items: {text_evidence_count}")
         logger.info(f"   - Forensic Audit Results: {forensic_count}")
         
+        # 🚨 PHASE 2: Calculate failure metrics
+        failed_files = state.get("failed_files", [])
+        forensic_failed = state.get("forensic_failed_files", [])
+        
+        # 📊 STEP 3: Use Global PDF Count
+        total_files = len(state.get("pdf_files", []))  # Global count from harvester
+        if total_files == 0:
+            # Fallback to pdf_paths
+            total_files = len(state.get("pdf_paths", []))
+        if total_files == 0:
+            # Last fallback: use total_files from miner
+            total_files = state.get("total_files", 0)
+        
+        # Merge all failed files (deduplicate)
+        all_failed_files = list(set(failed_files + forensic_failed))
+        total_failed = len(all_failed_files)
+        
+        logger.info(f"\n🚨 Failure Analysis:")
+        logger.info(f"   - Total PDFs Attempted: {total_files}")
+        logger.info(f"   - Evidence Mining Failed: {len(failed_files)}")
+        logger.info(f"   - Forensic Audit Failed: {len(forensic_failed)}")
+        logger.info(f"   - Total Unique Failures: {total_failed}")
+        
+        # 🚨 PHASE 2: Implement Anti-Silent-Failure Logic
+        risk_override = None
+        analysis_status = "COMPLETE"
+        
+        if total_files == 0:
+            logger.warning("⚠️ No PDFs were processed")
+            risk_override = "UNKNOWN (NO DATA)"
+            analysis_status = "NO_DATA"
+        elif total_failed == total_files:
+            logger.error("❌ CRITICAL: All PDFs failed to process!")
+            risk_override = "UNKNOWN (CRITICAL DATA FAILURE)"
+            analysis_status = "CRITICAL_FAILURE"
+        elif total_failed > 0:
+            failure_rate = (total_failed / total_files) * 100
+            logger.warning(f"⚠️ PARTIAL SUCCESS: {total_failed}/{total_files} files failed ({failure_rate:.0f}%)")
+            risk_override = f"UNCERTAIN (INCOMPLETE DATA - {failure_rate:.0f}% failed)"
+            analysis_status = "PARTIAL_SUCCESS"
+        else:
+            logger.success("✅ All PDFs processed successfully")
+            analysis_status = "COMPLETE"
+        
         # Extract project name from query if not set
         project_name = state.get("project_name")
         if not project_name:
@@ -287,17 +469,25 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
             logger.warning("⚠️ No evidence data available (neither text nor forensic)")
         
         logger.success("✅ Data aggregation complete - ready for report generation")
+        logger.info(f"   Analysis Status: {analysis_status}")
+        if risk_override:
+            logger.warning(f"   Risk Override: {risk_override}")
         
         return {
             "project_name": project_name,
-            "status": "graph_complete"
+            "status": "graph_complete",
+            "analysis_status": analysis_status,  # 🚨 NEW: Track analysis completeness
+            "risk_override": risk_override,  # 🚨 NEW: Override risk assessment if data missing
+            "total_failed_files": total_failed,  # 🚨 NEW: Total failure count
+            "all_failed_files": all_failed_files  # 🚨 NEW: Combined failure list
         }
         
     except Exception as e:
         logger.error(f"❌ Graph Builder failed: {e}")
         return {
             "errors": [f"GraphBuilder: {str(e)}"],
-            "status": "graph_failed"
+            "status": "graph_failed",
+            "risk_override": "UNKNOWN (SYSTEM ERROR)"
         }
 
 
@@ -306,6 +496,8 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
     Node 4: ReportWriter - Final Report Synthesis
     
     Synthesizes all evidence into a comprehensive biomedical due diligence report.
+    
+    🚨 PHASE 2: Passes failure metadata to enforce honest reporting
     
     Args:
         state: Current workflow state with all evidence data
@@ -330,22 +522,69 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
         forensic_data = state.get("forensic_evidence", [])
         evidence_data = state.get("text_evidence", [])
         
-        # Generate report
-        report_output = agent.write_report(
-            user_query=state["user_query"],
-            harvest_data=harvest_data,
-            forensic_data=forensic_data,
-            evidence_data=evidence_data,
-            project_name=state.get("project_name"),
-            output_dir="final_reports"
-        )
+        # 🚨 PHASE 2: Extract failure metadata for honest reporting
+        compiled_evidence_text = state.get("compiled_evidence_text", "")
+        
+        # 📊 STEP 3: Fix Global Statistics Calculation
+        # Get Global Count from State (total PDFs from harvester, not just processed batch)
+        total_pdfs_global = len(state.get("pdf_files", []))  # Global list from harvester
+        if total_pdfs_global == 0:
+            # Fallback to pdf_paths if pdf_files not available
+            total_pdfs_global = len(state.get("pdf_paths", []))
+        if total_pdfs_global == 0:
+            # Last fallback: use total_files from miner
+            total_pdfs_global = state.get("total_files", 0)
+        
+        total_failed = state.get("total_failed_files", 0)
+        risk_override = state.get("risk_override")
+        analysis_status = state.get("analysis_status", "UNKNOWN")
+        failed_files_list = state.get("all_failed_files", [])
+        
+        logger.info(f"\n🚨 Passing failure metadata to Report Writer:")
+        logger.info(f"   - Analysis Status: {analysis_status}")
+        logger.info(f"   - Total Files (GLOBAL): {total_pdfs_global}")  # 🔥 Clarify it's global
+        logger.info(f"   - Failed Files: {total_failed}")
+        if risk_override:
+            logger.warning(f"   - Risk Override: {risk_override}")
+        if failed_files_list:
+            logger.warning(f"   - Failed: {', '.join(failed_files_list)}")
+        
+        # 📊 STEP 3: Update Writer Payload with Global Stats
+        payload = {
+            "user_query": state["user_query"],
+            "harvest_data": harvest_data,
+            "forensic_data": forensic_data,
+            "evidence_data": evidence_data,
+            "project_name": state.get("project_name"),
+            "output_dir": "final_reports",
+            # 🚨 PHASE 2: Pass failure metadata
+            "compiled_evidence_text": compiled_evidence_text,
+            "failed_count": total_failed,
+            "total_files": total_pdfs_global,  # 🔥 Dynamic Global Count (not batch size)
+            "risk_override": risk_override,
+            "analysis_status": analysis_status,
+            "failed_files": failed_files_list
+        }
+        
+        print(f"\n🔥 DEBUG: Final Payload to Writer:")
+        print(f"🔥 DEBUG: - evidence_context length: {len(compiled_evidence_text)}")
+        print(f"🔥 DEBUG: - total_files (global): {total_pdfs_global}")
+        print(f"🔥 DEBUG: - failed_count: {total_failed}")
+        
+        # Generate report with failure context
+        report_output = agent.write_report(**payload)
         
         logger.success(f"✅ Report generated successfully")
         logger.info(f"   Recommendation: {report_output.recommendation}")
         logger.info(f"   Risk Score: {report_output.risk_score:.1f}/10")
         
+        # PHASE 3.1 FIX: Return markdown content AND file path for frontend injection
         return {
             "final_report": report_output.markdown_content,
+            "final_report_path": report_output.markdown_path,  # NEW: Add file path
+            "final_report_markdown": report_output.markdown_content,
+            "recommendation": report_output.recommendation,
+            "risk_score": report_output.risk_score,
             "status": "complete"
         }
         

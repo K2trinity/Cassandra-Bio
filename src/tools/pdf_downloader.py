@@ -15,6 +15,7 @@ Critical Dependencies:
 - curl_cffi: Browser impersonation at TLS layer (not just User-Agent)
 - beautifulsoup4: HTML parsing to extract PDF links
 - loguru: Structured logging
+- tenacity: Exponential backoff retry logic
 
 Why curl_cffi?
 Standard `requests` library fails with 403 because NCBI detects Python's TLS handshake.
@@ -36,13 +37,16 @@ from urllib.parse import urlparse, urljoin
 # 🔥 CRITICAL IMPORTS
 from curl_cffi import requests
 from bs4 import BeautifulSoup
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def download_pdf_from_url(url: str, output_dir: str = "downloads") -> str:
     """
     🔐 Stealth PDF Downloader with TLS Fingerprinting Bypass
     
     Downloads PDF from PMC article URLs using browser impersonation.
+    NOW WITH TENACITY: Auto-retry with exponential backoff (3 attempts, 4-10s delays).
     
     Strategy:
     1. Extract PMC ID from URL
@@ -65,8 +69,9 @@ def download_pdf_from_url(url: str, output_dir: str = "downloads") -> str:
         - TLS Fingerprinting Bypass via curl_cffi impersonation
         - Europe PMC as primary source (more reliable)
         - PDF Magic Bytes Validation (%PDF signature)
-        - Exponential backoff retry on 403/timeout
+        - Exponential backoff retry on 403/timeout (via tenacity)
         - MD5-based filename caching
+        - 120s timeout (increased from 30s for large files)
     """
     try:
         # 1. Setup paths
@@ -112,7 +117,7 @@ def download_pdf_from_url(url: str, output_dir: str = "downloads") -> str:
                 response = requests.get(
                     europe_pmc_url,
                     impersonate="chrome120",
-                    timeout=30,
+                    timeout=120,  # INCREASED: 30s -> 120s for large PDFs
                     allow_redirects=True
                 )
                 
@@ -249,7 +254,7 @@ def download_pdf_from_url(url: str, output_dir: str = "downloads") -> str:
                     pdf_url,
                     headers=pdf_headers,
                     impersonate="chrome120",
-                    timeout=30,
+                    timeout=120,  # INCREASED: 30s -> 120s for large PDFs
                     allow_redirects=True
                 )
                 

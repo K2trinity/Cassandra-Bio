@@ -242,6 +242,104 @@
 
 {% block scripts %}
 <script>
+    // ===== PHASE 3.2: SPA Functionality & localStorage Persistence =====
+    
+    // Function to show Reports tab (called from sidebar)
+    function showReportsTab() {
+        const lastReport = localStorage.getItem('last_report');
+        if (lastReport) {
+            try {
+                const reportData = JSON.parse(lastReport);
+                // Restore the report view
+                restoreReportFromStorage(reportData);
+                // Scroll to results
+                document.getElementById('resultsSection')?.scrollIntoView({ behavior: 'smooth' });
+            } catch (e) {
+                console.error('Failed to parse stored report:', e);
+                alert('No recent report found in cache. Please run a new analysis.');
+            }
+        } else {
+            alert('No recent report found. Please run an analysis first.');
+        }
+    }
+    
+    // Function to restore report from localStorage
+    function restoreReportFromStorage(reportData) {
+        const resultsSection = document.getElementById('resultsSection');
+        resultsSection.classList.remove('hidden');
+        
+        const summary = reportData.summary || {};
+        const executiveSummary = reportData.executive_summary || '';
+        
+        // Rebuild the summary HTML (same logic as socket handler)
+        let summaryHTML = '';
+        
+        if (executiveSummary && executiveSummary.length > 50) {
+            const riskLevel = executiveSummary.toLowerCase().includes('high risk') ? 'HIGH RISK' :
+                             executiveSummary.toLowerCase().includes('medium risk') ? 'MEDIUM RISK' :
+                             executiveSummary.toLowerCase().includes('avoid') ? 'CAUTION' : 'ANALYSIS';
+            
+            const riskColor = riskLevel === 'HIGH RISK' ? 'text-red-400' :
+                             riskLevel === 'MEDIUM RISK' ? 'text-yellow-400' :
+                             riskLevel === 'CAUTION' ? 'text-orange-400' : 'text-emerald-400';
+            
+            const riskBg = riskLevel === 'HIGH RISK' ? 'bg-red-950/40 border-red-800/50' :
+                          riskLevel === 'MEDIUM RISK' ? 'bg-yellow-950/40 border-yellow-800/50' :
+                          riskLevel === 'CAUTION' ? 'bg-orange-950/40 border-orange-800/50' : 'bg-emerald-950/40 border-emerald-800/50';
+            
+            summaryHTML = `
+                <div class="${riskBg} rounded-xl p-6 border-2 mb-4 font-mono">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0 mt-1">
+                            <svg class="w-8 h-8 ${riskColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center gap-3 mb-3">
+                                <span class="${riskColor} font-bold text-lg tracking-wider">[${riskLevel} DETECTED]</span>
+                                <span class="text-gray-500 text-sm">// Strategic Assessment (Restored)</span>
+                            </div>
+                            <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
+                            <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
+                                <div class="flex gap-4 text-gray-500">
+                                    <span>📊 ${summary.harvested_items || 0} sources</span>
+                                    <span>🔍 ${summary.text_evidence || 0} evidence</span>
+                                    <span>🖼️ ${summary.forensic_evidence || 0} forensics</span>
+                                </div>
+                                <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            summaryHTML = '<div class="text-gray-400 text-center p-4">Report summary unavailable</div>';
+        }
+        
+        document.getElementById('completionMessage').innerHTML = summaryHTML;
+        
+        // Restore full report if available
+        const fullMarkdown = reportData.full_report_markdown || '';
+        if (fullMarkdown && typeof marked !== 'undefined') {
+            const reportContainer = document.getElementById('fullReportContainer');
+            const reportContent = document.getElementById('fullReportContent');
+            
+            reportContainer.classList.remove('hidden');
+            reportContent.innerHTML = marked.parse(fullMarkdown);
+        }
+    }
+    
+    // On page load, check for stored report
+    window.addEventListener('DOMContentLoaded', () => {
+        const lastReport = localStorage.getItem('last_report');
+        if (lastReport) {
+            console.log('Found cached report, available via Reports tab');
+        }
+    });
+    
+    // ===== End Phase 3.2 Functions =====
+    
     // Quick query buttons
     document.querySelectorAll('.quick-query').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -445,6 +543,16 @@
         });
         
         socket.on('analysis_complete', (data) => {
+            // PHASE 3.2 FIX: Save report to localStorage immediately to prevent data loss
+            const reportData = {
+                timestamp: new Date().toISOString(),
+                executive_summary: data.executive_summary || '',
+                full_report_markdown: data.full_report_markdown || '',
+                summary: data.summary || {},
+                report_path: data.report_path
+            };
+            localStorage.setItem('last_report', JSON.stringify(reportData));
+            
             // Show completion
             const resultsSection = document.getElementById('resultsSection');
             resultsSection.classList.remove('hidden');
