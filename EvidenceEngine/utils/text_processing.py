@@ -1,6 +1,6 @@
 """
-文本处理工具函数
-用于清理LLM输出、解析JSON等
+Cassandra Evidence Miner - Text Processing Utilities
+Handles LLM output cleaning, JSON parsing, and response extraction for PDF evidence analysis
 """
 
 import re
@@ -11,15 +11,15 @@ from json.decoder import JSONDecodeError
 
 def clean_json_tags(text: str) -> str:
     """
-    清理文本中的JSON标签
+    Remove JSON code fence tags from text
     
     Args:
-        text: 原始文本
+        text: Raw text string
         
     Returns:
-        清理后的文本
+        Cleaned text without JSON markers
     """
-    # 移除```json 和 ```标签
+    # Remove ```json and ``` tags
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*$', '', text)
     text = re.sub(r'```', '', text)
@@ -29,15 +29,15 @@ def clean_json_tags(text: str) -> str:
 
 def clean_markdown_tags(text: str) -> str:
     """
-    清理文本中的Markdown标签
+    Remove Markdown code fence tags from text
     
     Args:
-        text: 原始文本
+        text: Raw text string
         
     Returns:
-        清理后的文本
+        Cleaned text without Markdown markers
     """
-    # 移除```markdown 和 ```标签
+    # Remove ```markdown and ``` tags
     text = re.sub(r'```markdown\s*', '', text)
     text = re.sub(r'```\s*$', '', text)
     text = re.sub(r'```', '', text)
@@ -47,33 +47,33 @@ def clean_markdown_tags(text: str) -> str:
 
 def remove_reasoning_from_output(text: str) -> str:
     """
-    移除输出中的推理过程文本
+    Remove reasoning/explanation text preceding JSON output from LLM responses
     
     Args:
-        text: 原始文本
+        text: Raw LLM output text
         
     Returns:
-        清理后的文本
+        Cleaned text with only JSON content
     """
-    # 查找JSON开始位置
+    # Find JSON starting position
     json_start = -1
     
-    # 尝试找到第一个 { 或 [
+    # Try to find first { or [
     for i, char in enumerate(text):
         if char in '{[':
             json_start = i
             break
     
     if json_start != -1:
-        # 从JSON开始位置截取
+        # Extract from JSON start position
         return text[json_start:].strip()
     
-    # 如果没有找到JSON标记，尝试其他方法
-    # 移除常见的推理标识
+    # If no JSON markers found, try alternative methods
+    # Remove common reasoning identifiers
     patterns = [
-        r'(?:reasoning|推理|思考|分析)[:：]\s*.*?(?=\{|\[)',  # 移除推理部分
-        r'(?:explanation|解释|说明)[:：]\s*.*?(?=\{|\[)',   # 移除解释部分
-        r'^.*?(?=\{|\[)',  # 移除JSON前的所有文本
+        r'(?:reasoning|推理|思考|分析)[:：]\s*.*?(?=\{|\[)',  # Remove reasoning sections
+        r'(?:explanation|解释|说明)[:：]\s*.*?(?=\{|\[)',   # Remove explanation sections
+        r'^.*?(?=\{|\[)',  # Remove all text before JSON
     ]
     
     for pattern in patterns:
@@ -84,25 +84,25 @@ def remove_reasoning_from_output(text: str) -> str:
 
 def extract_clean_response(text: str) -> Dict[str, Any]:
     """
-    提取并清理响应中的JSON内容
+    Extract and clean JSON content from LLM response
     
     Args:
-        text: 原始响应文本
+        text: Raw response text
         
     Returns:
-        解析后的JSON字典
+        Parsed JSON dictionary
     """
-    # 清理文本
+    # Clean text
     cleaned_text = clean_json_tags(text)
     cleaned_text = remove_reasoning_from_output(cleaned_text)
     
-    # 尝试直接解析
+    # Try direct parsing
     try:
         return json.loads(cleaned_text)
     except JSONDecodeError:
         pass
     
-    # 尝试修复不完整的JSON
+    # Try fixing incomplete JSON
     fixed_text = fix_incomplete_json(cleaned_text)
     if fixed_text:
         try:
@@ -110,7 +110,7 @@ def extract_clean_response(text: str) -> Dict[str, Any]:
         except JSONDecodeError:
             pass
     
-    # 尝试查找JSON对象
+    # Try finding JSON object
     json_pattern = r'\{.*\}'
     match = re.search(json_pattern, cleaned_text, re.DOTALL)
     if match:
@@ -119,7 +119,7 @@ def extract_clean_response(text: str) -> Dict[str, Any]:
         except JSONDecodeError:
             pass
     
-    # 尝试查找JSON数组
+    # Try finding JSON array
     array_pattern = r'\[.*\]'
     match = re.search(array_pattern, cleaned_text, re.DOTALL)
     if match:
@@ -128,118 +128,115 @@ def extract_clean_response(text: str) -> Dict[str, Any]:
         except JSONDecodeError:
             pass
     
-    # 如果所有方法都失败，返回错误信息
-    print(f"无法解析JSON响应: {cleaned_text[:200]}...")
-    return {"error": "JSON解析失败", "raw_text": cleaned_text}
-
-
-def fix_incomplete_json(text: str) -> str:
+    # If all methods fail, return error information
+    print(f"Failed to parse JSON response: {cleaned_text[:200]}...")
+    return {"error": "JSON parsing failed", "raw_text": cleaned_text}
     """
-    修复不完整的JSON响应
+    Fix incomplete JSON responses with missing brackets/braces
     
     Args:
-        text: 原始文本
+        text: Raw text string
         
     Returns:
-        修复后的JSON文本，如果无法修复则返回空字符串
+        Fixed JSON text string, or empty string if unable to repair
     """
-    # 移除多余的逗号和空白
+    # Remove trailing commas and whitespace
     text = re.sub(r',\s*}', '}', text)
     text = re.sub(r',\s*]', ']', text)
     
-    # 检查是否已经是有效的JSON
+    # Check if already valid JSON
     try:
         json.loads(text)
         return text
     except JSONDecodeError:
         pass
     
-    # 检查是否缺少开头的数组符号
+    # Check if missing opening array bracket
     if text.strip().startswith('{') and not text.strip().startswith('['):
-        # 如果以对象开始，尝试包装成数组
+        # If starting with object, try wrapping in array
         if text.count('{') > 1:
-            # 多个对象，包装成数组
+            # Multiple objects, wrap in array
             text = '[' + text + ']'
         else:
-            # 单个对象，包装成数组
+            # Single object, wrap in array
             text = '[' + text + ']'
     
-    # 检查是否缺少结尾的数组符号
+    # Check if missing closing array bracket
     if text.strip().endswith('}') and not text.strip().endswith(']'):
-        # 如果以对象结束，尝试包装成数组
+        # If ending with object, try wrapping in array
         if text.count('}') > 1:
-            # 多个对象，包装成数组
+            # Multiple objects, wrap in array
             text = '[' + text + ']'
         else:
-            # 单个对象，包装成数组
+            # Single object, wrap in array
             text = '[' + text + ']'
     
-    # 检查括号是否匹配
+    # Check bracket balance
     open_braces = text.count('{')
     close_braces = text.count('}')
     open_brackets = text.count('[')
     close_brackets = text.count(']')
     
-    # 修复不匹配的括号
+    # Fix mismatched brackets
     if open_braces > close_braces:
         text += '}' * (open_braces - close_braces)
     if open_brackets > close_brackets:
         text += ']' * (open_brackets - close_brackets)
     
-    # 验证修复后的JSON是否有效
+    # Validate fixed JSON
     try:
         json.loads(text)
         return text
     except JSONDecodeError:
-        # 如果仍然无效，尝试更激进的修复
+        # If still invalid, try aggressive repair
         return fix_aggressive_json(text)
 
 
 def fix_aggressive_json(text: str) -> str:
     """
-    更激进的JSON修复方法
+    Aggressive JSON repair method for severely malformed responses
     
     Args:
-        text: 原始文本
+        text: Raw text string
         
     Returns:
-        修复后的JSON文本
+        Repaired JSON text
     """
-    # 查找所有可能的JSON对象
+    # Find all potential JSON objects
     objects = re.findall(r'\{[^{}]*\}', text)
     
     if len(objects) >= 2:
-        # 如果有多个对象，包装成数组
+        # If multiple objects found, wrap in array
         return '[' + ','.join(objects) + ']'
     elif len(objects) == 1:
-        # 如果只有一个对象，包装成数组
+        # If single object found, wrap in array
         return '[' + objects[0] + ']'
     else:
-        # 如果没有找到对象，返回空数组
+        # If no objects found, return empty array
         return '[]'
 
 
 def update_state_with_search_results(search_results: List[Dict[str, Any]], 
                                    paragraph_index: int, state: Any) -> Any:
     """
-    将搜索结果更新到状态中
+    Update state with search results from PDF evidence queries
     
     Args:
-        search_results: 搜索结果列表
-        paragraph_index: 段落索引
-        state: 状态对象
+        search_results: List of search results from PDF evidence sources
+        paragraph_index: Index of target paragraph/section
+        state: State object for report workflow
         
     Returns:
-        更新后的状态对象
+        Updated state object
     """
     if 0 <= paragraph_index < len(state.paragraphs):
-        # 获取最后一次搜索的查询（假设是当前查询）
+        # Get last search query (assume current query)
         current_query = ""
         if search_results:
-            # 从搜索结果推断查询（这里需要改进以获取实际查询）
-            current_query = "搜索查询"
+            # Infer query from search results (needs improvement to get actual query)
+            current_query = "Search query"
         
-        # 添加搜索结果到状态
+        # Add search results to state
         state.paragraphs[paragraph_index].research.add_search_results(
             current_query, search_results
         )
@@ -249,37 +246,37 @@ def update_state_with_search_results(search_results: List[Dict[str, Any]],
 
 def validate_json_schema(data: Dict[str, Any], required_fields: List[str]) -> bool:
     """
-    验证JSON数据是否包含必需字段
+    Validate JSON data contains required fields
     
     Args:
-        data: 要验证的数据
-        required_fields: 必需字段列表
+        data: Data to validate
+        required_fields: List of required field names
         
     Returns:
-        验证是否通过
+        True if validation passes, False otherwise
     """
     return all(field in data for field in required_fields)
 
 
 def truncate_content(content: str, max_length: int = 20000) -> str:
     """
-    截断内容到指定长度
+    Truncate content to specified length with word boundary awareness
     
     Args:
-        content: 原始内容
-        max_length: 最大长度
+        content: Original content string
+        max_length: Maximum allowed length
         
     Returns:
-        截断后的内容
+        Truncated content with ellipsis if needed
     """
     if len(content) <= max_length:
         return content
     
-    # 尝试在单词边界截断
+    # Try to truncate at word boundary
     truncated = content[:max_length]
     last_space = truncated.rfind(' ')
     
-    if last_space > max_length * 0.8:  # 如果最后一个空格位置合理
+    if last_space > max_length * 0.8:  # If last space position is reasonable
         return truncated[:last_space] + "..."
     else:
         return truncated + "..."
@@ -288,14 +285,14 @@ def truncate_content(content: str, max_length: int = 20000) -> str:
 def format_search_results_for_prompt(search_results: List[Dict[str, Any]], 
                                    max_length: int = 20000) -> List[str]:
     """
-    格式化搜索结果用于提示词
+    Format PDF evidence results for LLM prompt construction
     
     Args:
-        search_results: 搜索结果列表
-        max_length: 每个结果的最大长度
+        search_results: List of search results from PDF evidence sources
+        max_length: Maximum length per result
         
     Returns:
-        格式化后的内容列表
+        List of formatted content strings ready for prompt injection
     """
     formatted_results = []
     

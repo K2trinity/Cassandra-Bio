@@ -30,6 +30,8 @@ from loguru import logger
 
 from src.llms import create_evidence_client
 from src.tools import extract_text_from_pdf
+from src.utils.data_validator import DataValidator
+from src.utils.stream_validator import StreamValidator
 
 
 # Token limits for safety (Gemini 1.5/2.0 Pro has ~2M input, but be conservative)
@@ -207,15 +209,54 @@ You MUST return a JSON Object with exactly two keys:
         try:
             # ===== STEP A: Extract Full Text =====
             logger.info("\n[Step A] Extracting full text from PDF...")
-            full_text = extract_text_from_pdf(pdf_path, include_metadata=include_metadata)
+            
+            try:
+                full_text = extract_text_from_pdf(pdf_path, include_metadata=include_metadata)
+            except ValueError as e:
+                # 🔍 DIAGNOSTIC: Categorize specific PDF extraction failures
+                error_msg = str(e)
+                
+                if "ENCRYPTED_PDF" in error_msg:
+                    logger.critical("🔒 PDF EXTRACTION FAILED: File is password-protected")
+                    return {
+                        "paper_summary": "Error: PDF is encrypted and requires password for access",
+                        "risk_signals": [],
+                        "filename": Path(pdf_path).name,
+                        "error_type": "ENCRYPTED_PDF",
+                        "error_details": error_msg
+                    }
+                elif "SCANNED_PDF" in error_msg:
+                    logger.critical("📷 PDF EXTRACTION FAILED: Scanned document without text layer (requires OCR)")
+                    return {
+                        "paper_summary": "Error: This is a scanned PDF with no extractable text. OCR processing required.",
+                        "risk_signals": [],
+                        "filename": Path(pdf_path).name,
+                        "error_type": "SCANNED_PDF",
+                        "error_details": error_msg
+                    }
+                elif "CORRUPTED_PDF" in error_msg:
+                    logger.critical("💥 PDF EXTRACTION FAILED: File is corrupted or invalid format")
+                    return {
+                        "paper_summary": "Error: PDF file is damaged or has invalid format",
+                        "risk_signals": [],
+                        "filename": Path(pdf_path).name,
+                        "error_type": "CORRUPTED_PDF",
+                        "error_details": error_msg
+                    }
+                else:
+                    # Unknown ValueError
+                    raise
             
             # ===== GATEKEEPER: Prevent None/Empty from reaching Gemini =====
             if not full_text or len(full_text.strip()) < 100:
                 logger.critical("⚠️ CRITICAL FAILURE: PDF appears to be empty or unreadable (Data Missing)")
+                logger.critical(f"   Extracted text length: {len(full_text.strip()) if full_text else 0} characters")
                 return {
-                    "paper_summary": "Error: PDF empty or unreadable",
+                    "paper_summary": "Error: PDF extraction succeeded but yielded insufficient text (<100 chars)",
                     "risk_signals": [],
-                    "filename": Path(pdf_path).name
+                    "filename": Path(pdf_path).name,
+                    "error_type": "INSUFFICIENT_TEXT",
+                    "error_details": f"Only {len(full_text.strip()) if full_text else 0} characters extracted"
                 }
             
             char_count = len(full_text)
@@ -248,7 +289,8 @@ You MUST return a JSON Object with exactly two keys:
             
             # ===== STEP C: Mine Dark Data =====
             logger.info("\n[Step C] Mining for dark data...")
-            evidence_data = self._extract_evidence_single_pass(full_text)
+            # Pass filename to enable DataValidator tracking
+            evidence_data = self._extract_evidence_single_pass(full_text, Path(pdf_path).name)
             
             # Add filename for tracking
             evidence_data["filename"] = Path(pdf_path).name
@@ -259,9 +301,10 @@ You MUST return a JSON Object with exactly two keys:
             logger.success(f"✅ Mining Complete: {len(risk_signals)} risk signals found")
             
             if risk_signals:
-                high_risk = sum(1 for e in risk_signals if e.risk_level == "HIGH")
-                medium_risk = sum(1 for e in risk_signals if e.risk_level == "MEDIUM")
-                low_risk = sum(1 for e in risk_signals if e.risk_level == "LOW")
+                # 🔥 FIX: risk_signals are dicts, not objects - use dict access
+                high_risk = sum(1 for e in risk_signals if isinstance(e, dict) and e.get("severity") == "HIGH")
+                medium_risk = sum(1 for e in risk_signals if isinstance(e, dict) and e.get("severity") == "MEDIUM")
+                low_risk = sum(1 for e in risk_signals if isinstance(e, dict) and e.get("severity") == "LOW")
                 
                 logger.info(f"   - High Risk: {high_risk}")
                 logger.info(f"   - Medium Risk: {medium_risk}")
@@ -270,7 +313,9 @@ You MUST return a JSON Object with exactly two keys:
                 # Log risk types
                 risk_types = {}
                 for item in risk_signals:
-                    risk_types[item.risk_type] = risk_types.get(item.risk_type, 0) + 1
+                    # 🔥 FIX: Use dict access
+                    risk_type = item.get("signal_type", "UNKNOWN") if isinstance(item, dict) else "UNKNOWN"
+                    risk_types[risk_type] = risk_types.get(risk_type, 0) + 1
                 
                 logger.info("\n   Risk Type Breakdown:")
                 for risk_type, count in sorted(risk_types.items(), key=lambda x: x[1], reverse=True):
@@ -320,12 +365,13 @@ You MUST return a JSON Object with exactly two keys:
             # More conservative fallback than original (was //4, now //3)
             return len(text) // 3
     
-    def _extract_evidence_single_pass(self, full_text: str) -> Dict[str, Any]:
+    def _extract_evidence_single_pass(self, full_text: str, filename: str = "unknown") -> Dict[str, Any]:
         """
         Extract evidence in a single LLM call (for PDFs under token limit).
         
         Args:
             full_text: Complete extracted text from PDF
+            filename: Source filename for validation tracking
         
         Returns:
             Dict with 'paper_summary' and 'risk_signals' keys
@@ -340,14 +386,44 @@ PAPER TEXT:
 Return your findings in the specified JSON format."""
         
         try:
-            # Call Gemini with long-context prompt
-            response = self.llm.generate_content(
+            # 🔥 ENHANCED: Use structured JSON output for reliable parsing
+            # Define expected schema inline to avoid import issues
+            output_schema = {
+                "type": "object",
+                "properties": {
+                    "paper_summary": {
+                        "type": "string",
+                        "description": "A technical summary of the study design, MOA, and outcomes (300 words)."
+                    },
+                    "risk_signals": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "signal_type": {"type": "string"},
+                                "description": {"type": "string"},
+                                "severity": {"type": "string"},
+                                "page_reference": {"type": "string"}
+                            },
+                            "required": ["signal_type", "description", "severity"]
+                        }
+                    }
+                },
+                "required": ["paper_summary", "risk_signals"]
+            }
+            
+            # Call Gemini with forced JSON output
+            response_data = self.llm.generate_json(
                 prompt=user_prompt,
+                response_schema=output_schema,
                 system_instruction=self.mining_system_prompt
             )
             
-            # Parse JSON response (returns Dict with paper_summary and risk_signals)
-            evidence_data = self._parse_evidence_response(response)
+            # === NEW: Validate with StreamValidator ===
+            evidence_data = StreamValidator.validate_evidence_payload(response_data)
+            
+            # Add filename to the result
+            evidence_data['filename'] = filename
             
             logger.success(
                 f"Extracted summary ({len(evidence_data.get('paper_summary', ''))} chars) "
@@ -392,7 +468,9 @@ Return your findings in the specified JSON format."""
             logger.info(f"\nProcessing chunk {i}/{len(chunks)}...")
             
             try:
-                chunk_data = self._extract_evidence_single_pass(chunk)
+                # Pass filename with chunk indicator for validation tracking
+                chunk_filename = f"{filename}_chunk{i}"
+                chunk_data = self._extract_evidence_single_pass(chunk, chunk_filename)
                 all_risks.extend(chunk_data.get("risk_signals", []))
                 
                 # Collect summary from each chunk
@@ -480,15 +558,16 @@ Return your findings in the specified JSON format."""
         
         return text
     
-    def _parse_evidence_response(self, response: str) -> Dict[str, Any]:
+    def _parse_evidence_response(self, response: str, filename: str = "unknown") -> Dict[str, Any]:
         """
-        Parse LLM JSON response into standardized Dict format.
+        Parse LLM JSON response into standardized Dict format using DataValidator.
         
-        PROTOCOL UPGRADE: Returns Dict with 'paper_summary' and 'risk_signals' keys.
-        Handles legacy List format for backward compatibility.
+        PROTOCOL UPGRADE v2: Now uses centralized DataValidator middleware for
+        consistent data sanitization across all agents.
         
         Args:
             response: Raw LLM response text
+            filename: Source file name for tracking
         
         Returns:
             Dict with:
@@ -496,85 +575,63 @@ Return your findings in the specified JSON format."""
                 - risk_signals: List[EvidenceItem] (risk findings)
         """
         try:
-            # --- THE FIX: IRONCLAD JSON CLEANER ---
-            # Use the new regex-based cleaner to remove all Markdown formatting
-            cleaned_text = self._clean_json_text(response)
+            # === PROTOCOL UPGRADE: Use StreamValidator Middleware ===
+            # Step 1: Sanitize raw LLM JSON (remove markdown, parse JSON)
+            sanitized_data = StreamValidator.sanitize_llm_json(response)
             
-            # Parse JSON
-            data = json.loads(cleaned_text)
-            # ---------------------------------------
+            # Step 2: Validate against Evidence Miner schema (enforce required keys)
+            validated_payload = StreamValidator.validate_evidence_payload(sanitized_data)
             
-            # --- PROTOCOL FIX: STANDARDIZE OUTPUT ---
-            # Ensure output is always a Dictionary with 'paper_summary' and 'risk_signals'
+            # Extract content from validated payload
+            summary = validated_payload["paper_summary"]
+            raw_risks = validated_payload["risk_signals"]
+            
+            # Convert raw risk dicts to EvidenceItem objects
+            risk_signals = []
+            for item_data in raw_risks:
+                if not isinstance(item_data, dict):
+                    logger.warning(f"Skipping non-dict risk signal: {type(item_data)}")
+                    continue
+                
+                try:
+                    # StreamValidator ensures all required keys exist
+                    risk_signals.append(EvidenceItem(
+                        source=item_data.get("page_reference", "Unknown"),
+                        page_estimate=item_data.get("page_reference", "Unknown"),
+                        quote=item_data.get("description", ""),
+                        risk_level=item_data.get("severity", "LOW").upper(),
+                        risk_type=item_data.get("signal_type", "UNKNOWN"),
+                        explanation=item_data.get("description", "")
+                    ))
+                except Exception as e:
+                    logger.warning(f"Failed to convert risk item to EvidenceItem: {e}")
+                    continue
+            
+            # Construct final output
             standardized_data = {
-                "paper_summary": "",
-                "risk_signals": []
+                "paper_summary": summary,
+                "risk_signals": risk_signals
             }
-
-            if isinstance(data, list):
-                # Legacy/Fallback handling: If LLM returns a list, assume it's just risks
-                logger.warning("⚠️ Legacy List Format Detected - Converting to Protocol")
-                standardized_data["risk_signals"] = data
-                standardized_data["paper_summary"] = "Summary not provided by LLM (Legacy List Format)."
-            
-            elif isinstance(data, dict):
-                # Extract flexible keys to handle schema drift
-                standardized_data["paper_summary"] = (
-                    data.get("paper_summary") or 
-                    data.get("summary") or 
-                    data.get("overview") or 
-                    "Summary extraction failed."
-                )
-                
-                # Handle multiple possible key names for risk signals
-                raw_risks = (
-                    data.get("risk_signals") or 
-                    data.get("evidence_items") or 
-                    data.get("findings") or 
-                    data.get("evidence") or
-                    data.get("items") or
-                    data.get("results") or
-                    []
-                )
-                
-                # Convert raw risk dicts to EvidenceItem objects
-                for item_data in raw_risks:
-                    try:
-                        standardized_data["risk_signals"].append(EvidenceItem(
-                            source=item_data.get("source", "Unknown"),
-                            page_estimate=item_data.get("page_estimate", "Unknown"),
-                            quote=item_data.get("quote", ""),
-                            risk_level=item_data.get("risk_level", "LOW"),
-                            risk_type=item_data.get("risk_type", "other"),
-                            explanation=item_data.get("explanation", "")
-                        ))
-                    except Exception as e:
-                        logger.warning(f"Failed to parse evidence item: {e}")
-                        continue
-            
-            else:
-                logger.error(f"Unexpected data type: {type(data)}")
-                standardized_data["paper_summary"] = "Parsing Error: Unexpected data type"
             
             # Log extraction success
             logger.success(
-                f"✅ Protocol Extraction: Summary={len(standardized_data['paper_summary'])} chars, "
-                f"Risks={len(standardized_data['risk_signals'])} items"
+                f"✅ Data Validated & Parsed for {filename}: "
+                f"Summary={len(summary)} chars, "
+                f"Risks={len(risk_signals)} items"
             )
             
             return standardized_data
-            # --------------------
+            # ============================================
 
-        except json.JSONDecodeError as e:
-            logger.critical(f"⚠️ CRITICAL FAILURE: Failed to parse JSON response: {e}")
-            logger.debug(f"Raw response: {response[:500]}...")
-            # Return safe default to prevent pipeline crash
-            return {"paper_summary": "JSON Parsing Error", "risk_signals": []}
-        
         except Exception as e:
-            logger.critical(f"⚠️ CRITICAL FAILURE: Error parsing evidence response: {e}")
+            logger.critical(f"⚠️ CRITICAL FAILURE: Error in _parse_evidence_response for {filename}: {e}")
+            import traceback
+            traceback.print_exc()
             # Return safe default to prevent pipeline crash
-            return {"paper_summary": "Parsing Error", "risk_signals": []}
+            return {
+                "paper_summary": f"Parsing Error: {str(e)}",
+                "risk_signals": []
+            }
     
     def _deduplicate_evidence(self, evidence_items: List[EvidenceItem]) -> List[EvidenceItem]:
         """
@@ -627,18 +684,18 @@ Return your findings in the specified JSON format."""
         
         report_lines.extend([
             f"**Total Risk Signals:** {len(evidence_items)}",
-            f"**High Risk:** {sum(1 for e in evidence_items if e.risk_level == 'HIGH')}",
-            f"**Medium Risk:** {sum(1 for e in evidence_items if e.risk_level == 'MEDIUM')}",
-            f"**Low Risk:** {sum(1 for e in evidence_items if e.risk_level == 'LOW')}",
+            f"**High Risk:** {sum(1 for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == 'HIGH')}",
+            f"**Medium Risk:** {sum(1 for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == 'MEDIUM')}",
+            f"**Low Risk:** {sum(1 for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == 'LOW')}",
             "",
             "---",
             ""
         ])
         
-        # Group by risk level
-        high_risk = [e for e in evidence_items if e.risk_level == "HIGH"]
-        medium_risk = [e for e in evidence_items if e.risk_level == "MEDIUM"]
-        low_risk = [e for e in evidence_items if e.risk_level == "LOW"]
+        # Group by risk level - support both object and dict
+        high_risk = [e for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == "HIGH"]
+        medium_risk = [e for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == "MEDIUM"]
+        low_risk = [e for e in evidence_items if (e.risk_level if hasattr(e, 'risk_level') else e.get('severity')) == "LOW"]
         
         # Report high risk items first
         if high_risk:
@@ -646,7 +703,9 @@ Return your findings in the specified JSON format."""
             report_lines.append("")
             
             for i, item in enumerate(high_risk, 1):
-                report_lines.append(f"### {i}. {item.risk_type.upper()}")
+                # Support both object and dict
+                risk_type = item.risk_type if hasattr(item, 'risk_type') else item.get('signal_type', 'UNKNOWN')
+                report_lines.append(f"### {i}. {risk_type.upper()}")
                 report_lines.append(f"**Source:** {item.source} ({item.page_estimate})")
                 report_lines.append(f"**Quote:**")
                 report_lines.append(f"> {item.quote}")
@@ -659,7 +718,9 @@ Return your findings in the specified JSON format."""
             report_lines.append("")
             
             for i, item in enumerate(medium_risk, 1):
-                report_lines.append(f"### {i}. {item.risk_type.upper()}")
+                # Support both object and dict
+                risk_type = item.risk_type if hasattr(item, 'risk_type') else item.get('signal_type', 'UNKNOWN')
+                report_lines.append(f"### {i}. {risk_type.upper()}")
                 report_lines.append(f"**Source:** {item.source} ({item.page_estimate})")
                 report_lines.append(f"**Quote:**")
                 report_lines.append(f"> {item.quote}")
@@ -673,7 +734,11 @@ Return your findings in the specified JSON format."""
             report_lines.append(f"Found {len(low_risk)} minor issues:")
             report_lines.append("")
             for item in low_risk:
-                report_lines.append(f"- **{item.risk_type}** ({item.source}): {item.explanation}")
+                # Support both object and dict
+                risk_type = item.risk_type if hasattr(item, 'risk_type') else item.get('signal_type', 'UNKNOWN')
+                source = item.source if hasattr(item, 'source') else item.get('page_reference', 'Unknown')
+                explanation = item.explanation if hasattr(item, 'explanation') else item.get('description', 'No details')
+                report_lines.append(f"- **{risk_type}** ({source}): {explanation}")
             report_lines.append("")
         
         return "\n".join(report_lines)

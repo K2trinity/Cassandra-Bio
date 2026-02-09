@@ -1,7 +1,8 @@
 """
-Report Engine渲染器集合。
+Cassandra Report Engine - Renderer Collection
 
-提供 HTMLRenderer 和 PDFRenderer，支持HTML和PDF输出。
+Provides HTMLRenderer and PDFRenderer for biomedical due diligence report output.
+Supports HTML and PDF formats with professional scientific styling.
 """
 
 from .html_renderer import HTMLRenderer

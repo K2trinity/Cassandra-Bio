@@ -26,6 +26,7 @@ from loguru import logger
 
 from src.llms import create_forensic_client
 from src.tools import extract_images_from_pdf
+from src.utils.stream_validator import StreamValidator
 
 
 @dataclass
@@ -183,18 +184,28 @@ Return your analysis in this exact JSON format:
             
             # ===== STEP C: Vision Analysis =====
             audit_results = []
+            ssl_error_count = 0  # 🔥 Track SSL failures
+            consecutive_failures = 0  # 🔥 Circuit breaker
             
             for idx, image_path in enumerate(image_paths, start=1):
                 logger.info(f"\n  Analyzing figure {idx}/{len(image_paths)}: {Path(image_path).name}")
                 
+                # 🔥 Circuit breaker: Skip remaining if too many consecutive SSL failures
+                if consecutive_failures >= 5:
+                    logger.warning(f"⚠️ Skipping remaining {len(image_paths) - idx + 1} images due to network instability")
+                    break
+                
                 try:
                     result = self._analyze_single_image(image_path, idx)
                     audit_results.append(result)
+                    consecutive_failures = 0  # Reset on success
                     
                     # Log result with unambiguous terminology
                     if result.status == "SUSPICIOUS":
+                        # 🔥 FIX: Handle None tampering_risk_score
+                        risk_str = f"{result.tampering_risk_score:.2f}" if result.tampering_risk_score is not None else "N/A"
                         logger.warning(
-                            f"    ⚠️  SUSPICIOUS (tampering risk: {result.tampering_risk_score:.2f})\n"
+                            f"    ⚠️  SUSPICIOUS (tampering risk: {risk_str})\n"
                             f"    Findings: {result.findings[:150]}..."
                         )
                     elif result.status == "CLEAN":
@@ -205,10 +216,22 @@ Return your analysis in this exact JSON format:
                             # Clean but with minor anomalies
                             logger.success(f"    ✅ CLEAN (tampering risk: {result.tampering_risk_score:.2f} - below threshold)")
                     else:
-                        logger.info(f"    ℹ️  {result.status} (tampering risk: {result.tampering_risk_score:.2f})")
+                        # 🔥 FIX: Handle None tampering_risk_score
+                        risk_str = f"{result.tampering_risk_score:.2f}" if result.tampering_risk_score is not None else "N/A"
+                        logger.info(f"    ℹ️  {result.status} (tampering risk: {risk_str})")
                     
                 except Exception as e:
-                    logger.critical(f"    ❌ CRITICAL FAILURE: Analysis Skipped (Data Missing) - {e}")
+                    error_msg = str(e)
+                    
+                    # 🔥 Detect SSL errors for circuit breaker
+                    if "SSL" in error_msg or "EOF" in error_msg or "Connection" in error_msg:
+                        ssl_error_count += 1
+                        consecutive_failures += 1
+                        logger.error(f"    ❌ Network error ({ssl_error_count} total): {error_msg[:100]}")
+                    else:
+                        consecutive_failures = 0  # Reset for non-network errors
+                        logger.critical(f"    ❌ CRITICAL FAILURE: Analysis Skipped (Data Missing) - {e}")
+                    
                     audit_results.append(ImageAuditResult(
                         image_id=f"figure_{idx:03d}",
                         image_path=image_path,
@@ -286,76 +309,85 @@ Return your analysis in this exact JSON format:
 Follow the forensic analysis guidelines in the system prompt and return your analysis in the specified JSON format."""
         
         try:
-            # Call Gemini Vision API
-            # Note: GeminiClient.generate_content() accepts image bytes directly
-            response = self.llm.generate_content(
+            # 🔥 ENHANCED: Use structured JSON output for reliable parsing
+            # Define expected schema inline to avoid import issues
+            output_schema = {
+                "type": "object",
+                "properties": {
+                    "image_id": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["SUSPICIOUS", "CLEAN", "INCONCLUSIVE", "ERROR"]
+                    },
+                    "tampering_probability": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
+                    "findings": {"type": "string"},
+                    "page_number": {"type": "integer"}
+                },
+                "required": ["image_id", "status", "tampering_probability", "findings"]
+            }
+            
+            # Call Gemini Vision API with forced JSON output
+            # Note: GeminiClient.generate_json() guarantees JSON response
+            response_data = self.llm.generate_json(
                 prompt=user_prompt,
                 images=[image_bytes],  # Pass image as bytes (not base64)
+                response_schema=output_schema,
                 system_instruction=self.forensic_system_prompt
             )
             
-            # Parse JSON response
-            # Extract JSON from response (handle markdown code blocks)
-            response_text = response.strip()
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+            # === PROTOCOL UPGRADE: Use StreamValidator Middleware ===
+            # Since generate_json returns dict, we still validate it for safety
+            validated_payload = StreamValidator.validate_forensic_payload(response_data)
             
-            parsed_analysis = json_module.loads(response_text)
+            # Extract validated fields
+            status = validated_payload["status"]
+            tampering_risk_score = validated_payload["score"]
+            findings = validated_payload["findings"]
+            page_num = validated_payload.get("page_number") or self._extract_page_num(image_path)
             
-            # Extract tampering risk score and status (with robust parsing)
-            raw_risk_score = parsed_analysis.get("confidence", 0.0)  # API still uses "confidence" field
-            tampering_risk_score = self._parse_risk_score(raw_risk_score)
-            status = parsed_analysis.get("status", "ERROR")
+            # 🔥 FIX: Save JSON response for raw_analysis
+            import json as json_module
+            raw_response = json_module.dumps(response_data, indent=2)
             
-            # Extract model's self-assessed reliability (if provided)
-            raw_model_confidence = parsed_analysis.get("model_confidence", 1.0)
-            model_confidence = self._parse_risk_score(raw_model_confidence)  # Use same parser
+            # Model confidence defaults to 1.0 (high confidence)
+            model_confidence = 1.0
             
-            # 🛡️ Self-Reflection Logic: Validate tampering risk scores
+            # 🛡️ Validation: Check for inconsistent forensic results
             if status == "CLEAN" and tampering_risk_score == 0.0:
                 logger.debug(f"✓ Model found zero anomalies (tampering_risk_score=0.0)")
             elif status == "CLEAN" and tampering_risk_score > 0.5:
                 logger.warning(f"⚠️ Inconsistent: CLEAN status but high tampering risk: {tampering_risk_score:.2f}")
-                logger.debug(f"Raw response (first 500 chars): {response[:500]}")
-                logger.debug(f"Parsed JSON: {parsed_analysis}")
             elif status == "SUSPICIOUS" and tampering_risk_score < 0.3:
                 logger.warning(f"⚠️ Inconsistent: SUSPICIOUS status but low tampering risk: {tampering_risk_score:.2f}")
-                logger.debug(f"Raw response (first 500 chars): {response[:500]}")
-            
-            # Log model confidence separately if provided
-            if "model_confidence" in parsed_analysis:
-                logger.debug(f"Model self-reflection: {model_confidence:.2f} certainty in its judgment")
             
             return ImageAuditResult(
                 image_id=f"figure_{image_id:03d}",
                 image_path=image_path,
-                page_num=self._extract_page_num(image_path),
+                page_num=page_num,
                 status=status,
                 tampering_risk_score=tampering_risk_score,
-                findings=parsed_analysis.get("findings", "No analysis provided"),
-                raw_analysis=response,
+                findings=findings,
+                raw_analysis=raw_response,
                 model_confidence=model_confidence
             )
             
-        except json_module.JSONDecodeError as e:
-            logger.critical(f"⚠️ CRITICAL FAILURE: Failed to parse LLM JSON response: {e}")
-            # Fallback: treat as error if parsing fails
+        except Exception as e:
+            # StreamValidator should catch most errors, but handle edge cases
+            logger.error(f"Vision analysis failed: {e}")
             return ImageAuditResult(
                 image_id=f"figure_{image_id:03d}",
                 image_path=image_path,
                 page_num=self._extract_page_num(image_path),
                 status="ERROR",
-                tampering_risk_score=None,  # None = Analysis Failed, NOT "Zero Risk"
-                findings=f"CRITICAL: JSON parsing error: {str(e)}",
-                raw_analysis=response if 'response' in locals() else "",
-                model_confidence=0.0  # Parsing error = no confidence
+                tampering_risk_score=None,
+                findings=f"Analysis error: {str(e)}",
+                raw_analysis="",
+                model_confidence=0.0
             )
-        
-        except Exception as e:
-            logger.error(f"Vision analysis failed: {e}")
-            raise
     
     def _parse_risk_score(self, raw_score) -> float:
         """

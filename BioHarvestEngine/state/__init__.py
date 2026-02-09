@@ -1,6 +1,6 @@
 """
-状态管理模块
-定义Deep Search Agent的状态数据结构
+Cassandra BioHarvest Agent - State Management Module
+Defines state data structures for clinical literature search workflow
 """
 
 from .state import State, Paragraph, Research, Search

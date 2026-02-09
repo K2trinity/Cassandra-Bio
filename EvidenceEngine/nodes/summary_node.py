@@ -19,16 +19,7 @@ from ..utils.text_processing import (
     format_search_results_for_prompt
 )
 
-# 导入论坛读取工具
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-try:
-    from utils.forum_reader import get_latest_host_speech, format_host_speech_for_prompt
-    FORUM_READER_AVAILABLE = True
-except ImportError:
-    FORUM_READER_AVAILABLE = False
-    logger.warning("无法导入forum_reader模块，将跳过HOST发言读取功能")
+
 
 
 class FirstSummaryNode(StateMutationNode):
@@ -74,28 +65,9 @@ class FirstSummaryNode(StateMutationNode):
             
             # 准备输入数据
             if isinstance(input_data, str):
-                data = json.loads(input_data)
+                message = input_data
             else:
-                data = input_data.copy() if isinstance(input_data, dict) else input_data
-            
-            # 读取最新的HOST发言（如果可用）
-            if FORUM_READER_AVAILABLE:
-                try:
-                    host_speech = get_latest_host_speech()
-                    if host_speech:
-                        # 将HOST发言添加到输入数据中
-                        data['host_speech'] = host_speech
-                        logger.info(f"已读取HOST发言，长度: {len(host_speech)}字符")
-                except Exception as e:
-                    logger.exception(f"读取HOST发言失败: {str(e)}")
-            
-            # 转换为JSON字符串
-            message = json.dumps(data, ensure_ascii=False)
-            
-            # 如果有HOST发言，添加到消息前面作为参考
-            if FORUM_READER_AVAILABLE and 'host_speech' in data and data['host_speech']:
-                formatted_host = format_host_speech_for_prompt(data['host_speech'])
-                message = formatted_host + "\n" + message
+                message = json.dumps(input_data, ensure_ascii=False)
             
             logger.info("正在生成首次段落总结")
             
@@ -162,7 +134,7 @@ class FirstSummaryNode(StateMutationNode):
             
         except Exception as e:
             logger.exception(f"处理输出失败: {str(e)}")
-            return "段落总结生成失败"
+            return "Failed to generate paragraph summary"
     
     def mutate_state(self, input_data: Any, state: State, paragraph_index: int, **kwargs) -> State:
         """
@@ -239,28 +211,9 @@ class ReflectionSummaryNode(StateMutationNode):
             
             # 准备输入数据
             if isinstance(input_data, str):
-                data = json.loads(input_data)
+                message = input_data
             else:
-                data = input_data.copy() if isinstance(input_data, dict) else input_data
-            
-            # 读取最新的HOST发言（如果可用）
-            if FORUM_READER_AVAILABLE:
-                try:
-                    host_speech = get_latest_host_speech()
-                    if host_speech:
-                        # 将HOST发言添加到输入数据中
-                        data['host_speech'] = host_speech
-                        logger.info(f"已读取HOST发言，长度: {len(host_speech)}字符")
-                except Exception as e:
-                    logger.exception(f"读取HOST发言失败: {str(e)}")
-            
-            # 转换为JSON字符串
-            message = json.dumps(data, ensure_ascii=False)
-            
-            # 如果有HOST发言，添加到消息前面作为参考
-            if FORUM_READER_AVAILABLE and 'host_speech' in data and data['host_speech']:
-                formatted_host = format_host_speech_for_prompt(data['host_speech'])
-                message = formatted_host + "\n" + message
+                message = json.dumps(input_data, ensure_ascii=False)
             
             logger.info("正在生成反思总结")
             
@@ -327,7 +280,7 @@ class ReflectionSummaryNode(StateMutationNode):
             
         except Exception as e:
             logger.exception(f"处理输出失败: {str(e)}")
-            return "反思总结生成失败"
+            return "Failed to generate reflection summary"
     
     def mutate_state(self, input_data: Any, state: State, paragraph_index: int, **kwargs) -> State:
         """

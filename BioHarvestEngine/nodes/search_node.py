@@ -146,8 +146,8 @@ class FirstSearchNode(BaseNode):
             默认的搜索查询字典
         """
         return {
-            "search_query": "相关主题研究",
-            "reasoning": "由于解析失败，使用默认搜索查询"
+            "search_query": "biomedical literature search",
+            "reasoning": "Default search query due to parsing failure"
         }
 
 
@@ -281,6 +281,6 @@ class ReflectionNode(BaseNode):
             默认的反思搜索查询字典
         """
         return {
-            "search_query": "深度研究补充信息",
-            "reasoning": "由于解析失败，使用默认反思搜索查询"
+            "search_query": "additional scientific literature",
+            "reasoning": "Default reflection query due to parsing failure"
         }

@@ -25,6 +25,7 @@ from src.llms import create_bioharvest_client
 from src.tools import search_pubmed, fetch_details, search_failed_trials, EuroPMCClient
 from src.tools.pdf_downloader import download_pdf_from_url
 from loguru import logger
+from src.utils.stream_validator import StreamValidator
 
 
 class BioHarvestAgent:
@@ -213,16 +214,20 @@ Only respond with valid JSON, no additional text."""
         try:
             response = self.llm.generate_content(prompt)
             
-            # Parse JSON response
-            import json
-            # Extract JSON from markdown code blocks if present
-            response_text = response.strip()
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+            # === PROTOCOL UPGRADE: Use StreamValidator Middleware ===
+            # This prevents JSON parse errors and "Data not available" crashes
+            queries = StreamValidator.sanitize_llm_json(response)
             
-            queries = json.loads(response_text)
+            # Validate that we got the expected structure
+            if "error" in queries:
+                logger.warning(f"LLM returned invalid JSON: {queries['error']}")
+                raise ValueError("Invalid JSON from LLM")
+            
+            # Ensure required keys exist with fallbacks
+            if "pubmed" not in queries:
+                queries["pubmed"] = [user_query]
+            if "clinicaltrials" not in queries:
+                queries["clinicaltrials"] = [user_query]
             
             logger.info(f"Generated PubMed queries: {queries['pubmed']}")
             logger.info(f"Generated ClinicalTrials queries: {queries['clinicaltrials']}")

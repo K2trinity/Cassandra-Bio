@@ -1,6 +1,6 @@
 """
-总结节点实现
-负责根据搜索结果生成和更新段落内容
+Summary Node Implementation
+Responsible for generating and updating paragraph content based on search results
 """
 
 import json
@@ -19,32 +19,23 @@ from ..utils.text_processing import (
     format_search_results_for_prompt
 )
 
-# 导入论坛读取工具
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-try:
-    from utils.forum_reader import get_latest_host_speech, format_host_speech_for_prompt
-    FORUM_READER_AVAILABLE = True
-except ImportError:
-    FORUM_READER_AVAILABLE = False
-    logger.warning("无法导入forum_reader模块，将跳过HOST发言读取功能")
+
 
 
 class FirstSummaryNode(StateMutationNode):
-    """根据搜索结果生成段落首次总结的节点"""
+    """Node for generating initial paragraph summary based on search results"""
     
     def __init__(self, llm_client):
         """
-        初始化首次总结节点
+        Initialize first summary node
         
         Args:
-            llm_client: LLM客户端
+            llm_client: LLM client instance
         """
         super().__init__(llm_client, "FirstSummaryNode")
     
     def validate_input(self, input_data: Any) -> bool:
-        """验证输入数据"""
+        """Validate input data"""
         if isinstance(input_data, str):
             try:
                 data = json.loads(input_data)
@@ -59,160 +50,141 @@ class FirstSummaryNode(StateMutationNode):
     
     def run(self, input_data: Any, **kwargs) -> str:
         """
-        调用LLM生成段落总结
+        Invoke LLM to generate paragraph summary
         
         Args:
-            input_data: 包含title、content、search_query和search_results的数据
-            **kwargs: 额外参数
+            input_data: Data containing title, content, search_query and search_results
+            **kwargs: Additional parameters
             
         Returns:
-            段落总结内容
+            Paragraph summary content
         """
         try:
             if not self.validate_input(input_data):
-                raise ValueError("输入数据格式错误")
+                raise ValueError("Invalid input data format")
             
-            # 准备输入数据
+            # Prepare input data
             if isinstance(input_data, str):
-                data = json.loads(input_data)
+                message = input_data
             else:
-                data = input_data.copy() if isinstance(input_data, dict) else input_data
+                message = json.dumps(input_data, ensure_ascii=False)
             
-            # 读取最新的HOST发言（如果可用）
-            if FORUM_READER_AVAILABLE:
-                try:
-                    host_speech = get_latest_host_speech()
-                    if host_speech:
-                        # 将HOST发言添加到输入数据中
-                        data['host_speech'] = host_speech
-                        logger.info(f"已读取HOST发言，长度: {len(host_speech)}字符")
-                except Exception as e:
-                    logger.exception(f"读取HOST发言失败: {str(e)}")
+            logger.info("Generating first paragraph summary")
             
-            # 转换为JSON字符串
-            message = json.dumps(data, ensure_ascii=False)
-            
-            # 如果有HOST发言，添加到消息前面作为参考
-            if FORUM_READER_AVAILABLE and 'host_speech' in data and data['host_speech']:
-                formatted_host = format_host_speech_for_prompt(data['host_speech'])
-                message = formatted_host + "\n" + message
-            
-            logger.info("正在生成首次段落总结")
-            
-            # 调用LLM生成总结（流式，安全拼接UTF-8）
+            # Invoke LLM to generate summary (streaming, safely concatenating UTF-8)
             response = self.llm_client.stream_invoke_to_string(
                 SYSTEM_PROMPT_FIRST_SUMMARY,
                 message,
             )
             
-            # 处理响应
+            # Process response
             processed_response = self.process_output(response)
             
-            logger.info("成功生成首次段落总结")
+            logger.info("Successfully generated first paragraph summary")
             return processed_response
             
         except Exception as e:
-            logger.exception(f"生成首次总结失败: {str(e)}")
+            logger.exception(f"First summary generation failed: {str(e)}")
             raise e
     
     def process_output(self, output: str) -> str:
         """
-        处理LLM输出，提取段落内容
+        Process LLM output and extract paragraph content
         
         Args:
-            output: LLM原始输出
+            output: Raw LLM output
             
         Returns:
-            段落内容
+            Paragraph content
         """
         try:
-            # 清理响应文本
+            # Clean response text
             cleaned_output = remove_reasoning_from_output(output)
             cleaned_output = clean_json_tags(cleaned_output)
             
-            # 记录清理后的输出用于调试
-            logger.info(f"清理后的输出: {cleaned_output}")
+            # Log cleaned output for debugging
+            logger.info(f"Cleaned output: {cleaned_output}")
             
-            # 解析JSON
+            # Parse JSON
             try:
                 result = json.loads(cleaned_output)
-                logger.info("JSON解析成功")
+                logger.info("JSON parsing succeeded")
             except JSONDecodeError as e:
-                logger.error(f"JSON解析失败: {str(e)}")
-                # 尝试修复JSON
+                logger.error(f"JSON parsing failed: {str(e)}")
+                # Attempt to repair JSON
                 fixed_json = fix_incomplete_json(cleaned_output)
                 if fixed_json:
                     try:
                         result = json.loads(fixed_json)
-                        logger.info("JSON修复成功")
+                        logger.info("JSON repair succeeded")
                     except JSONDecodeError:
-                        logger.exception("JSON修复失败，直接使用清理后的文本")
-                        # 如果不是JSON格式，直接返回清理后的文本
+                        logger.exception("JSON repair failed, using cleaned text directly")
+                        # If not JSON format, return cleaned text directly
                         return cleaned_output
                 else:
-                    logger.exception("无法修复JSON，直接使用清理后的文本")
-                    # 如果不是JSON格式，直接返回清理后的文本
+                    logger.exception("Cannot repair JSON, using cleaned text directly")
+                    # If not JSON format, return cleaned text directly
                     return cleaned_output
             
-            # 提取段落内容
+            # Extract paragraph content
             if isinstance(result, dict):
                 paragraph_content = result.get("paragraph_latest_state", "")
                 if paragraph_content:
                     return paragraph_content
             
-            # 如果提取失败，返回原始清理后的文本
+            # If extraction failed, return original cleaned text
             return cleaned_output
             
         except Exception as e:
-            logger.exception(f"处理输出失败: {str(e)}")
-            return "段落总结生成失败"
+            logger.exception(f"Output processing failed: {str(e)}")
+            return "Failed to generate paragraph summary"
     
     def mutate_state(self, input_data: Any, state: State, paragraph_index: int, **kwargs) -> State:
         """
-        更新段落的最新总结到状态
+        Update paragraph's latest summary to state
         
         Args:
-            input_data: 输入数据
-            state: 当前状态
-            paragraph_index: 段落索引
-            **kwargs: 额外参数
+            input_data: Input data
+            state: Current state
+            paragraph_index: Paragraph index
+            **kwargs: Additional parameters
             
         Returns:
-            更新后的状态
+            Updated state
         """
         try:
-            # 生成总结
+            # Generate summary
             summary = self.run(input_data, **kwargs)
             
-            # 更新状态
+            # Update state
             if 0 <= paragraph_index < len(state.paragraphs):
                 state.paragraphs[paragraph_index].research.latest_summary = summary
-                logger.info(f"已更新段落 {paragraph_index} 的首次总结")
+                logger.info(f"Updated first summary for paragraph {paragraph_index}")
             else:
-                raise ValueError(f"段落索引 {paragraph_index} 超出范围")
+                raise ValueError(f"Paragraph index {paragraph_index} out of range")
             
             state.update_timestamp()
             return state
             
         except Exception as e:
-            logger.exception(f"状态更新失败: {str(e)}")
+            logger.exception(f"State update failed: {str(e)}")
             raise e
 
 
 class ReflectionSummaryNode(StateMutationNode):
-    """根据反思搜索结果更新段落总结的节点"""
+    """Node for updating paragraph summary based on reflection search results"""
     
     def __init__(self, llm_client):
         """
-        初始化反思总结节点
+        Initialize reflection summary node
         
         Args:
-            llm_client: LLM客户端
+            llm_client: LLM client instance
         """
         super().__init__(llm_client, "ReflectionSummaryNode")
     
     def validate_input(self, input_data: Any) -> bool:
-        """验证输入数据"""
+        """Validate input data"""
         if isinstance(input_data, str):
             try:
                 data = json.loads(input_data)
@@ -227,142 +199,123 @@ class ReflectionSummaryNode(StateMutationNode):
     
     def run(self, input_data: Any, **kwargs) -> str:
         """
-        调用LLM更新段落内容
+        Invoke LLM to update paragraph content
         
         Args:
-            input_data: 包含完整反思信息的数据
-            **kwargs: 额外参数
+            input_data: Data containing complete reflection information
+            **kwargs: Additional parameters
             
         Returns:
-            更新后的段落内容
+            Updated paragraph content
         """
         try:
             if not self.validate_input(input_data):
-                raise ValueError("输入数据格式错误")
+                raise ValueError("Invalid input data format")
             
-            # 准备输入数据
+            # Prepare input data
             if isinstance(input_data, str):
-                data = json.loads(input_data)
+                message = input_data
             else:
-                data = input_data.copy() if isinstance(input_data, dict) else input_data
+                message = json.dumps(input_data, ensure_ascii=False)
             
-            # 读取最新的HOST发言（如果可用）
-            if FORUM_READER_AVAILABLE:
-                try:
-                    host_speech = get_latest_host_speech()
-                    if host_speech:
-                        # 将HOST发言添加到输入数据中
-                        data['host_speech'] = host_speech
-                        logger.info(f"已读取HOST发言，长度: {len(host_speech)}字符")
-                except Exception as e:
-                    logger.exception(f"读取HOST发言失败: {str(e)}")
+            logger.info("Generating reflection summary")
             
-            # 转换为JSON字符串
-            message = json.dumps(data, ensure_ascii=False)
-            
-            # 如果有HOST发言，添加到消息前面作为参考
-            if FORUM_READER_AVAILABLE and 'host_speech' in data and data['host_speech']:
-                formatted_host = format_host_speech_for_prompt(data['host_speech'])
-                message = formatted_host + "\n" + message
-            
-            logger.info("正在生成反思总结")
-            
-            # 调用LLM生成总结（流式，安全拼接UTF-8）
+            # Invoke LLM to generate summary (streaming, safely concatenating UTF-8)
             response = self.llm_client.stream_invoke_to_string(
                 SYSTEM_PROMPT_REFLECTION_SUMMARY,
                 message,
             )
             
-            # 处理响应
+            # Process response
             processed_response = self.process_output(response)
             
-            logger.info("成功生成反思总结")
+            logger.info("Successfully generated reflection summary")
             return processed_response
             
         except Exception as e:
-            logger.exception(f"生成反思总结失败: {str(e)}")
+            logger.exception(f"Reflection summary generation failed: {str(e)}")
             raise e
     
     def process_output(self, output: str) -> str:
         """
-        处理LLM输出，提取更新后的段落内容
+        Process LLM output and extract updated paragraph content
         
         Args:
-            output: LLM原始输出
+            output: Raw LLM output
             
         Returns:
-            更新后的段落内容
+            Updated paragraph content
         """
         try:
-            # 清理响应文本
+            # Clean response text
             cleaned_output = remove_reasoning_from_output(output)
             cleaned_output = clean_json_tags(cleaned_output)
             
-            # 记录清理后的输出用于调试
-            logger.info(f"清理后的输出: {cleaned_output}")
+            # Log cleaned output for debugging
+            logger.info(f"Cleaned output: {cleaned_output}")
             
-            # 解析JSON
+            # Parse JSON
             try:
                 result = json.loads(cleaned_output)
-                logger.info("JSON解析成功")
+                logger.info("JSON parsing succeeded")
             except JSONDecodeError as e:
-                logger.error(f"JSON解析失败: {str(e)}")
-                # 尝试修复JSON
+                logger.error(f"JSON parsing failed: {str(e)}")
+                # Attempt to repair JSON
                 fixed_json = fix_incomplete_json(cleaned_output)
                 if fixed_json:
                     try:
                         result = json.loads(fixed_json)
-                        logger.info("JSON修复成功")
+                        logger.info("JSON repair succeeded")
                     except JSONDecodeError:
-                        logger.error("JSON修复失败，直接使用清理后的文本")
-                        # 如果不是JSON格式，直接返回清理后的文本
+                        logger.error("JSON repair failed, using cleaned text directly")
+                        # If not JSON format, return cleaned text directly
                         return cleaned_output
                 else:
-                    logger.error("无法修复JSON，直接使用清理后的文本")
-                    # 如果不是JSON格式，直接返回清理后的文本
+                    logger.error("Cannot repair JSON, using cleaned text directly")
+                    # If not JSON format, return cleaned text directly
                     return cleaned_output
             
-            # 提取更新后的段落内容
+            # Extract updated paragraph content
             if isinstance(result, dict):
                 updated_content = result.get("updated_paragraph_latest_state", "")
                 if updated_content:
                     return updated_content
             
-            # 如果提取失败，返回原始清理后的文本
+            # If extraction failed, return original cleaned text
             return cleaned_output
             
         except Exception as e:
-            logger.exception(f"处理输出失败: {str(e)}")
-            return "反思总结生成失败"
+            logger.exception(f"Output processing failed: {str(e)}")
+            return "Failed to generate reflection summary"
     
     def mutate_state(self, input_data: Any, state: State, paragraph_index: int, **kwargs) -> State:
         """
-        将更新后的总结写入状态
+        Write updated summary to state
         
         Args:
-            input_data: 输入数据
-            state: 当前状态
-            paragraph_index: 段落索引
-            **kwargs: 额外参数
+            input_data: Input data
+            state: Current state
+            paragraph_index: Paragraph index
+            **kwargs: Additional parameters
             
         Returns:
-            更新后的状态
+            Updated state
         """
         try:
-            # 生成更新后的总结
+            # Generate updated summary
             updated_summary = self.run(input_data, **kwargs)
             
-            # 更新状态
+            # Update state
             if 0 <= paragraph_index < len(state.paragraphs):
                 state.paragraphs[paragraph_index].research.latest_summary = updated_summary
                 state.paragraphs[paragraph_index].research.increment_reflection()
-                logger.info(f"已更新段落 {paragraph_index} 的反思总结")
+                logger.info(f"Updated reflection summary for paragraph {paragraph_index}")
             else:
-                raise ValueError(f"段落索引 {paragraph_index} 超出范围")
+                raise ValueError(f"Paragraph index {paragraph_index} out of range")
             
             state.update_timestamp()
             return state
             
         except Exception as e:
-            logger.exception(f"状态更新失败: {str(e)}")
+            logger.exception(f"State update failed: {str(e)}")
             raise e

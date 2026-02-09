@@ -24,6 +24,42 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parent
 CWD_ENV: Path = Path.cwd() / ".env"
 ENV_FILE: str = str(CWD_ENV if CWD_ENV.exists() else (PROJECT_ROOT / ".env"))
 
+# 🔥 NEW: Auto-create .env from template if missing
+def _ensure_env_file() -> None:
+    """
+    Automatically create .env file from .env.example if it doesn't exist.
+    This improves first-time user experience.
+    """
+    env_path = Path(ENV_FILE)
+    env_example = PROJECT_ROOT / ".env.example"
+    
+    if not env_path.exists():
+        if env_example.exists():
+            import sys
+            from loguru import logger
+            
+            logger.warning("⚠️ .env file not found. Creating from template...")
+            try:
+                env_path.write_text(env_example.read_text(encoding='utf-8'), encoding='utf-8')
+                logger.success(f"✅ Created .env file at: {env_path}")
+                logger.info("📝 Please edit .env with your API keys before running the application.")
+                logger.info("   Required keys: GOOGLE_API_KEY")
+                sys.exit(0)
+            except Exception as e:
+                logger.error(f"❌ Failed to create .env file: {e}")
+                logger.info("💡 Please manually copy .env.example to .env and configure it.")
+                sys.exit(1)
+        else:
+            # No template available - just warn
+            import sys
+            from loguru import logger
+            logger.warning("⚠️ Neither .env nor .env.example found.")
+            logger.info("💡 Create a .env file with required configuration:")
+            logger.info("   GOOGLE_API_KEY=your_api_key_here")
+
+# Run check on import
+_ensure_env_file()
+
 
 class Settings(BaseSettings):
     """
@@ -136,6 +172,19 @@ class Settings(BaseSettings):
     PUBMED_EMAIL: Optional[str] = Field(
         None,
         description="Email address for PubMed API identification (required by NCBI)"
+    )
+    
+    # ================== Section 5: Workflow Control ====================
+    # PDF Processing Configuration
+    MAX_PDFS_TO_PROCESS: int = Field(
+        100,
+        description="Maximum number of PDFs to process per query (0 = unlimited, recommended: 50-100 for balanced performance)"
+    )
+    
+    # Model Fallback Configuration - Auto-downgrade when quota exhausted
+    MODEL_FALLBACK_CHAIN: str = Field(
+        "gemini-3-pro-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-1.5-pro,gemini-1.5-flash",
+        description="Comma-separated list of models to try in order when quota is exhausted (highest to lowest priority)"
     )
     
     # Pydantic Settings Configuration

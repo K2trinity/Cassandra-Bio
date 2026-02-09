@@ -101,20 +101,20 @@ class ReportFormattingNode(BaseNode):
             
             # 确保报告有基本结构
             if not cleaned_output.strip():
-                return "# 报告生成失败\n\n无法生成有效的报告内容。"
+                return "# Report Generation Failed\n\nUnable to generate valid report content."
             
             # 如果没有标题，添加一个默认标题
             if not cleaned_output.strip().startswith('#'):
-                cleaned_output = "# 深度研究报告\n\n" + cleaned_output
+                cleaned_output = "# BioHarvest Research Report\n\n" + cleaned_output
             
             return cleaned_output.strip()
             
         except Exception as e:
             logger.exception(f"处理输出失败: {str(e)}")
-            return "# 报告处理失败\n\n报告格式化过程中发生错误。"
+            return "# Report Processing Failed\n\nAn error occurred during report formatting."
     
     def format_report_manually(self, paragraphs_data: List[Dict[str, str]], 
-                             report_title: str = "深度研究报告") -> str:
+                             report_title: str = "BioHarvest Research Report") -> str:
         """
         手动格式化报告（备用方法）
         
@@ -154,10 +154,10 @@ class ReportFormattingNode(BaseNode):
             # 添加结论
             if len(paragraphs_data) > 1:
                 report_lines.extend([
-                    "## 结论",
+                    "## Conclusion",
                     "",
-                    "本报告通过深度搜索和研究，对相关主题进行了全面分析。"
-                    "以上各个方面的内容为理解该主题提供了重要参考。",
+                    "This research report provides comprehensive biomedical analysis through systematic literature harvesting. "
+                    "The findings presented above offer valuable insights for scientific research.",
                     ""
                 ])
             
@@ -165,4 +165,4 @@ class ReportFormattingNode(BaseNode):
             
         except Exception as e:
             logger.exception(f"手动格式化失败: {str(e)}")
-            return "# 报告生成失败\n\n无法完成报告格式化。"
+            return "# Report Generation Failed\n\nUnable to complete report formatting."

@@ -20,6 +20,7 @@ Workflow:
 """
 
 import os
+import json
 from pathlib import Path
 from typing import Dict, Any
 from loguru import logger
@@ -27,6 +28,7 @@ from loguru import logger
 from langgraph.graph import StateGraph, START, END
 
 from src.graph.state import AgentState
+from config import settings
 from BioHarvestEngine.agent import BioHarvestAgent
 from ForensicEngine.agent import ForensicAuditorAgent
 from EvidenceEngine.agent import create_agent as create_evidence_agent
@@ -128,15 +130,21 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
                 "status": "mining_skipped"
             }
         
-        # 🚨 PHASE 2 FIX: Initialize accumulators for evidence text and failures
+        # 🚨 STEP 2 FIX: Initialize accumulators with explicit naming
         all_evidence = []
-        compiled_evidence_text = []  # Store actual evidence text content
+        all_evidence_context = []  # 🔥 RENAMED: Store actual evidence text content
         failed_files = []  # Track failed file processing
-        total_files = min(3, len(pdf_paths))  # Track total files attempted
         
-        # Mine evidence from all PDFs
-        for i, pdf_path in enumerate(pdf_paths[:3], 1):  # Limit to first 3 PDFs
-            logger.info(f"\n📄 Mining PDF {i}/{total_files}: {pdf_path}")
+        # 🔥 FIXED: Use configurable PDF limit instead of hardcoded [:3]
+        max_pdfs = settings.MAX_PDFS_TO_PROCESS if settings.MAX_PDFS_TO_PROCESS > 0 else len(pdf_paths)
+        total_files = min(max_pdfs, len(pdf_paths))
+        total_available = len(pdf_paths)
+        
+        logger.info(f"📊 PDF Processing Config: Processing {total_files} out of {total_available} available PDFs")
+        
+        # Mine evidence from all PDFs (up to configured limit)
+        for i, pdf_path in enumerate(pdf_paths[:total_files], 1):
+            logger.info(f"\n📄 Mining PDF {i}/{total_files} (Total available: {total_available}): {pdf_path}")
             
             try:
                 # pdf_path is now a local file path (downloaded by BioHarvestEngine)
@@ -145,8 +153,7 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
                     result = agent.mine_evidence(pdf_path)
                     
                     # --- 🔥 DEBUG BLOCK START ---
-                    filename = result.get('filename', os.path.basename(pdf_path))
-                    print(f"\n🔥 DEBUG: Inspecting Miner Result for file: {filename}")
+                    print(f"\n🔥 DEBUG: Inspecting Miner Result for PDF {i}")
                     print(f"🔥 DEBUG: Result Type: {type(result)}")
                     print(f"🔥 DEBUG: Available Keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
                     # --- 🔥 DEBUG BLOCK END ---
@@ -154,73 +161,57 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
                     # ============ ROBUST PROTOCOL: NORMALIZE INPUT ============
                     # 1. Handle Failed/Null Results
                     if result is None:
-                        logger.error(f"❌ Received None result for {filename}")
-                        failed_files.append(filename)
+                        logger.error(f"❌ Received None result for {os.path.basename(pdf_path)}")
+                        failed_files.append(os.path.basename(pdf_path))
                         continue
                     
                     # 2. Normalize Input (Handle Object vs Dict vs List)
-                    data = {}
-                    if isinstance(result, dict):
-                        data = result
-                    elif isinstance(result, list):
-                        # Legacy/Fallback case: It's just a list of risks
-                        logger.warning(f"⚠️ Legacy List Format detected for {filename}")
-                        data = {"paper_summary": "Summary not extracted (Legacy List).", "risk_signals": result, "filename": filename}
-                    elif hasattr(result, '__dict__'):
-                        data = result.__dict__
-                    else:
-                        # Last resort: Try getting attributes directly
-                        data = {
-                            "paper_summary": getattr(result, "paper_summary", getattr(result, "summary", getattr(result, "content", ""))),
-                            "risk_signals": getattr(result, "risk_signals", getattr(result, "evidence", getattr(result, "findings", []))),
-                            "filename": filename
-                        }
+                    # EXTRACT DATA (Handle Dict/Object)
+                    data = result.__dict__ if hasattr(result, '__dict__') else result
+                    if not isinstance(data, dict): 
+                        if isinstance(data, list):
+                            # Legacy/Fallback case: It's just a list of risks
+                            logger.warning(f"⚠️ Legacy List Format detected")
+                            data = {"paper_summary": "Summary not extracted (Legacy List).", "risk_signals": data, "filename": os.path.basename(pdf_path)}
+                        else:
+                            data = {}
                     
-                    # 3. Extract Fields (With Safe Defaults)
+                    # 3. CRITICAL: Extract Summary & Risks with validation
+                    # Check multiple keys to be safe
                     filename = data.get('filename', os.path.basename(pdf_path))
-                    summary = data.get('paper_summary') or data.get('summary') or "[CRITICAL WARNING: No Summary Extracted]"
-                    risks = data.get('risk_signals') or data.get('risks') or data.get('evidence_items') or []
+                    summary = data.get('paper_summary') or data.get('summary') or data.get('scientific_summary') or "[CRITICAL WARNING: CONTENT MISSING]"
+                    risks = data.get('risk_signals') or data.get('risk_flags') or []
                     
-                    # 4. Format Output for Writer (The "Rich Text" Payload)
-                    # We construct a block that fills BOTH Overview and Red Flags
+                    # 🔥 NEW: Validate data quality before aggregation
+                    # Skip files with errors or insufficient data
+                    if summary.startswith("Error:") or "CONTENT MISSING" in summary:
+                        logger.error(f"⚠️ Skipping {filename}: Error in summary - {summary[:100]}")
+                        failed_files.append(filename)
+                        continue
+                    
+                    # Check minimum content threshold (at least 200 characters)
+                    if len(summary) < 200:
+                        logger.warning(f"⚠️ {filename} has insufficient summary: {len(summary)} chars")
+                        if len(risks) == 0:
+                            logger.error(f"⚠️ Skipping {filename}: No risks and short summary")
+                            failed_files.append(filename)
+                            continue
+                    
+                    # Check for empty risks (at least warn)
+                    if len(risks) == 0:
+                        logger.warning(f"⚠️ {filename} has no risk signals detected")
+                    
+                    # 🔥 NEW: Track content quality metrics
+                    logger.debug(f"✅ {filename}: {len(summary)} chars, {len(risks)} risks")
+                    
+                    # 4. FORCE CONCATENATION - Build rich context payload
                     entry = f"""
---- SOURCE PDF: {filename} ---
-[PAPER SUMMARY]
-{summary}
-
-[RISK ANALYSIS FINDINGS]
+=== EVIDENCE SOURCE: {filename} ===
+> **SUMMARY**: {summary}
+> **RISK FINDINGS**: {json.dumps(risks, indent=2)}
+--------------------------------------------------
 """
-                    
-                    # Add formatted risk findings
-                    if risks:
-                        risk_details = []
-                        for idx, risk in enumerate(risks, 1):
-                            # Handle both EvidenceItem objects and dicts
-                            if hasattr(risk, '__dict__'):
-                                risk_dict = {
-                                    "risk_type": risk.risk_type,
-                                    "risk_level": risk.risk_level,
-                                    "quote": risk.quote,
-                                    "explanation": risk.explanation,
-                                    "source": risk.source,
-                                    "page_estimate": risk.page_estimate
-                                }
-                            else:
-                                risk_dict = risk
-                            
-                            risk_entry = f"**Finding {idx}:** [{risk_dict.get('risk_type', 'unknown')} - {risk_dict.get('risk_level', 'UNKNOWN')}]\n"
-                            risk_entry += f"- **Quote:** {risk_dict.get('quote', 'N/A')}\n"
-                            risk_entry += f"- **Analysis:** {risk_dict.get('explanation', 'N/A')}\n"
-                            risk_entry += f"- **Source:** {risk_dict.get('source', 'Unknown')} (Page ~{risk_dict.get('page_estimate', 'Unknown')})\n"
-                            risk_details.append(risk_entry)
-                        
-                        entry += "\n".join(risk_details)
-                    else:
-                        entry += "No specific risk signals detected.\n"
-                    
-                    entry += "------------------------------\n"
-                    
-                    compiled_evidence_text.append(entry)
+                    all_evidence_context.append(entry)
                     
                     # Convert risks to dict format for storage
                     evidence_dicts = []
@@ -260,13 +251,30 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
         if failed_files:
             logger.warning(f"⚠️ Failed to process {len(failed_files)} files: {', '.join(failed_files)}")
         
-        # 🔥 DEBUG: Final Check
-        final_payload_len = len("".join(compiled_evidence_text))
-        print(f"🔥 DEBUG: Final Evidence Context Length: {final_payload_len} chars (Target: >5000)")
+        # 🔥 ENHANCED: Log and validate payload size
+        total_chars = len("".join(all_evidence_context))
+        logger.info(f"🔥 DEBUG: Final Context Payload: {total_chars} chars (Target: >5000)")
+        
+        # 🔥 NEW: Validate minimum content threshold
+        MIN_PAYLOAD_SIZE = 1000  # Minimum 1000 chars for meaningful analysis
+        if total_chars < MIN_PAYLOAD_SIZE:
+            logger.error(f"❌ CRITICAL: Payload too small ({total_chars} chars < {MIN_PAYLOAD_SIZE})")
+            logger.error(f"❌ Failed files: {len(failed_files)}, Successful: {success_count}")
+            if success_count == 0:
+                logger.error("❌ All PDFs failed - cannot generate report")
+                # Return error state instead of proceeding
+                return {
+                    "error": "All PDF extractions failed",
+                    "failed_files": failed_files,
+                    "total_files": total_files,
+                    "context_size": total_chars
+                }
+        
+        logger.success(f"✅ Context payload validated: {total_chars} chars from {success_count} PDFs")
         
         return {
             "text_evidence": all_evidence,
-            "compiled_evidence_text": "\n\n".join(compiled_evidence_text),  # 🧠 NEW: Pass text to Writer
+            "compiled_evidence_text": "".join(all_evidence_context),  # 🔥 STEP 2 FIX: Use new variable
             "failed_files": failed_files,  # 🚨 NEW: Track failures
             "total_files": total_files,  # 🚨 NEW: Track total attempted
             "pdf_files": state.get("pdf_paths", [])  # 🔥 STEP 3: Store global PDF list
@@ -317,11 +325,17 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
         # 🚨 PHASE 2 FIX: Track forensic audit failures
         all_audit_results = []
         forensic_failed_files = []
-        total_forensic_files = min(3, len(pdf_paths))
         
-        # Audit all PDFs
-        for i, pdf_path in enumerate(pdf_paths[:3], 1):  # Limit to first 3 PDFs
-            logger.info(f"\n📄 Auditing PDF {i}/{total_forensic_files}: {pdf_path}")
+        # 🔥 FIXED: Use configurable PDF limit instead of hardcoded [:3]
+        max_pdfs = settings.MAX_PDFS_TO_PROCESS if settings.MAX_PDFS_TO_PROCESS > 0 else len(pdf_paths)
+        total_forensic_files = min(max_pdfs, len(pdf_paths))
+        total_available = len(pdf_paths)
+        
+        logger.info(f"📊 Forensic Audit Config: Processing {total_forensic_files} out of {total_available} available PDFs")
+        
+        # Audit all PDFs (up to configured limit)
+        for i, pdf_path in enumerate(pdf_paths[:total_forensic_files], 1):
+            logger.info(f"\n📄 Auditing PDF {i}/{total_forensic_files} (Total available: {total_available}): {pdf_path}")
             
             try:
                 if os.path.exists(pdf_path):

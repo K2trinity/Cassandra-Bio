@@ -1,29 +1,28 @@
 """
-GitHub Issues 工具模块
+Cassandra - GitHub Issues Utility Module
 
-提供创建 GitHub Issues URL 和显示带链接的错误信息的功能
-数据模型定义位置：
-- 无数据模型
+Provides functionality for creating GitHub Issues URLs and displaying error messages with links.
+No data models defined in this module.
 """
 
 from datetime import datetime
 from urllib.parse import quote
 
-# GitHub 仓库信息
+# GitHub repository information
 GITHUB_REPO = "666ghj/BettaFish"
 GITHUB_ISSUES_URL = f"https://github.com/{GITHUB_REPO}/issues/new"
 
 
 def create_issue_url(title: str, body: str = "") -> str:
     """
-    创建 GitHub Issues URL，预填充标题和内容
+    Create GitHub Issues URL with pre-filled title and body
     
     Args:
-        title: Issue 标题
-        body: Issue 内容（可选）
+        title: Issue title
+        body: Issue body content (optional)
     
     Returns:
-        完整的 GitHub Issues URL
+        Complete GitHub Issues URL with query parameters
     """
     encoded_title = quote(title)
     encoded_body = quote(body) if body else ""
@@ -40,33 +39,33 @@ def error_with_issue_link(
     app_name: str = "Streamlit App"
 ) -> str:
     """
-    生成带 GitHub Issues 链接的错误信息字符串
+    Generate error message string with GitHub Issues link
     
-    仅在通用异常处理中使用，不用于用户配置错误
+    Use only in generic exception handlers, not for user configuration errors
     
     Args:
-        error_message: 错误消息
-        error_details: 错误详情（可选，用于填充到 Issue body）
-        app_name: 应用名称，用于标识错误来源
+        error_message: Error message text
+        error_details: Error details (optional, used to populate Issue body)
+        app_name: Application name to identify error source
     
     Returns:
-        包含错误信息和 GitHub Issues 链接的 Markdown 格式字符串
+        Markdown-formatted string containing error message and GitHub Issues link
     """
     issue_title = f"[{app_name}] {error_message[:50]}"
-    issue_body = f"## 错误信息\n\n{error_message}\n\n"
+    issue_body = f"## Error Message\n\n{error_message}\n\n"
     
     if error_details:
-        issue_body += f"## 错误详情\n\n```\n{error_details}\n```\n\n"
+        issue_body += f"## Error Details\n\n```\n{error_details}\n```\n\n"
     
-    issue_body += f"## 环境信息\n\n- 应用: {app_name}\n- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    issue_body += f"## Environment Information\n\n- App: {app_name}\n- Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     issue_url = create_issue_url(issue_title, issue_body)
     
-    # 使用 markdown 格式添加超链接
-    error_display = f"{error_message}\n\n[📝 提交错误报告]({issue_url})"
+    # Use markdown format to add hyperlink
+    error_display = f"{error_message}\n\n[📝 Submit Error Report]({issue_url})"
     
     if error_details:
-        error_display = f"{error_message}\n\n```\n{error_details}\n```\n\n[📝 提交错误报告]({issue_url})"
+        error_display = f"{error_message}\n\n```\n{error_details}\n```\n\n[📝 Submit Error Report]({issue_url})"
     
     return error_display
 

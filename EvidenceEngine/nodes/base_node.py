@@ -68,11 +68,11 @@ class BaseNode(ABC):
     
     def log_warning(self, message: str):
         """记录警告日志"""
-        logger.warning(f"[{self.node_name}] 警告: {message}")
+        logger.warning(f"[{self.node_name}] Warning: {message}")
     
     def log_error(self, message: str):
         """记录错误日志"""
-        logger.error(f"[{self.node_name}] 错误: {message}")
+        logger.error(f"[{self.node_name}] Error: {message}")
 
 
 class StateMutationNode(BaseNode):

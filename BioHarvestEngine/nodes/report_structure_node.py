@@ -156,12 +156,12 @@ class ReportStructureNode(StateMutationNode):
         logger.info("生成默认报告结构")
         return [
             {
-                "title": "研究概述",
-                "content": "对查询主题进行总体概述和分析"
+                "title": "Research Overview",
+                "content": "Comprehensive overview and analysis of biomedical literature findings"
             },
             {
-                "title": "深度分析",
-                "content": "深入分析查询主题的各个方面"
+                "title": "In-depth Analysis",
+                "content": "Detailed examination of scientific literature, research findings, and clinical implications"
             }
         ]
     
@@ -187,7 +187,7 @@ class ReportStructureNode(StateMutationNode):
             # 设置查询和报告标题
             state.query = self.query
             if not state.report_title:
-                state.report_title = f"关于'{self.query}'的深度研究报告"
+                state.report_title = f"BioHarvest Research Report: {self.query}"
             
             # 添加段落到状态
             for paragraph_data in report_structure:

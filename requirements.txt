@@ -44,6 +44,7 @@ pydantic>=2.5.2        # Data Validation
 playwright>=1.40.0      # Web Scraping
 flask-socketio>=5.3.2  # Real-time Communication
 pydantic-settings>=2.5.2  # Settings Management
+json-repair>=0.25.0    # JSON Auto-Repair for LLM Output (Unterminated Strings, Missing Brackets)
 
 # ===== Development Tools (Optional) =====
 pytest>=7.4.0
