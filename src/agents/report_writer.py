@@ -30,6 +30,46 @@ from src.llms import create_report_client
 from src.agents.json_validator import JSONValidator, JSONInspector, SegmentedJSONGenerator
 
 
+def sanitize_filename(filename: str, max_length: int = 50) -> str:
+    r"""
+    清理文件名，移除非法字符并限制长度。
+    
+    Args:
+        filename: 原始文件名
+        max_length: 最大文件名长度（不含扩展名）
+    
+    Returns:
+        清理后的安全文件名
+    
+    移除的非法字符:
+        Windows: \ / : * ? " < > |
+        Unix: /
+        控制字符: \x00-\x1f
+    """
+    # 移除或替换非法字符
+    illegal_chars = r'[\\/:*?"<>|\x00-\x1f]'
+    cleaned = re.sub(illegal_chars, '_', filename)
+    
+    # 替换空格为下划线
+    cleaned = cleaned.replace(' ', '_')
+    
+    # 移除前导/尾随下划线、空格和点
+    cleaned = cleaned.strip('_. ')
+    
+    # 压缩连续的下划线
+    cleaned = re.sub(r'_+', '_', cleaned)
+    
+    # 如果为空，使用默认名称
+    if not cleaned:
+        cleaned = 'report'
+    
+    # 限制长度
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length].rstrip('_. ')
+    
+    return cleaned
+
+
 @dataclass
 class ReportData:
     """
@@ -79,6 +119,10 @@ class ReportWriterAgent:
     Biomedical Due Diligence Analyst
     
     Synthesizes evidence from multiple engines into investment-grade reports.
+    
+    支持两种生成模式：
+    1. write_report() - 传统单次生成（快速但可能超token）
+    2. write_report_segmented() - 分阶段生成（推荐，借鉴BettaFish）
     """
     
     def __init__(self):
@@ -87,6 +131,20 @@ class ReportWriterAgent:
         # Initialize LLM client
         self.llm = create_report_client()
         logger.info("Report Writer Agent initialized with Gemini client")
+        
+        # 🔥 NEW: Initialize report engine components
+        try:
+            from src.report_engine.nodes import create_chapter_generation_node, create_word_budget_node
+            from src.report_engine.core import ChapterStorage, DocumentComposer
+            
+            self.chapter_generator = create_chapter_generation_node(self.llm)
+            self.word_budget_node = create_word_budget_node(total_target_words=5000)
+            self.composer = DocumentComposer()
+            self._segmented_mode_available = True
+            logger.info("✅ Segmented report generation mode enabled")
+        except ImportError as e:
+            logger.warning(f"⚠️ Segmented mode not available: {e}")
+            self._segmented_mode_available = False
         
         # Load template
         self.template_path = Path(__file__).parent.parent / "templates" / "biomedical_report.md"
@@ -166,6 +224,41 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
         analysis_status: str = "UNKNOWN",
         failed_files: Optional[List[str]] = None
     ) -> ReportOutput:
+        """Generate biomedical due diligence report.
+        
+        🔥 CRITICAL: Includes Fail-Fast validation to prevent hallucination.
+        """
+        
+        # 🔥 FAIL-FAST VALIDATION 1: Check minimum evidence threshold
+        MIN_EVIDENCE_CHARS = 500
+        if len(compiled_evidence_text) < MIN_EVIDENCE_CHARS:
+            error_msg = f"CRITICAL: Insufficient evidence data ({len(compiled_evidence_text)} chars < {MIN_EVIDENCE_CHARS} required)"
+            logger.error(f"❌ {error_msg}")
+            return ReportOutput(
+                markdown_content=f"# Report Generation Blocked\n\n## Error\n\n{error_msg}\n\nCannot generate meaningful analysis without sufficient data. Please check:\n- PDF extraction succeeded?\n- Evidence mining completed?\n- Network/API issues?",
+                markdown_path=None,
+                recommendation="SYSTEM ERROR - NO DATA",
+                risk_score=0.0,
+                confidence_score=0.0
+            )
+        
+        # 🔥 FAIL-FAST VALIDATION 2: Check query relevance
+        core_keywords = [w.lower() for w in user_query.split()[:3] if len(w) > 3]
+        if core_keywords:
+            keywords_found = [kw for kw in core_keywords if kw in compiled_evidence_text.lower()]
+            if not keywords_found:
+                error_msg = f"CRITICAL: Query relevance failure - core keywords '{', '.join(core_keywords)}' not found in evidence"
+                logger.error(f"❌ {error_msg}")
+                logger.error(f"❌ This indicates complete query drift or wrong documents retrieved")
+                return ReportOutput(
+                    markdown_content=f"# Report Generation Blocked\n\n## Relevance Error\n\n{error_msg}\n\nThe retrieved evidence does not appear to be relevant to your query: '{user_query}'\n\nPossible causes:\n- Search query drift (LLM generated irrelevant queries)\n- Wrong PDFs downloaded\n- Database returned unrelated results\n\nPlease retry with a more specific query.",
+                    markdown_path=None,
+                    recommendation="SYSTEM ERROR - IRRELEVANT DATA",
+                    risk_score=0.0,
+                    confidence_score=0.0
+                )
+        
+        logger.success(f"✅ Validation passed: {len(compiled_evidence_text)} chars, keywords {keywords_found} found")
         """
         Generate comprehensive biomedical due diligence report.
         
@@ -290,12 +383,16 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
                 # Combined score (weighted average)
                 confidence_score = round((success_rate * 0.5 + content_quality * 0.3 + risk_presence * 0.2) * 10, 1)
             else:
+                # 🔥 FIX: Initialize all variables when total_files = 0
                 confidence_score = 0.0
+                success_rate = 0.0
+                avg_content = 0
+                content_quality = 0.0
             
             logger.info(f"🧮 MULTI-DIMENSIONAL CONFIDENCE: {confidence_score}/10")
             logger.info(f"   Valid Sources: {valid_sources}/{total_files} ({success_rate*100:.1f}%)")
             logger.info(f"   Avg Content: {avg_content:.0f} chars (Quality: {content_quality*100:.0f}%)")
-            logger.info(f"   Sources w/ Risks: {sources_with_risks}/{valid_sources}")
+            logger.info(f"   Sources w/ Risks: {sources_with_risks}/{valid_sources if valid_sources > 0 else 1}")
             # ----------------------------------------------
             
             # ===== STEP B: Evidence Synthesis =====
@@ -347,7 +444,9 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             
             # Generate filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            project_slug = (project_name or "report").replace(" ", "_").lower()
+            # 🔥 FIX: Sanitize filename to remove illegal characters (e.g., quotes, slashes)
+            raw_name = (project_name or "report").replace(" ", "_").lower()
+            project_slug = sanitize_filename(raw_name)
             markdown_file = output_path / f"{project_slug}_{timestamp}.md"
             pdf_file = output_path / f"{project_slug}_{timestamp}.pdf"
             
@@ -394,6 +493,317 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             import traceback
             traceback.print_exc()
             raise
+    
+    def write_report_segmented(
+        self,
+        user_query: str,
+        harvest_data: Optional[Dict[str, Any]] = None,
+        forensic_data: Optional[List[Dict[str, Any]]] = None,
+        evidence_data: Optional[List[Dict[str, Any]]] = None,
+        project_name: Optional[str] = None,
+        output_dir: str = "reports",
+        compiled_evidence_text: str = "",
+        failed_count: int = 0,
+        total_files: int = 0,
+        risk_override: Optional[str] = None,
+        analysis_status: str = "UNKNOWN",
+        failed_files: Optional[List[str]] = None,
+        use_segmented: bool = True
+    ) -> ReportOutput:
+        """
+        生成报告 - 分阶段模式（推荐）
+        
+        借鉴BettaFish的分阶段生成机制：
+        1. 定义章节结构
+        2. 分配字数预算
+        3. 逐章节生成（章节级重试）
+        4. 组装完整报告
+        
+        Args:
+            (同write_report参数)
+            use_segmented: 是否使用分阶段生成（True推荐）
+        
+        Returns:
+            ReportOutput对象
+        """
+        # 如果不使用分阶段模式或不可用，回退到传统模式
+        if not use_segmented or not self._segmented_mode_available:
+            logger.info("Using traditional single-pass generation...")
+            return self.write_report(
+                user_query=user_query,
+                harvest_data=harvest_data,
+                forensic_data=forensic_data,
+                evidence_data=evidence_data,
+                project_name=project_name,
+                output_dir=output_dir,
+                compiled_evidence_text=compiled_evidence_text,
+                failed_count=failed_count,
+                total_files=total_files,
+                risk_override=risk_override,
+                analysis_status=analysis_status,
+                failed_files=failed_files
+            )
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📝 SEGMENTED Report Generation: {user_query}")
+        logger.info(f"   Mode: Chapter-by-Chapter with Retry")
+        logger.info(f"{'='*60}")
+        
+        try:
+            # ===== 阶段1: 定义章节结构 =====
+            logger.info("\n[Phase 1] Defining chapter structure...")
+            
+            sections = [
+                {
+                    "slug": "executive_summary",
+                    "title": "Executive Summary",
+                    "outline": "High-level overview of findings, key risks, and recommendation",
+                    "order": 1
+                },
+                {
+                    "slug": "scientific_rationale",
+                    "title": "Scientific Rationale",
+                    "outline": "Mechanism of action, therapeutic potential, and scientific basis",
+                    "order": 2
+                },
+                {
+                    "slug": "dark_data_synthesis",
+                    "title": "Dark Data Analysis",
+                    "outline": "Buried negative results, statistical issues, and hidden concerns",
+                    "order": 3
+                },
+                {
+                    "slug": "forensic_findings",
+                    "title": "Forensic Audit Results",
+                    "outline": "Image manipulation findings and data integrity concerns",
+                    "order": 4
+                },
+                {
+                    "slug": "risk_scoring",
+                    "title": "Risk Assessment",
+                    "outline": "Quantitative risk scoring and investment implications",
+                    "order": 5
+                },
+                {
+                    "slug": "final_recommendation",
+                    "title": "Investment Recommendation",
+                    "outline": "Final verdict and actionable recommendations",
+                    "order": 6
+                }
+            ]
+            
+            logger.success(f"Defined {len(sections)} chapters")
+            
+            # ===== 阶段2: 分配字数预算 =====
+            logger.info("\n[Phase 2] Allocating word budgets...")
+            
+            evidence_metrics = {
+                "evidence_count": len(evidence_data or []),
+                "forensic_count": len(forensic_data or []),
+                "risk_signals": sum(1 for e in (evidence_data or []) if e.get("risk_level") in ["HIGH", "CRITICAL"])
+            }
+            
+            word_allocations = self.word_budget_node.allocate_budgets(sections)
+            word_allocations = self.word_budget_node.adjust_budget_based_on_content(
+                word_allocations,
+                evidence_metrics
+            )
+            
+            logger.success("Word budgets allocated")
+            
+            # ===== 阶段3: 构建生成上下文 =====
+            logger.info("\n[Phase 3] Building generation context...")
+            
+            # 准备forensic摘要
+            forensic_summary = self._prepare_forensic_summary(forensic_data or [])
+            
+            generation_context = {
+                "query": user_query,
+                "compiled_evidence_text": compiled_evidence_text,
+                "forensic_summary": forensic_summary,
+                "failed_count": failed_count,
+                "total_files": total_files,
+                "risk_override": risk_override,
+                "analysis_status": analysis_status,
+                "failed_files": failed_files or []
+            }
+            
+            logger.success("Context prepared")
+            
+            # ===== 阶段4: 逐章节生成 =====
+            logger.info(f"\n[Phase 4] Generating {len(sections)} chapters...")
+            
+            # 初始化存储
+            from src.report_engine.core import ChapterStorage
+            storage = ChapterStorage(Path(output_dir) / "temp")
+            
+            chapters = []
+            
+            for section in sections:
+                logger.info(f"\n--- Generating: {section['title']} ---")
+                
+                target_words = word_allocations[section["slug"]]["target_words"]
+                
+                success, chapter, errors = self.chapter_generator.generate(
+                    section_title=section["title"],
+                    section_outline=section["outline"],
+                    generation_context=generation_context,
+                    target_words=target_words,
+                    max_attempts=3
+                )
+                
+                if success and chapter:
+                    chapter.order = section["order"]
+                    chapters.append(chapter)
+                    storage.save_chapter(chapter)
+                    logger.success(f"✅ {section['title']}: {chapter.word_count()} words")
+                else:
+                    logger.error(f"❌ Failed to generate {section['title']}: {errors}")
+                    # 创建fallback章节
+                    from src.report_engine.ir.schema import Chapter, ChapterBlock, BlockType
+                    fallback_chapter = Chapter(
+                        id=section["slug"],
+                        title=section["title"],
+                        slug=section["slug"],
+                        order=section["order"],
+                        blocks=[
+                            ChapterBlock(
+                                type=BlockType.PARAGRAPH,
+                                content=f"[Content generation failed: {'; '.join(errors[:2])}]"
+                            )
+                        ]
+                    )
+                    chapters.append(fallback_chapter)
+            
+            logger.success(f"✅ Generated {len(chapters)} chapters")
+            
+            # ===== 阶段5: 组装文档 =====
+            logger.info("\n[Phase 5] Composing final document...")
+            
+            document = self.composer.build_document(
+                chapters=chapters,
+                title=f"Biomedical Due Diligence: {project_name or user_query}",
+                query=user_query,
+                subtitle="Investment Risk Analysis",
+                metadata={
+                    "analysis_status": analysis_status,
+                    "failed_files": failed_count,
+                    "total_files": total_files
+                }
+            )
+            
+            # ===== 阶段6: 渲染输出 =====
+            logger.info("\n[Phase 6] Rendering output...")
+            
+            # 生成Markdown
+            markdown_content = self.composer.render_markdown(document)
+            
+            # 保存文件
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 🔥 FIX: Sanitize filename to remove illegal characters (e.g., quotes, slashes)
+            raw_name = (project_name or "report").replace(" ", "_").lower()
+            project_slug = sanitize_filename(raw_name)
+            markdown_file = output_path / f"{project_slug}_{timestamp}_segmented.md"
+            
+            markdown_file.write_text(markdown_content, encoding='utf-8')
+            logger.success(f"Markdown saved: {markdown_file}")
+            
+            # 保存IR JSON
+            ir_file = output_path / f"{project_slug}_{timestamp}_ir.json"
+            self.composer.save_document(document, ir_file, format="json")
+            
+            # 生成风险评分（简化版）
+            total_words = document.total_word_count()
+            confidence_score = 7.0 if total_words > 3000 else 5.0
+            risk_score = 6.0  # 默认中等风险
+            recommendation = "AVOID" if risk_score > 7 else "PROCEED_WITH_CAUTION"
+            
+            # 创建输出对象
+            report_output = ReportOutput(
+                markdown_content=markdown_content,
+                markdown_path=str(markdown_file),
+                html_path=None,
+                pdf_path=None,
+                recommendation=recommendation,
+                confidence_score=confidence_score,
+                risk_score=risk_score
+            )
+            
+            logger.info(f"\n{'='*60}")
+            logger.success(f"✅ Segmented Report Generation Complete")
+            logger.info(f"   Chapters: {len(chapters)}")
+            logger.info(f"   Total Words: {total_words}")
+            logger.info(f"   Recommendation: {recommendation}")
+            logger.info(f"   Output: {markdown_file}")
+            logger.info(f"{'='*60}\n")
+            
+            # 清理临时文件
+            import shutil
+            temp_dir = Path(output_dir) / "temp"
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            
+            return report_output
+            
+        except Exception as e:
+            logger.error(f"Segmented report generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # 回退到传统模式
+            logger.warning("Falling back to traditional generation...")
+            return self.write_report(
+                user_query=user_query,
+                harvest_data=harvest_data,
+                forensic_data=forensic_data,
+                evidence_data=evidence_data,
+                project_name=project_name,
+                output_dir=output_dir,
+                compiled_evidence_text=compiled_evidence_text,
+                failed_count=failed_count,
+                total_files=total_files,
+                risk_override=risk_override,
+                analysis_status=analysis_status,
+                failed_files=failed_files
+            )
+    
+    def _prepare_forensic_summary(self, forensic_data: List[Dict[str, Any]]) -> str:
+        """准备forensic数据摘要"""
+        if not forensic_data:
+            return "No forensic audit data available."
+        
+        summary_parts = []
+        suspicious_count = sum(1 for f in forensic_data if f.get("status") in ["SUSPICIOUS", "HIGH_RISK"])
+        
+        summary_parts.append(f"Forensic Audit Summary: {len(forensic_data)} images analyzed, {suspicious_count} suspicious")
+        summary_parts.append("\nKey Findings:")
+        
+        for idx, finding in enumerate(forensic_data[:5], 1):  # Top 5
+            risk_score = finding.get('tampering_risk_score', 0)
+            risk_str = f"{risk_score:.2f}" if risk_score is not None else "N/A"
+            
+            summary_parts.append(
+                f"\n{idx}. {finding.get('image_id', 'Unknown')}: {finding.get('status', 'Unknown')} "
+                f"(Risk: {risk_str})"
+            )
+            
+            # 🔥 FIX: findings is a STRING, not a list!
+            findings_text = finding.get('findings', '')
+            if findings_text and isinstance(findings_text, str):
+                # Clean and truncate to first 200 chars
+                clean_findings = findings_text.strip()[:200]
+                if clean_findings:
+                    summary_parts.append(f"   - {clean_findings}")
+            elif isinstance(findings_text, list):
+                # Handle legacy list format if present
+                for f in findings_text[:2]:
+                    if f and isinstance(f, str):
+                        summary_parts.append(f"   - {f[:200]}")
+        
+        return "".join(summary_parts)
     
     def _aggregate_data(
         self,
@@ -691,6 +1101,20 @@ Be specific, cite evidence, and quantify risk wherever possible.
                         max_output_tokens=segment_info['max_tokens']
                     )
                     
+                    # 🔥 CRITICAL FIX: Check for None response before validation
+                    if response is None:
+                        logger.error(f"❌ Gemini returned None for segment {segment_key}")
+                        fallback_data = {field: f"[Error: Gemini API returned no data for {segment_key}]" for field in segment_info['fields']}
+                        all_segments[segment_key] = fallback_data
+                        continue  # Skip to next segment
+                    
+                    # 🔥 CRITICAL FIX: Check for empty response
+                    if not response or not response.strip():
+                        logger.error(f"❌ Gemini returned empty response for segment {segment_key}")
+                        fallback_data = {field: f"[Error: Empty response from Gemini for {segment_key}]" for field in segment_info['fields']}
+                        all_segments[segment_key] = fallback_data
+                        continue
+                    
                     # 验证和修复JSON
                     is_valid, segment_data, errors = JSONValidator.validate_and_repair(
                         json_text=response,
@@ -736,24 +1160,30 @@ Generate high-quality content NOW.
                                 max_output_tokens=segment_info['max_tokens'] + 1000  # 给更多空间
                             )
                             
-                            is_valid_retry, segment_data_retry, _ = JSONValidator.validate_and_repair(
-                                json_text=response_retry,
-                                expected_fields=segment_info['fields']
-                            )
-                            
-                            if is_valid_retry and segment_data_retry:
-                                quality_report_retry = JSONInspector.inspect_quality(
-                                    data=segment_data_retry,
-                                    section_name=segment_key
+                            # 🔥 CRITICAL FIX: Check for None in retry response
+                            if response_retry is None or not response_retry.strip():
+                                logger.warning(f"⚠️ Retry returned None/empty for segment {segment_key}, keeping original")
+                            else:
+                                is_valid_retry, segment_data_retry, _ = JSONValidator.validate_and_repair(
+                                    json_text=response_retry,
+                                    expected_fields=segment_info['fields']
                                 )
                                 
-                                # 使用质量更好的版本
-                                if quality_report_retry['quality_score'] > quality_report['quality_score']:
-                                    segment_data = segment_data_retry
-                                    quality_report = quality_report_retry
-                                    logger.success(f"✅ Regeneration improved quality: {quality_report_retry['quality_score']:.1f}/10")
+                                if is_valid_retry and segment_data_retry:
+                                    quality_report_retry = JSONInspector.inspect_quality(
+                                        data=segment_data_retry,
+                                        section_name=segment_key
+                                    )
+                                    
+                                    # 使用质量更好的版本
+                                    if quality_report_retry['quality_score'] > quality_report['quality_score']:
+                                        segment_data = segment_data_retry
+                                        quality_report = quality_report_retry
+                                        logger.success(f"✅ Regeneration improved quality: {quality_report_retry['quality_score']:.1f}/10")
+                                    else:
+                                        logger.warning("⚠️ Regeneration didn't improve quality, keeping original")
                                 else:
-                                    logger.warning("⚠️ Regeneration didn't improve quality, keeping original")
+                                    logger.warning(f"⚠️ Retry validation failed for segment {segment_key}, keeping original")
                         
                         all_segments[segment_key] = segment_data
                         logger.success(f"✅ Segment {segment_key} generated (quality: {quality_report['quality_score']:.1f}/10)")

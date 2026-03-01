@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>{% block title %}Cassandra - Biomedical Due Diligence Platform{% endblock %}</title>
     
     <!-- Tailwind CSS -->
@@ -91,6 +94,18 @@
         .pulse-safe {
             animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
+        
+        /* Ensure tabs fill available space and scroll properly */
+        #investigationTab, #graphTab, #reportsTab, #settingsTab {
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #investigationTab.hidden, #graphTab.hidden, #reportsTab.hidden, #settingsTab.hidden {
+            display: none !important;
+        }
     </style>
     
     {% block extra_head %}{% endblock %}
@@ -105,37 +120,55 @@
             <!-- Logo -->
             <div class="p-6 border-b border-slate-800">
                 <div class="flex items-center space-x-3">
-                    <div class="w-10 h-10 bg-gradient-to-br from-emerald-500 to-blue-500 rounded-lg flex items-center justify-center">
-                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                    <div class="w-10 h-10 bg-gradient-to-br from-purple-500 via-blue-500 to-emerald-500 rounded-lg flex items-center justify-center relative overflow-hidden">
+                        <!-- DNA双螺旋 + 水晶球预言元素 -->
+                        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                            <!-- 外圈：预言水晶球 -->
+                            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+                            <!-- DNA双螺旋 -->
+                            <path d="M8 4 Q 12 6, 16 4" stroke="currentColor" stroke-linecap="round"/>
+                            <path d="M8 8 Q 12 10, 16 8" stroke="currentColor" stroke-linecap="round"/>
+                            <path d="M8 12 Q 12 14, 16 12" stroke="currentColor" stroke-linecap="round"/>
+                            <path d="M8 16 Q 12 18, 16 16" stroke="currentColor" stroke-linecap="round"/>
+                            <path d="M8 20 Q 12 22, 16 20" stroke="currentColor" stroke-linecap="round"/>
+                            <!-- DNA纵向连接线 -->
+                            <line x1="8" y1="4" x2="8" y2="20" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+                            <line x1="16" y1="4" x2="16" y2="20" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
+                            <!-- 横向碱基对 -->
+                            <line x1="9" y1="6" x2="15" y2="6" stroke="currentColor" stroke-width="1"/>
+                            <line x1="9" y1="10" x2="15" y2="10" stroke="currentColor" stroke-width="1"/>
+                            <line x1="9" y1="14" x2="15" y2="14" stroke="currentColor" stroke-width="1"/>
+                            <line x1="9" y1="18" x2="15" y2="18" stroke="currentColor" stroke-width="1"/>
                         </svg>
+                        <!-- 闪烁效果 -->
+                        <div class="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent animate-pulse"></div>
                     </div>
                     <div>
                         <h1 class="text-xl font-bold text-white">Cassandra</h1>
-                        <p class="text-xs text-gray-400">Bio Due Diligence</p>
                     </div>
                 </div>
             </div>
             
             <!-- Navigation -->
             <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-                <a href="/" class="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors {% if request.path == '/' %}bg-slate-800 text-emerald-400{% else %}text-gray-400{% endif %}">
+                <a href="#" onclick="event.preventDefault(); showTab('investigation');" data-tab="investigation" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors bg-slate-800 text-emerald-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                     <span class="font-medium">New Investigation</span>
                 </a>
                 
-                <!-- Knowledge Graph temporarily disabled - template not available -->
-                <!-- <a href="/graph-viewer" class="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
+                <!-- Knowledge Graph tab - 暂时隐藏，功能未完善 -->
+                <!--
+                <a href="#" onclick="event.preventDefault(); showTab('graph');" data-tab="graph" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
                     </svg>
                     <span class="font-medium">Knowledge Graph</span>
-                </a> -->
+                </a>
+                -->
                 
-                <!-- PHASE 3.2 FIX: Changed from href="/reports" to onclick to prevent 404 -->
-                <a href="#" onclick="event.preventDefault(); showReportsTab();" class="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
+                <a href="#" onclick="event.preventDefault(); showTab('reports');" data-tab="reports" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                     </svg>
@@ -143,19 +176,12 @@
                 </a>
                 
                 <div class="pt-4 mt-4 border-t border-slate-800">
-                    <a href="/config" class="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors {% if request.path == '/config' %}bg-slate-800 text-emerald-400{% else %}text-gray-400{% endif %}">
+                    <a href="#" onclick="event.preventDefault(); showTab('settings');" data-tab="settings" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                         </svg>
                         <span class="font-medium">Settings</span>
-                    </a>
-                    
-                    <a href="/logs" class="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                        </svg>
-                        <span class="font-medium">System Logs</span>
                     </a>
                 </div>
             </nav>
@@ -178,6 +204,54 @@
         </main>
         
     </div>
+    
+    <!-- Global SPA Navigation Script -->
+    <script>
+        // Global function to switch between tabs without page refresh
+        function showTab(tabName) {
+            console.log('Switching to tab:', tabName);
+            
+            // Update navigation active state
+            document.querySelectorAll('.nav-link').forEach(link => {
+                if (link.dataset.tab === tabName) {
+                    link.classList.add('bg-slate-800', 'text-emerald-400');
+                    link.classList.remove('text-gray-400');
+                } else {
+                    link.classList.remove('bg-slate-800', 'text-emerald-400');
+                    link.classList.add('text-gray-400');
+                }
+            });
+            
+            // Hide all tab contents
+            const allTabs = ['investigationTab', 'graphTab', 'reportsTab', 'settingsTab'];
+            allTabs.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.add('hidden');
+            });
+            
+            // Show selected tab
+            const targetTab = document.getElementById(tabName + 'Tab');
+            if (targetTab) {
+                targetTab.classList.remove('hidden');
+            }
+            
+            // Call tab-specific initialization if needed
+            if (tabName === 'reports' && typeof loadReports === 'function') {
+                loadReports();
+            }
+            if (tabName === 'graph' && typeof loadGraph === 'function') {
+                loadGraph();
+            }
+            if (tabName === 'settings' && typeof loadSettings === 'function') {
+                loadSettings();
+            }
+        }
+        
+        // Backward compatibility
+        function showReportsTab() {
+            showTab('reports');
+        }
+    </script>
     
     {% block scripts %}{% endblock %}
 </body>

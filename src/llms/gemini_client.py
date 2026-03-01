@@ -20,6 +20,9 @@ from google.genai import types
 from google.api_core import retry
 from google.api_core import exceptions as google_exceptions
 
+# Import SSL error types for explicit handling
+from ssl import SSLError, SSLEOFError
+
 
 class GeminiClient:
     """
@@ -252,6 +255,15 @@ class GeminiClient:
                 
                 # Success!
                 result = response.text
+                
+                # 🔥 CRITICAL FIX: Check for None before calling len()
+                if result is None:
+                    logger.error(f"⚠️ Gemini returned None response on attempt {attempt}")
+                    if attempt < max_retries:
+                        continue  # Retry
+                    else:
+                        raise ValueError("Gemini API returned None after all retries")
+                
                 if attempt > 1:
                     logger.success(f"✅ Request succeeded on attempt {attempt}")
                 logger.debug(f"Generated {len(result)} chars from Gemini")
@@ -326,6 +338,53 @@ class GeminiClient:
                 logger.error(f"Gemini timeout after 10 minutes: {e}")
                 raise TimeoutError(f"Gemini API timed out after 10 minutes. Payload may be too large.") from e
             
+            except (SSLError, SSLEOFError) as e:
+                # 🔥 NEW: Handle SSL connection errors with retry
+                last_exception = e
+                error_msg = str(e)
+                
+                # Check if this is the EOF protocol violation
+                is_ssl_eof = (
+                    "UNEXPECTED_EOF_WHILE_READING" in error_msg or
+                    "EOF occurred in violation of protocol" in error_msg or
+                    "ssl.c:" in error_msg
+                )
+                
+                if is_ssl_eof:
+                    logger.warning(f"⚠️ SSL Protocol Error (EOF) on attempt {attempt}/{max_attempts}")
+                    logger.debug(f"SSL Error details: {error_msg}")
+                else:
+                    logger.warning(f"⚠️ SSL Connection Error on attempt {attempt}/{max_attempts}: {type(e).__name__}")
+                
+                if attempt >= max_attempts:
+                    logger.error(f"❌ SSL errors persisted after {max_attempts} attempts")
+                    raise ConnectionError(f"SSL connection failed after {max_attempts} attempts: {error_msg}") from e
+                
+                # Progressive backoff for SSL issues (10s, 20s, 40s, 60s)
+                backoff = min(10.0 * (2 ** (attempt - 1)), 60.0)
+                logger.info(f"🔄 SSL connection issue, retrying in {backoff:.1f}s...")
+                
+                # Force SSL warmup before retry
+                try:
+                    logger.debug("🔧 Attempting SSL connection warmup...")
+                    # Create new client to force fresh SSL handshake
+                    self.client = genai.Client(
+                        api_key=self.api_key,
+                        http_options={'api_version': 'v1alpha'}
+                    )
+                    # Test connection with minimal request
+                    self.client.models.generate_content(
+                        model=self.model_name,
+                        contents="test",
+                        config=types.GenerateContentConfig(max_output_tokens=10)
+                    )
+                    logger.success("✅ SSL warmup successful, retrying original request")
+                except Exception as warmup_e:
+                    logger.debug(f"⚠️ SSL warmup failed: {warmup_e}")
+                
+                time.sleep(backoff)
+                continue  # Retry the request
+            
             except google_exceptions.ResourceExhausted as e:
                 # 🔥 ENHANCED: Auto-downgrade model when quota exhausted
                 last_exception = e
@@ -366,9 +425,41 @@ class GeminiClient:
                     # Continue to next attempt
             
             except Exception as e:
-                # 🔥 CRITICAL FIX: Catch 429 errors that aren't properly typed as ResourceExhausted
+                # 🔥 CRITICAL FIX: Catch errors that aren't properly typed
                 error_msg = str(e)
                 error_dict = getattr(e, 'args', ())
+                
+                # 🔥 NEW: Check for SSL errors that weren't caught by specific handler
+                is_ssl_error = (
+                    "SSL" in error_msg or
+                    "ssl" in error_msg.lower() or
+                    "UNEXPECTED_EOF" in error_msg or
+                    "EOF occurred in violation of protocol" in error_msg or
+                    isinstance(e, (SSLError, SSLEOFError))
+                )
+                
+                if is_ssl_error:
+                    logger.warning(f"⚠️ Uncaught SSL Error (attempt {attempt}/{max_attempts}): {error_msg[:200]}")
+                    
+                    if attempt < max_attempts:
+                        backoff = min(10.0 * (2 ** (attempt - 1)), 60.0)
+                        logger.info(f"🔄 SSL issue detected, retrying in {backoff:.1f}s...")
+                        
+                        # Force client recreation
+                        try:
+                            self.client = genai.Client(
+                                api_key=self.api_key,
+                                http_options={'api_version': 'v1alpha'}
+                            )
+                            logger.debug("🔧 Recreated Gemini client for SSL recovery")
+                        except Exception as recreate_error:
+                            logger.debug(f"⚠️ Client recreation failed: {recreate_error}")
+                        
+                        time.sleep(backoff)
+                        continue  # Retry
+                    else:
+                        logger.error(f"❌ SSL errors persisted after {max_attempts} attempts")
+                        raise ConnectionError(f"SSL connection failed: {error_msg}") from e
                 
                 # Check if this is a 503 service overload error
                 is_503_overload = (

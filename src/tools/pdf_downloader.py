@@ -8,8 +8,12 @@ This bypasses NCBI/PubMed's WAF and JA3 fingerprinting detection.
 Robust PDF downloader with anti-bot detection features for PubMed Central.
 Uses Europe PMC as primary source (more reliable) with NCBI as fallback.
 
+🔥 NEW: Preprint fallback strategy - automatically searches BioRxiv/MedRxiv
+when PMC download fails.
+
 Key Function:
 - download_pdf_from_url: Download PDF from URL and return local path
+- download_pdf_with_fallback: Primary function with preprint fallback
 
 Critical Dependencies:
 - curl_cffi: Browser impersonation at TLS layer (not just User-Agent)
@@ -25,6 +29,7 @@ Strategy:
 1. Extract PMC ID from URL
 2. Try Europe PMC first (direct PDF download, no JavaScript)
 3. Fallback to NCBI if Europe PMC fails
+4. 🔥 NEW: Fallback to BioRxiv/MedRxiv preprints if both fail
 """
 
 import os
@@ -299,3 +304,154 @@ def download_pdf_from_url(url: str, output_dir: str = "downloads") -> str:
         import traceback
         traceback.print_exc()
         return None
+
+
+def download_pdf_with_fallback(
+    url: str = None,
+    doi: str = None,
+    title: str = None,
+    output_dir: str = "downloads"
+) -> str:
+    """
+    🔥 NEW: Enhanced PDF downloader with preprint fallback strategy.
+    
+    This is the PRIMARY function to use for PDF downloads. It attempts multiple
+    strategies in order:
+    1. Direct PMC download (if URL provided)
+    2. Preprint by DOI (if DOI provided and PMC fails)
+    3. Preprint by title fuzzy matching (if title provided)
+    
+    This dramatically increases success rate for paywalled papers.
+    
+    Args:
+        url: PMC article URL (optional)
+        doi: Article DOI (optional, used for preprint lookup)
+        title: Article title (optional, used for fuzzy preprint matching)
+        output_dir: Directory to save PDFs
+    
+    Returns:
+        Path to downloaded PDF, or None if all methods fail
+    
+    Example:
+        >>> # Try PMC first, fallback to preprint
+        >>> path = download_pdf_with_fallback(
+        ...     url="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123456/",
+        ...     doi="10.1038/s41586-020-2649-2",
+        ...     title="CRISPR off-target effects"
+        ... )
+    """
+    logger.info("🎯 Starting download with fallback strategy...")
+    
+    # Method 1: Try direct PMC download
+    if url:
+        logger.info("📥 Method 1: Attempting PMC download...")
+        result = download_pdf_from_url(url, output_dir)
+        if result:
+            logger.success(f"✅ PMC download successful: {result}")
+            return result
+        logger.warning("⚠️ PMC download failed, trying fallbacks...")
+    
+    # Method 2: Try preprint by DOI
+    if doi:
+        logger.info(f"📚 Method 2: Searching preprints by DOI: {doi}")
+        try:
+            from .preprint_client import find_preprint_by_doi
+            
+            preprint = find_preprint_by_doi(doi)
+            if preprint and preprint.get('pdf_url'):
+                logger.info(f"🔍 Found preprint: {preprint['title'][:60]}...")
+                
+                # Download preprint PDF
+                preprint_url = preprint['pdf_url']
+                result = _download_preprint_pdf(preprint_url, output_dir)
+                if result:
+                    logger.success(f"✅ Preprint download successful (DOI): {result}")
+                    return result
+        except Exception as e:
+            logger.warning(f"Preprint DOI search failed: {e}")
+    
+    # Method 3: Try preprint by title fuzzy matching
+    if title:
+        logger.info(f"📝 Method 3: Searching preprints by title: '{title[:50]}...'")
+        try:
+            from .preprint_client import find_preprint_by_title
+            
+            preprint = find_preprint_by_title(title, similarity_threshold=0.85)
+            if preprint and preprint.get('pdf_url'):
+                logger.info(f"🔍 Found preprint match: {preprint['title'][:60]}...")
+                
+                # Download preprint PDF
+                preprint_url = preprint['pdf_url']
+                result = _download_preprint_pdf(preprint_url, output_dir)
+                if result:
+                    logger.success(f"✅ Preprint download successful (title): {result}")
+                    return result
+        except Exception as e:
+            logger.warning(f"Preprint title search failed: {e}")
+    
+    logger.error("❌ All download methods failed (PMC + Preprints)")
+    return None
+
+
+def _download_preprint_pdf(url: str, output_dir: str) -> str:
+    """
+    Download PDF from BioRxiv/MedRxiv preprint server.
+    
+    Args:
+        url: Direct PDF URL from preprint server
+        output_dir: Directory to save PDF
+    
+    Returns:
+        Path to downloaded PDF, or None if download fails
+    """
+    try:
+        save_dir = Path(output_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate filename from URL
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        filename = f"preprint_{url_hash[:12]}.pdf"
+        file_path = save_dir / filename
+        
+        # Check cache
+        if file_path.exists() and file_path.stat().st_size > 5000:
+            logger.info(f"⚡ Preprint PDF cached: {file_path}")
+            return str(file_path.absolute())
+        
+        logger.info(f"📥 Downloading preprint PDF: {url}")
+        
+        response = requests.get(
+            url,
+            impersonate="chrome120",
+            timeout=120,
+            allow_redirects=True
+        )
+        
+        if response.status_code == 200:
+            content = response.content
+            
+            # Validate PDF
+            if len(content) >= 4 and content[:4] == b'%PDF':
+                with open(file_path, 'wb') as f:
+                    f.write(content)
+                
+                file_size = file_path.stat().st_size
+                
+                if file_size < 1000:
+                    logger.warning(f"⚠️ Preprint file too small ({file_size} bytes)")
+                    file_path.unlink()
+                    return None
+                
+                logger.success(f"✅ Preprint downloaded: {file_path} ({file_size / 1024:.1f} KB)")
+                return str(file_path.absolute())
+            else:
+                logger.warning("⚠️ Preprint server returned non-PDF content")
+                return None
+        else:
+            logger.warning(f"❌ Preprint download failed: HTTP {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Preprint download exception: {e}")
+        return None
+

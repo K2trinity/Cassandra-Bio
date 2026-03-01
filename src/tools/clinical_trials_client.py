@@ -210,6 +210,175 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
         return None
 
 
+def fetch_trial_results(nct_id: str, retries: int = MAX_RETRIES) -> Optional[Dict]:
+    """
+    🔥 NEW: Fetch clinical trial results data (Primary Endpoints, Adverse Events).
+    
+    This function retrieves the Results Section from ClinicalTrials.gov, which contains:
+    - Outcome measures (Primary/Secondary endpoints)
+    - Participant flow data
+    - Baseline characteristics
+    - Adverse events (crucial for safety analysis)
+    
+    These data are often more "truthful" than published papers as they are legally required
+    and less subject to publication bias or statistical manipulation.
+    
+    Args:
+        nct_id: ClinicalTrials.gov identifier (e.g., "NCT01234567")
+        retries: Number of retry attempts on network failure
+    
+    Returns:
+        Dictionary containing:
+        - nct_id: Trial identifier
+        - has_results: Boolean indicating if results are available
+        - outcome_measures: List of primary and secondary outcomes with data
+        - adverse_events: Detailed adverse event data by group
+        - participant_flow: Enrollment and dropout data
+        - baseline_characteristics: Demographics and baseline measures
+        - results_url: Direct link to results section
+    
+    Example:
+        >>> results = fetch_trial_results("NCT02576639")
+        >>> if results and results['adverse_events']:
+        ...     print(f"Found {len(results['adverse_events'])} adverse events")
+    """
+    logger.info(f"Fetching results data for {nct_id}")
+    
+    url = f"{CLINICALTRIALS_API_BASE}/{nct_id}"
+    params = {
+        "format": "json",
+        "fields": "NCTId,HasResults,ResultsSection"
+    }
+    
+    for attempt in range(retries):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+                headers={"User-Agent": "Bio-Short-Seller/1.0"}
+            )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            studies = data.get("studies", [])
+            if not studies:
+                logger.warning(f"No data found for {nct_id}")
+                return None
+            
+            study = studies[0]
+            has_results = study.get("hasResults", False)
+            
+            if not has_results:
+                logger.info(f"{nct_id} has no results posted yet")
+                return {
+                    "nct_id": nct_id,
+                    "has_results": False,
+                    "results_url": f"https://clinicaltrials.gov/study/{nct_id}/results"
+                }
+            
+            # Parse results section
+            results_section = study.get("resultsSection", {})
+            
+            # Outcome measures
+            outcome_measures_module = results_section.get("outcomeMeasuresModule", {})
+            outcome_measures = outcome_measures_module.get("outcomeMeasures", [])
+            
+            # Adverse events
+            adverse_events_module = results_section.get("adverseEventsModule", {})
+            
+            # Participant flow
+            participant_flow_module = results_section.get("participantFlowModule", {})
+            
+            # Baseline characteristics
+            baseline_module = results_section.get("baselineCharacteristicsModule", {})
+            
+            logger.success(f"Retrieved results for {nct_id}: {len(outcome_measures)} outcomes, "
+                          f"AE data: {bool(adverse_events_module)}")
+            
+            return {
+                "nct_id": nct_id,
+                "has_results": True,
+                "outcome_measures": outcome_measures,
+                "adverse_events": adverse_events_module,
+                "participant_flow": participant_flow_module,
+                "baseline_characteristics": baseline_module,
+                "results_url": f"https://clinicaltrials.gov/study/{nct_id}/results"
+            }
+            
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Results fetch attempt {attempt + 1}/{retries} failed: {e}")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                logger.error(f"Failed to fetch results for {nct_id} after {retries} attempts")
+                return None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching results for {nct_id}: {e}")
+            return None
+    
+    return None
+
+
+def extract_adverse_events_summary(results_data: Dict) -> List[Dict[str, str]]:
+    """
+    Extract and format adverse events from trial results data.
+    
+    Args:
+        results_data: Dictionary returned by fetch_trial_results()
+    
+    Returns:
+        List of adverse event dictionaries with:
+        - term: Adverse event term
+        - category: Event category (e.g., "Serious", "Other")
+        - frequency: Number of occurrences
+        - percentage: Percentage of participants affected
+        - group: Treatment group
+    """
+    if not results_data or not results_data.get('has_results'):
+        return []
+    
+    adverse_events_module = results_data.get('adverse_events', {})
+    if not adverse_events_module:
+        return []
+    
+    event_groups = adverse_events_module.get('eventGroups', [])
+    serious_events = adverse_events_module.get('seriousEvents', [])
+    other_events = adverse_events_module.get('otherEvents', [])
+    
+    formatted_events = []
+    
+    # Process serious events
+    for event in serious_events:
+        stats = event.get('stats', [])
+        for stat in stats:
+            formatted_events.append({
+                'term': event.get('term', 'Unknown'),
+                'category': 'Serious',
+                'frequency': stat.get('numEvents', 0),
+                'affected': stat.get('numAffected', 0),
+                'at_risk': stat.get('numAtRisk', 0),
+                'group_id': stat.get('groupId', 'Unknown')
+            })
+    
+    # Process other events
+    for event in other_events:
+        stats = event.get('stats', [])
+        for stat in stats:
+            formatted_events.append({
+                'term': event.get('term', 'Unknown'),
+                'category': 'Other',
+                'frequency': stat.get('numEvents', 0),
+                'affected': stat.get('numAffected', 0),
+                'at_risk': stat.get('numAtRisk', 0),
+                'group_id': stat.get('groupId', 'Unknown')
+            })
+    
+    logger.info(f"Extracted {len(formatted_events)} adverse events")
+    return formatted_events
+
+
 def search_trials_by_sponsor(
     sponsor_name: str,
     max_results: int = 50,
@@ -300,3 +469,28 @@ if __name__ == "__main__":
     print("\nTermination Reasons:")
     for reason, count in sorted(reasons.items(), key=lambda x: x[1], reverse=True):
         print(f"  {count}x: {reason}")
+    
+    # Example 4: 🔥 NEW - Fetch results data
+    print("\n\n=== Example 4: Trial Results Data Mining ===")
+    if trials:
+        nct_id = trials[0]['nct_id']
+        results = fetch_trial_results(nct_id)
+        
+        if results and results['has_results']:
+            print(f"\n{nct_id} Results Summary:")
+            print(f"  Outcome Measures: {len(results.get('outcome_measures', []))}")
+            
+            # Extract adverse events
+            ae_summary = extract_adverse_events_summary(results)
+            if ae_summary:
+                print(f"  Adverse Events: {len(ae_summary)} events recorded")
+                
+                # Show serious events
+                serious = [ae for ae in ae_summary if ae['category'] == 'Serious']
+                if serious:
+                    print(f"\n  🔥 Serious Adverse Events:")
+                    for ae in serious[:5]:  # Show top 5
+                        print(f"    - {ae['term']}: {ae['affected']}/{ae['at_risk']} affected")
+            
+            print(f"\n  Full data: {results['results_url']}")
+

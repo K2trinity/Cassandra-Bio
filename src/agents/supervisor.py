@@ -33,6 +33,15 @@ from BioHarvestEngine.agent import BioHarvestAgent
 from ForensicEngine.agent import ForensicAuditorAgent
 from EvidenceEngine.agent import create_agent as create_evidence_agent
 from src.agents.report_writer import create_agent as create_report_agent
+from src.agents.smart_context_builder import create_smart_context_builder
+
+# Import SocketIO functions for real-time graph updates
+try:
+    from flask import current_app
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
+    logger.warning("Flask not available in supervisor context")
 
 
 # ========== Node Implementations ==========
@@ -75,6 +84,60 @@ def harvester_node(state: AgentState) -> Dict[str, Any]:
         
         logger.success(f"✅ Harvested {len(results.get('results', []))} papers/trials")
         logger.info(f"📄 Found {len(pdf_paths)} valid local PDFs for analysis")
+        
+        # 🔥 Real-time graph updates: Push harvested papers to frontend
+        if FLASK_AVAILABLE:
+            try:
+                socketio = current_app.extensions.get('socketio')
+                if socketio:
+                    for result in results.get("results", [])[:10]:  # First 10 for demo
+                        # Emit paper node
+                        paper_id = result.get('pmid') or result.get('nct_id') or result.get('doi')
+                        if paper_id:
+                            socketio.emit('graph_update', {
+                                'type': 'node',
+                                'data': {
+                                    'id': f"Paper_{paper_id}",
+                                    'label': 'Paper',
+                                    'name': paper_id,
+                                    'properties': {
+                                        'title': result.get('title', 'Unknown'),
+                                        'year': result.get('year', 'N/A')
+                                    },
+                                    'group': 'Paper'
+                                },
+                                'timestamp': result.get('timestamp', '')
+                            })
+                            
+                        # Emit authors
+                        for author in result.get('authors', [])[:3]:  # First 3 authors
+                            socketio.emit('graph_update', {
+                                'type': 'node',
+                                'data': {
+                                    'id': f"Author_{author}",
+                                    'label': 'Author',
+                                    'name': author,
+                                    'properties': {},
+                                    'group': 'Author'
+                                },
+                                'timestamp': result.get('timestamp', '')
+                            })
+                            
+                            # Emit relationship
+                            if paper_id:
+                                socketio.emit('graph_update', {
+                                    'type': 'relationship',
+                                    'data': {
+                                        'source': f"Author_{author}",
+                                        'target': f"Paper_{paper_id}",
+                                        'type': 'AUTHORED',
+                                        'properties': {}
+                                    },
+                                    'timestamp': result.get('timestamp', '')
+                                })
+                    logger.info("📊 Graph updates pushed to frontend")
+            except Exception as e:
+                logger.debug(f"Could not emit graph updates: {e}")
         
         return {
             "harvested_data": results.get("results", []),
@@ -205,28 +268,33 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
                     logger.debug(f"✅ {filename}: {len(summary)} chars, {len(risks)} risks")
                     
                     # 4. FORCE CONCATENATION - Build rich context payload
+                    # 🔥 FIX: Ensure filename is properly included in the entry
                     entry = f"""
 === EVIDENCE SOURCE: {filename} ===
+> **FILE**: {filename}
 > **SUMMARY**: {summary}
 > **RISK FINDINGS**: {json.dumps(risks, indent=2)}
 --------------------------------------------------
 """
                     all_evidence_context.append(entry)
-                    
-                    # Convert risks to dict format for storage
+                    # 🔥 FIX: Inject filename into each risk item to prevent "Unknown" plague
                     evidence_dicts = []
                     for risk in risks:
                         if hasattr(risk, '__dict__'):
-                            evidence_dicts.append({
+                            risk_dict = {
                                 "source": risk.source,
                                 "page_estimate": risk.page_estimate,
                                 "quote": risk.quote,
                                 "risk_level": risk.risk_level,
                                 "risk_type": risk.risk_type,
-                                "explanation": risk.explanation
-                            })
+                                "explanation": risk.explanation,
+                                "filename": filename  # 🔥 ADD: Filename tracking
+                            }
                         else:
-                            evidence_dicts.append(risk)
+                            risk_dict = dict(risk) if isinstance(risk, dict) else {}
+                            risk_dict["filename"] = filename  # 🔥 ADD: Filename tracking
+                        
+                        evidence_dicts.append(risk_dict)
                     
                     all_evidence.extend(evidence_dicts)
                     logger.success(f"✅ Extracted {len(risks)} findings from PDF {i}")
@@ -251,33 +319,140 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
         if failed_files:
             logger.warning(f"⚠️ Failed to process {len(failed_files)} files: {', '.join(failed_files)}")
         
-        # 🔥 ENHANCED: Log and validate payload size
-        total_chars = len("".join(all_evidence_context))
-        logger.info(f"🔥 DEBUG: Final Context Payload: {total_chars} chars (Target: >5000)")
+        # 🧠 DISABLED: Smart Context Builder - causing over-compression (91% loss)
+        # 🚨 DEBUG FIX: Use original evidence text to prevent hallucinations
+        logger.info("\n⚠️ Using ORIGINAL evidence text (Smart Context Builder disabled for debugging)")
         
-        # 🔥 NEW: Validate minimum content threshold
-        MIN_PAYLOAD_SIZE = 1000  # Minimum 1000 chars for meaningful analysis
-        if total_chars < MIN_PAYLOAD_SIZE:
-            logger.error(f"❌ CRITICAL: Payload too small ({total_chars} chars < {MIN_PAYLOAD_SIZE})")
+        # Get forensic data for context optimization (if available in state)
+        forensic_data = state.get("forensic_evidence", [])
+        
+        # 🔥 FIX: Use original uncompressed evidence text
+        original_evidence_text = ''.join(all_evidence_context)
+        optimized_context = original_evidence_text
+        
+        # Calculate basic stats
+        stats = {
+            'total_chars': len(optimized_context),
+            'total_tokens': len(optimized_context) // 4,  # Rough estimate
+            'compression_ratio': 1.0,  # No compression
+            'critical_count': sum(1 for e in all_evidence if e.get('risk_level') in ['CRITICAL', 'HIGH']),
+            'medium_count': sum(1 for e in all_evidence if e.get('risk_level') == 'MEDIUM'),
+            'clean_count': 0
+        }
+        
+        # Log results
+        logger.success(f"📊 Evidence Context Prepared:")
+        logger.info(f"   Total Size: {stats['total_chars']:,} chars ({stats['total_tokens']:,} tokens)")
+        logger.info(f"   Compression: NONE (using original text)")
+        logger.info(f"   Critical Items: {stats['critical_count']}")
+        logger.info(f"   Medium Items: {stats['medium_count']}")
+        logger.info(f"   Evidence Items: {len(all_evidence)}")
+        
+        # ===== ORIGINAL SMART CONTEXT BUILDER CODE (DISABLED) =====
+        # 🔬 REASON FOR DISABLE: Over-compression (91.4%) caused:
+        #    - Loss of PMC identifiers
+        #    - Loss of specific study details
+        #    - LLM hallucinations due to insufficient context
+        #    - Original: 123k chars → Optimized: 10k chars (too aggressive)
+        #
+        # # Build evidence dict format for context builder
+        # evidence_items_for_builder = []
+        # for entry in all_evidence:
+        #     evidence_items_for_builder.append({
+        #         'filename': entry.get('source', 'Unknown'),
+        #         'risk_level': entry.get('risk_level', 'UNKNOWN'),
+        #         'risk_type': entry.get('risk_type', 'Unknown'),
+        #         'quote': entry.get('quote', ''),
+        #         'explanation': entry.get('explanation', ''),
+        #         'paper_summary': entry.get('quote', '')
+        #     })
+        # 
+        # # Initialize smart context builder
+        # context_builder = create_smart_context_builder(max_chars=120000)
+        # 
+        # # Build optimized context
+        # optimized_context, stats = context_builder.build_optimized_context(
+        #     evidence_items=evidence_items_for_builder,
+        #     forensic_items=forensic_data
+        # )
+        # 
+        # # Log optimization results
+        # logger.success(f"🧠 Context Optimization Complete:")
+        # logger.info(f"   Original: {len(''.join(all_evidence_context))} chars")
+        # logger.info(f"   Optimized: {stats['total_chars']} chars ({stats['total_tokens']} tokens)")
+        # logger.info(f"   Compression: {stats['compression_ratio']:.1%}")
+        # logger.info(f"   Critical Items: {stats['critical_count']}")
+        # logger.info(f"   Medium Items: {stats['medium_count']}")
+        # logger.info(f"   Clean Items: {stats['clean_count']}")
+        
+        # 🔥 ENHANCED: Validate evidence text quality
+        MIN_PAYLOAD_SIZE = 30000  # Minimum 30k chars for quality analysis (increased from 1k)
+        MIN_PMC_COUNT = 20  # Minimum 5 PMC citations expected
+        
+        # Check size
+        if stats['total_chars'] < MIN_PAYLOAD_SIZE:
+            logger.error(f"❌ CRITICAL: Evidence text too small ({stats['total_chars']:,} chars < {MIN_PAYLOAD_SIZE:,})")
+            logger.error(f"❌ This will cause hallucinations in report generation!")
             logger.error(f"❌ Failed files: {len(failed_files)}, Successful: {success_count}")
             if success_count == 0:
                 logger.error("❌ All PDFs failed - cannot generate report")
-                # Return error state instead of proceeding
                 return {
                     "error": "All PDF extractions failed",
                     "failed_files": failed_files,
                     "total_files": total_files,
-                    "context_size": total_chars
+                    "context_size": stats['total_chars']
+                }
+            else:
+                logger.warning(f"⚠️ Continuing with limited data - report quality will be compromised")
+        else:
+            logger.success(f"✅ Evidence text size OK: {stats['total_chars']:,} chars")
+        
+        # Check PMC citations
+        pmc_count = optimized_context.count('PMC')
+        if pmc_count < MIN_PMC_COUNT:
+            logger.warning(f"⚠️ LOW PMC CITATIONS: Only {pmc_count} found (expected >={MIN_PMC_COUNT})")
+            logger.warning(f"⚠️ Report may lack specific references - investigate evidence formatting")
+        else:
+            logger.success(f"✅ PMC citations OK: {pmc_count} found")
+        
+        # Check evidence diversity
+        if len(all_evidence) == 0:
+            logger.error(f"❌ CRITICAL: No evidence items extracted!")
+        elif len(all_evidence) < 10:
+            logger.warning(f"⚠️ LOW EVIDENCE DIVERSITY: Only {len(all_evidence)} items")
+        else:
+            logger.success(f"✅ Evidence diversity OK: {len(all_evidence)} items")
+        
+        # 🔥 Validate minimum content threshold (legacy check - now redundant)
+        MIN_PAYLOAD_SIZE_LEGACY = 1000  # Old threshold for backward compatibility
+        if stats['total_chars'] < MIN_PAYLOAD_SIZE_LEGACY:
+            logger.error(f"❌ CRITICAL: Evidence payload critically small ({stats['total_chars']} chars < {MIN_PAYLOAD_SIZE_LEGACY})")
+            logger.error(f"❌ Failed files: {len(failed_files)}, Successful: {success_count}")
+            if success_count == 0:
+                logger.error("❌ All PDFs failed - cannot generate report")
+                return {
+                    "error": "All PDF extractions failed",
+                    "failed_files": failed_files,
+                    "total_files": total_files,
+                    "context_size": stats['total_chars']
                 }
         
-        logger.success(f"✅ Context payload validated: {total_chars} chars from {success_count} PDFs")
+        # 🔥 NEW: Validate query relevance (check if core keywords appear in evidence)
+        user_query = state.get("user_query", "")
+        core_keywords = user_query.lower().split()[:3]  # First 3 words are usually key concepts
+        if core_keywords:
+            keyword_found = any(kw in optimized_context.lower() for kw in core_keywords if len(kw) > 3)
+            if not keyword_found:
+                logger.warning(f"⚠️ RELEVANCE WARNING: Core keywords '{', '.join(core_keywords)}' not found in evidence")
+                logger.warning(f"⚠️ This may indicate query drift or irrelevant results")
         
         return {
             "text_evidence": all_evidence,
-            "compiled_evidence_text": "".join(all_evidence_context),  # 🔥 STEP 2 FIX: Use new variable
-            "failed_files": failed_files,  # 🚨 NEW: Track failures
-            "total_files": total_files,  # 🚨 NEW: Track total attempted
-            "pdf_files": state.get("pdf_paths", [])  # 🔥 STEP 3: Store global PDF list
+            "compiled_evidence_text": optimized_context,  # 🧠 Use optimized context
+            "failed_files": failed_files,
+            "total_files": total_files,
+            "pdf_files": state.get("pdf_paths", []),
+            "context_stats": stats  # 🧠 Include optimization stats
         }
         
     except Exception as e:
@@ -512,6 +687,7 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
     Synthesizes all evidence into a comprehensive biomedical due diligence report.
     
     🚨 PHASE 2: Passes failure metadata to enforce honest reporting
+    🔥 NEW: Supports segmented generation mode (recommended)
     
     Args:
         state: Current workflow state with all evidence data
@@ -585,8 +761,21 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
         print(f"🔥 DEBUG: - total_files (global): {total_pdfs_global}")
         print(f"🔥 DEBUG: - failed_count: {total_failed}")
         
-        # Generate report with failure context
-        report_output = agent.write_report(**payload)
+        # 🔥 NEW: Try segmented generation first (recommended)
+        logger.info("\n🔥 Attempting segmented generation mode...")
+        use_segmented = True  # Can be configured via settings
+        
+        try:
+            if use_segmented and hasattr(agent, 'write_report_segmented'):
+                report_output = agent.write_report_segmented(**payload, use_segmented=True)
+                logger.success("✅ Segmented generation succeeded")
+            else:
+                logger.info("Segmented mode not available, using traditional mode")
+                report_output = agent.write_report(**payload)
+        except Exception as seg_error:
+            logger.warning(f"⚠️ Segmented generation failed: {seg_error}")
+            logger.info("Falling back to traditional generation...")
+            report_output = agent.write_report(**payload)
         
         logger.success(f"✅ Report generated successfully")
         logger.info(f"   Recommendation: {report_output.recommendation}")

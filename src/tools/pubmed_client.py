@@ -243,8 +243,15 @@ def _parse_pubmed_record(record: Dict) -> Optional[Dict[str, str]]:
         pubmed_link = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
         pmc_link = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_id}/" if pmc_id else None
         
+        # 🔥 FIX: Construct direct PDF URL from PMCID
+        pdf_url = None
+        if pmc_id:
+            # PMC PDF URL format: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1234567/pdf/
+            pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmc_id}/pdf/"
+        
         return {
             "pmid": pmid,
+            "pmcid": pmc_id,  # 🔥 FIX: Add pmcid field
             "title": title,
             "abstract": abstract,
             "authors": authors_str,
@@ -253,6 +260,7 @@ def _parse_pubmed_record(record: Dict) -> Optional[Dict[str, str]]:
             "doi": doi or "N/A",
             "pmc_link": pmc_link or "N/A",
             "pubmed_link": pubmed_link,
+            "pdf_url": pdf_url,  # 🔥 FIX: Add pdf_url field
         }
         
     except Exception as e:

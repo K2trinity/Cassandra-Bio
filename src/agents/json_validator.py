@@ -30,6 +30,38 @@ class JSONValidator:
         """
         errors = []
         
+        # 🔥 CRITICAL FIX: Check for None or empty input
+        if json_text is None:
+            logger.error("❌ JSONValidator received None input")
+            return False, None, ["Input is None"]
+        
+        if not json_text or not json_text.strip():
+            logger.error("❌ JSONValidator received empty input")
+            return False, None, ["Input is empty"]
+        
+        # 🔥 STAGE 0: Try json-repair library first (most powerful)
+        try:
+            from json_repair import repair_json
+            logger.info("🔧 Attempting json-repair library (Stage 0)...")
+            
+            repaired_obj = repair_json(json_text, return_objects=True)
+            if isinstance(repaired_obj, dict):
+                logger.success("✅ json-repair library fixed JSON successfully")
+                
+                # Validate fields
+                missing_fields = [f for f in expected_fields if f not in repaired_obj]
+                if missing_fields:
+                    errors.append(f"Missing fields: {', '.join(missing_fields)}")
+                    for field in missing_fields:
+                        repaired_obj[field] = "[Data not available]"
+                
+                return True, repaired_obj, errors
+                
+        except ImportError:
+            logger.debug("json-repair library not available, using manual repair")
+        except Exception as e:
+            logger.debug(f"json-repair failed: {e}, falling back to manual repair")
+        
         # 1. 预处理 - 清理常见问题
         cleaned = JSONValidator._preprocess_json(json_text)
         
@@ -63,9 +95,11 @@ class JSONValidator:
                 error_start = max(0, e.pos - 50)
                 error_end = min(len(cleaned), e.pos + 50)
                 context = cleaned[error_start:error_end]
-                logger.debug(f"Error context at position {e.pos}: ...{context}...")
+                logger.error(f"Error context at position {e.pos}:")
+                logger.error(f"...{context}...")
             else:
-                logger.debug(f"First 200 chars of problematic JSON: {cleaned[:200]}")
+                logger.error(f"First 200 chars of problematic JSON:")
+                logger.error(f"{cleaned[:200]}")
             
             errors.append(f"JSON decode error: {e}")
             
@@ -80,14 +114,23 @@ class JSONValidator:
     @staticmethod
     def _preprocess_json(text: str) -> str:
         """预处理JSON文本，修复常见格式问题"""
+        # 🔥 DEBUG: 记录原始响应的前200字符
+        logger.debug(f"📥 Raw JSON input (first 200 chars): {text[:200]}")
+        
         # 移除markdown代码块标记
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
+            logger.debug("🔧 Removed markdown ```json wrapper")
         elif "```" in text:
             text = text.split("```")[1].split("```")[0].strip()
+            logger.debug("🔧 Removed markdown ``` wrapper")
         
         # 移除BOM和零宽字符
         text = text.replace('\ufeff', '').replace('\u200b', '')
+        
+        # 🔥 CRITICAL FIX: 修复字符串值内部的未转义引号
+        # 这是Gemini生成JSON的最常见问题
+        text = JSONValidator._fix_unescaped_quotes_in_strings(text)
         
         # 🔥 NEW: 修复无引号的属性名 (Gemini常见问题)
         # 匹配模式: { field_name: "value" } → { "field_name": "value" }
@@ -101,7 +144,8 @@ class JSONValidator:
         
         # 🔥 DEBUG: 检查是否修复了无引号属性名
         if text != original_text:
-            logger.debug(f"🔧 Fixed unquoted property names (changed {len(original_text) - len(text)} chars)")
+            logger.debug(f"🔧 Fixed unquoted property names (changed {len(text) - len(original_text)} chars)")
+            logger.debug(f"📤 After fix (first 200 chars): {text[:200]}")
         
         # 修复常见的转义问题
         # 1. 处理未转义的换行符（在字符串内）
@@ -111,6 +155,156 @@ class JSONValidator:
         text = text.replace('\\\\n', '\\n').replace('\\\\t', '\\t')
         
         return text.strip()
+    
+    @staticmethod
+    def _fix_unescaped_quotes_in_strings(text: str) -> str:
+        """
+        修复JSON字符串值内部的未转义引号
+        
+        例如: "text": "He said "hello" there" 
+        修复为: "text": "He said \\"hello\\" there"
+        
+        使用简化的正则表达式方法，更可靠
+        """
+        try:
+            # 🔥 SIMPLE STRATEGY: 使用正则表达式找到所有字符串值，然后修复其中的引号
+            # 模式: "field_name": "value with possible "quotes" inside"
+            
+            def fix_quotes_in_match(match):
+                """修复匹配到的字符串值中的引号"""
+                field_name = match.group(1)
+                string_value = match.group(2)
+                
+                # 在字符串值内部转义所有未转义的引号
+                # 但要小心已经转义的引号
+                fixed_value = string_value
+                
+                # 先标记已经转义的引号
+                fixed_value = fixed_value.replace('\\"', '<<<ESCAPED_QUOTE>>>')
+                
+                # 转义所有剩余的引号
+                fixed_value = fixed_value.replace('"', '\\"')
+                
+                # 恢复已经转义的引号
+                fixed_value = fixed_value.replace('<<<ESCAPED_QUOTE>>>', '\\"')
+                
+                return f'"{field_name}": "{fixed_value}"'
+            
+            # 匹配模式：属性名: 值
+            # 允许值包含换行和其他字符
+            pattern = r'"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*?)(?="(?:\s*[,}\]])|$)'
+            
+            fixed = re.sub(pattern, fix_quotes_in_match, text, flags=re.DOTALL)
+            
+            if fixed != text:
+                logger.info(f"🔧 Applied regex-based quote fixing")
+                return fixed
+            
+            return text
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Regex quote fixing failed: {e}, trying character-by-character approach")
+            
+            # FALLBACK: 字符级别的修复（原有逻辑）
+            return JSONValidator._fix_unescaped_quotes_detailed(text)
+    
+    @staticmethod
+    def _fix_unescaped_quotes_detailed(text: str) -> str:
+        """
+        详细的字符级别引号修复（备用方案）
+        """
+        try:
+            result = []
+            i = 0
+            in_string = False
+            string_start_pos = -1
+            
+            while i < len(text):
+                char = text[i]
+                
+                # 检查转义字符
+                if char == '\\' and i + 1 < len(text):
+                    result.append(char)
+                    result.append(text[i + 1])
+                    i += 2
+                    continue
+                
+                # 检查引号
+                if char == '"':
+                    # 判断这是属性名的引号还是字符串值的引号
+                    # 通过查看前后上下文来判断
+                    
+                    if not in_string:
+                        # 进入字符串
+                        in_string = True
+                        string_start_pos = i
+                        result.append(char)
+                        i += 1
+                        
+                        # 🔥 关键：判断这是属性名还是值
+                        # 如果后面紧跟着冒号，这是属性名
+                        lookahead = i
+                        while lookahead < len(text) and text[lookahead] in [' ', '\t', '\n', '\r']:
+                            lookahead += 1
+                        
+                        if lookahead < len(text) and text[lookahead] == ':':
+                            # 这是属性名，继续查找属性值
+                            while i < len(text) and text[i] != '"':
+                                result.append(text[i])
+                                i += 1
+                            if i < len(text):
+                                result.append(text[i])  # 闭合属性名的引号
+                                i += 1
+                            
+                            # 跳过冒号和空白
+                            while i < len(text) and text[i] in [':', ' ', '\t', '\n', '\r']:
+                                result.append(text[i])
+                                i += 1
+                            
+                            # 现在应该是值的开始引号
+                            if i < len(text) and text[i] == '"':
+                                in_string = True
+                                string_start_pos = i
+                                result.append(text[i])
+                                i += 1
+                            else:
+                                in_string = False
+                        
+                    else:
+                        # 可能是字符串结束，也可能是内部未转义的引号
+                        # 检查后面是否跟着逗号、花括号或方括号
+                        lookahead = i + 1
+                        while lookahead < len(text) and text[lookahead] in [' ', '\t', '\n', '\r']:
+                            lookahead += 1
+                        
+                        if lookahead < len(text) and text[lookahead] in [',', '}', ']']:
+                            # 这是字符串结束
+                            in_string = False
+                            result.append(char)
+                            i += 1
+                        else:
+                            # 这是内部未转义的引号，需要转义
+                            logger.debug(f"🔧 Escaping unescaped quote at position {i}")
+                            result.append('\\')
+                            result.append(char)
+                            i += 1
+                else:
+                    result.append(char)
+                    i += 1
+            
+            fixed = ''.join(result)
+            
+            if fixed != text:
+                # 计算修复了多少处
+                fix_count = fixed.count('\\"') - text.count('\\"')
+                if fix_count > 0:
+                    logger.info(f"🔧 Fixed {fix_count} unescaped quotes via detailed analysis")
+            
+            return fixed
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Detailed quote fixing failed: {e}, returning original text")
+            return text
     
     @staticmethod
     def _advanced_repair(text: str, expected_fields: List[str], error: json.JSONDecodeError) -> Optional[Dict]:

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo4j 图谱测试页面</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #0f172a; color: white; }
+        .test-result { padding: 1rem; margin: 0.5rem 0; border-radius: 0.5rem; }
+        .success { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; }
+        .error { background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; }
+        .info { background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; }
+    </style>
+</head>
+<body class="p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8">🧪 Neo4j 知识图谱诊断工具</h1>
+        
+        <div id="results"></div>
+        
+        <div class="mt-8">
+            <h2 class="text-xl font-bold mb-4">图谱预览</h2>
+            <div id="graphPreview" class="bg-slate-800 p-4 rounded-lg min-h-[400px]"></div>
+        </div>
+        
+        <div class="mt-8">
+            <button onclick="runTests()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold">
+                🔄 重新测试
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const resultsDiv = document.getElementById('results');
+        const graphPreview = document.getElementById('graphPreview');
+        
+        function addResult(title, status, message, data = null) {
+            const div = document.createElement('div');
+            div.className = `test-result ${status}`;
+            
+            let html = `<h3 class="font-bold mb-2">${title}</h3>`;
+            html += `<p>${message}</p>`;
+            
+            if (data) {
+                html += `<pre class="mt-2 text-xs overflow-auto">${JSON.stringify(data, null, 2).substring(0, 500)}</pre>`;
+            }
+            
+            div.innerHTML = html;
+            resultsDiv.appendChild(div);
+        }
+        
+        async function testAPI() {
+            addResult('📡 测试 1: API端点连通性', 'info', '正在测试 /api/graph/global...');
+            
+            try {
+                const response = await fetch('/api/graph/global');
+                
+                if (!response.ok) {
+                    addResult('❌ API请求失败', 'error', `HTTP ${response.status}: ${response.statusText}`);
+                    return null;
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addResult(
+                        '✅ API请求成功', 
+                        'success', 
+                        `数据源: ${data.source}\n节点数: ${data.nodes?.length || 0}\n关系数: ${data.links?.length || 0}`,
+                        {
+                            source: data.source,
+                            totalNodes: data.totalNodes || data.nodes?.length,
+                            totalLinks: data.totalRelationships || data.links?.length,
+                            timestamp: data.timestamp
+                        }
+                    );
+                    return data;
+                } else {
+                    addResult('❌ API返回错误', 'error', JSON.stringify(data));
+                    return null;
+                }
+                
+            } catch (error) {
+                addResult('❌ API请求异常', 'error', error.message);
+                return null;
+            }
+        }
+        
+        function testDataStructure(data) {
+            if (!data) return;
+            
+            addResult('📊 测试 2: 数据结构验证', 'info', '检查数据格式...');
+            
+            const issues = [];
+            
+            if (!Array.isArray(data.nodes)) {
+                issues.push('❌ nodes不是数组');
+            } else if (data.nodes.length === 0) {
+                issues.push('⚠️ nodes数组为空');
+            }
+            
+            if (!Array.isArray(data.links)) {
+                issues.push('❌ links不是数组');
+            } else if (data.links.length === 0) {
+                issues.push('⚠️ links数组为空');
+            }
+            
+            if (issues.length > 0) {
+                addResult('⚠️ 数据结构问题', 'error', issues.join('\n'));
+            } else {
+                addResult('✅ 数据结构正常', 'success', `包含 ${data.nodes.length} 个节点和 ${data.links.length} 个关系`);
+                
+                // 显示示例节点
+                if (data.nodes.length > 0) {
+                    addResult('📝 示例节点', 'info', '第一个节点的结构:', data.nodes[0]);
+                }
+            }
+        }
+        
+        function visualizeData(data) {
+            if (!data || !data.nodes || data.nodes.length === 0) {
+                graphPreview.innerHTML = '<p class="text-gray-400">无数据可显示</p>';
+                return;
+            }
+            
+            addResult('🎨 测试 3: 数据可视化', 'info', '生成简单的节点列表...');
+            
+            let html = '<div class="space-y-2">';
+            
+            // 按类型分组节点
+            const nodesByType = {};
+            data.nodes.forEach(node => {
+                const type = node.label || 'Unknown';
+                if (!nodesByType[type]) {
+                    nodesByType[type] = [];
+                }
+                nodesByType[type].push(node);
+            });
+            
+            // 显示各类型节点
+            for (const [type, nodes] of Object.entries(nodesByType)) {
+                html += `<div class="bg-slate-700 p-3 rounded">`;
+                html += `<h4 class="font-bold text-emerald-400">${type} (${nodes.length})</h4>`;
+                html += `<ul class="mt-2 text-sm">`;
+                nodes.slice(0, 5).forEach(node => {
+                    html += `<li class="text-gray-300">• ${node.name || node.id}</li>`;
+                });
+                if (nodes.length > 5) {
+                    html += `<li class="text-gray-500">... 还有 ${nodes.length - 5} 个</li>`;
+                }
+                html += `</ul></div>`;
+            }
+            
+            html += '</div>';
+            graphPreview.innerHTML = html;
+            
+            addResult('✅ 可视化生成成功', 'success', `显示了 ${Object.keys(nodesByType).length} 种类型的节点`);
+        }
+        
+        function checkForceGraphLibrary() {
+            addResult('📚 测试 4: Force Graph库检查', 'info', '检查依赖库是否加载...');
+            
+            if (typeof ForceGraph !== 'undefined') {
+                addResult('✅ Force Graph库已加载', 'success', 'ForceGraph函数可用');
+            } else {
+                addResult('❌ Force Graph库未加载', 'error', '请确认index.html中包含了Force Graph的CDN链接');
+            }
+        }
+        
+        async function runTests() {
+            resultsDiv.innerHTML = '';
+            graphPreview.innerHTML = '<p class="text-gray-400 animate-pulse">加载中...</p>';
+            
+            addResult('🚀 开始诊断', 'info', '运行所有测试...');
+            
+            // 测试1: API
+            const data = await testAPI();
+            
+            // 测试2: 数据结构
+            testDataStructure(data);
+            
+            // 测试3: 可视化
+            visualizeData(data);
+            
+            // 测试4: 库检查
+            checkForceGraphLibrary();
+            
+            // 总结
+            addResult(
+                '📋 诊断完成', 
+                'info', 
+                '如果上面显示错误，请根据提示解决。如果所有测试通过但仍然看不到图谱，请检查浏览器控制台（F12）查看JavaScript错误。'
+            );
+        }
+        
+        // 页面加载时自动运行测试
+        window.addEventListener('DOMContentLoaded', runTests);
+    </script>
+</body>
+</html>

@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.llms import create_bioharvest_client
 from src.tools import search_pubmed, fetch_details, search_failed_trials, EuroPMCClient
 from src.tools.pdf_downloader import download_pdf_from_url
+from src.tools.clinical_trials_results_client import get_trial_results_as_fallback  # P1: Second Shovel
 from loguru import logger
 from src.utils.stream_validator import StreamValidator
 
@@ -181,14 +182,20 @@ class BioHarvestAgent:
         Returns:
             Dictionary with keys 'pubmed' and 'clinicaltrials', each containing list of queries
         """
+        # 🔥 FIX: Extract core keywords FIRST to preserve them
+        core_keywords = user_query.split()[:3]  # First 3 words are usually key concepts
+        core_terms = ' '.join([w for w in core_keywords if len(w) > 2])  # Filter short words
+        
         prompt = f"""You are a biomedical research expert analyzing investigative queries for short-selling due diligence.
 
 USER QUERY: "{user_query}"
+🔥 CORE TERMS TO PRESERVE: "{core_terms}" (MUST appear in at least 2 queries!)
 
 Generate 3 specific search queries for each database to find NEGATIVE signals (failures, toxicity, adverse events, terminations):
 
 1. **PubMed queries**: 
    - CRITICAL: Keep queries SIMPLE and CONCISE (2-4 keywords max)
+   - MANDATORY: Include the core term "{core_terms}" in at least 2 queries
    - PubMed's search algorithm works best with SHORT queries
    - Complex multi-word queries often return 0 results
    - Focus on core concepts only
@@ -198,6 +205,7 @@ Generate 3 specific search queries for each database to find NEGATIVE signals (f
 
 2. **ClinicalTrials.gov queries**: 
    - Use drug names, company names, or therapy types
+   - MUST include core term "{core_terms}"
    - Keep queries concise (the API will filter for failed trials automatically)
    - Example: "pembrolizumab", "CRISPR", "CAR-T therapy"
 
@@ -207,7 +215,9 @@ Return your response in this EXACT JSON format:
   "clinicaltrials": ["query1", "query2", "query3"]
 }}
 
-REMEMBER: PubMed queries MUST be SHORT (2-4 keywords). Long queries return ZERO results.
+REMEMBER: 
+- PubMed queries MUST be SHORT (2-4 keywords)
+- Core term "{core_terms}" MUST appear in queries!
 
 Only respond with valid JSON, no additional text."""
 
@@ -393,6 +403,8 @@ Only respond with valid JSON, no additional text."""
         
         # Process failed clinical trials
         for trial in failed_trials:
+            nct_id = trial.get('nct_id')
+            
             evidence_candidates.append({
                 'title': trial.get('title', 'No title'),
                 'source': 'ClinicalTrials.gov',
@@ -401,7 +413,7 @@ Only respond with valid JSON, no additional text."""
                 'status': trial.get('status', 'UNKNOWN'),
                 'date': trial.get('completion_date', 'Unknown'),
                 'metadata': {
-                    'nct_id': trial.get('nct_id'),
+                    'nct_id': nct_id,
                     'phase': trial.get('phase'),
                     'interventions': trial.get('interventions'),
                     'conditions': trial.get('conditions'),
@@ -409,6 +421,19 @@ Only respond with valid JSON, no additional text."""
                     'enrollment': trial.get('enrollment')
                 }
             })
+            
+            # 🚨 P1: For failed trials, try to get detailed results from ClinicalTrials.gov
+            if nct_id and nct_id.startswith('NCT'):
+                try:
+                    logger.info(f"🔍 Fetching detailed results for failed trial {nct_id}...")
+                    ct_results = get_trial_results_as_fallback(nct_id)
+                    if ct_results and ct_results.get('has_results'):
+                        # Add to the last candidate we just appended
+                        evidence_candidates[-1]['ct_structured_results'] = ct_results
+                        evidence_candidates[-1]['data_source'] = 'ClinicalTrials.gov_API'
+                        logger.success(f"✅ Retrieved detailed adverse event data for {nct_id}")
+                except Exception as e:
+                    logger.debug(f"Could not fetch detailed results for {nct_id}: {e}")
         
         return evidence_candidates
     
@@ -431,17 +456,25 @@ Only respond with valid JSON, no additional text."""
         downloaded_count = 0
         
         for candidate in evidence_candidates:
-            # Get PDF URL (priority: direct pdf_url from EuroPMC)
-            pdf_url = candidate.get('metadata', {}).get('pdf_url')
+            # 🔥 FIX: Get PDF URL with improved logic
+            metadata = candidate.get('metadata', {})
+            pdf_url = metadata.get('pdf_url')
             
-            # Fallback to PMC link (legacy PubMed results)
-            if not pdf_url:
-                pmc_link = candidate.get('metadata', {}).get('pmc_link')
-                if pmc_link and pmc_link != "N/A":
-                    pdf_url = pmc_link
-            
-            # Skip if no URL available
-            if not pdf_url:
+            # Skip if no PDF URL available
+            if not pdf_url or pdf_url == "N/A":
+                # Log why PDF is not available
+                pmid = metadata.get('pmid')
+                pmcid = metadata.get('pmcid')
+                title = candidate.get('title', 'Unknown')[:60]
+                if pmid and not pmcid:
+                    logger.info(f"⏭️  Skipping PMID {pmid} - no PMC version (not open access)")
+                    logger.debug(f"   Title: {title}...")
+                elif pmcid:
+                    logger.warning(f"⚠️  PMCID {pmcid} found but no PDF URL generated")
+                    logger.debug(f"   Title: {title}...")
+                else:
+                    # Clinical trial or other source
+                    logger.debug(f"⏭️  Skipping non-PubMed source: {title}...")
                 candidate['local_path'] = None
                 continue
             
@@ -460,9 +493,34 @@ Only respond with valid JSON, no additional text."""
                     candidate['local_path'] = None
                     logger.debug(f"❌ Download failed: {pdf_url}")
                     
+                    # 🚨 P1: Second Shovel - Try ClinicalTrials.gov if NCT ID exists
+                    nct_id = metadata.get('nct_id')
+                    if nct_id and nct_id.startswith('NCT'):
+                        logger.info(f"🔄 PDF failed, activating ClinicalTrials.gov fallback for {nct_id}...")
+                        ct_results = get_trial_results_as_fallback(nct_id)
+                        if ct_results and ct_results.get('has_results'):
+                            candidate['ct_structured_results'] = ct_results
+                            candidate['data_source'] = 'ClinicalTrials.gov_API'
+                            logger.success(f"✅ Retrieved structured results from ClinicalTrials.gov")
+                        else:
+                            logger.warning(f"⚠️ No structured results available for {nct_id}")
+                    
             except Exception as e:
                 logger.warning(f"PDF download error for {pdf_url}: {e}")
                 candidate['local_path'] = None
+                
+                # 🚨 P1: Second Shovel - Try ClinicalTrials.gov even on exception
+                nct_id = metadata.get('nct_id')
+                if nct_id and nct_id.startswith('NCT'):
+                    try:
+                        logger.info(f"🔄 Exception occurred, trying ClinicalTrials.gov fallback for {nct_id}...")
+                        ct_results = get_trial_results_as_fallback(nct_id)
+                        if ct_results and ct_results.get('has_results'):
+                            candidate['ct_structured_results'] = ct_results
+                            candidate['data_source'] = 'ClinicalTrials.gov_API'
+                            logger.success(f"✅ Retrieved structured results from ClinicalTrials.gov")
+                    except Exception as ct_error:
+                        logger.warning(f"ClinicalTrials.gov fallback also failed: {ct_error}")
         
         return downloaded_count
 
