@@ -89,6 +89,7 @@ def extract_images_from_pdf(
         logger.info(f"PDF has {total_pages} pages")
         
         image_counter = 0
+        seen_xrefs = set()  # Deduplicate: same xref = same image data, skip re-extraction
         
         # Iterate through pages
         for page_num in range(total_pages):
@@ -98,13 +99,25 @@ def extract_images_from_pdf(
             image_list = page.get_images(full=True)
             
             if image_list:
-                logger.info(f"Page {page_num + 1}: Found {len(image_list)} images")
+                unique_xrefs = len({img[0] for img in image_list})
+                logger.info(
+                    f"Page {page_num + 1}: Found {len(image_list)} image refs "
+                    f"({unique_xrefs} unique xrefs)"
+                )
             
             # Extract each image
             for img_index, img_info in enumerate(image_list):
                 try:
                     # Get image reference
                     xref = img_info[0]
+                    
+                    # Skip already-extracted images (duplicate xrefs on same or prior pages)
+                    if xref in seen_xrefs:
+                        logger.debug(
+                            f"Skipping duplicate xref {xref} on page {page_num + 1}"
+                        )
+                        continue
+                    seen_xrefs.add(xref)
                     
                     # Extract image data
                     base_image = pdf_document.extract_image(xref)

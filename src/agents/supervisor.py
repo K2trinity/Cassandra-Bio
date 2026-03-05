@@ -646,9 +646,9 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
         # Extract project name from query if not set
         project_name = state.get("project_name")
         if not project_name:
-            # Simple extraction: first capitalized word sequence
-            words = state["user_query"].split()
-            project_name = " ".join(words[:3]) if words else "Unknown"
+            # Use the full user query so the report title/filename reflects the actual request
+            # (previously only first 3 words were used, causing stale CRISPR titles)
+            project_name = state["user_query"].strip() if state.get("user_query") else "Unknown"
         
         # Validate minimum data requirements
         if harvested_count == 0:
@@ -949,6 +949,62 @@ def run_bio_short_seller(user_query: str, pdf_paths: list = None) -> Dict[str, A
         
     except Exception as e:
         logger.error(f"\n❌ Workflow execution failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def stream_bio_short_seller(
+    user_query: str,
+    pdf_paths: list = None,
+    progress_callback=None,
+):
+    """
+    Execute the Bio-Short-Seller workflow using LangGraph streaming mode.
+    Yields (node_name, partial_state) tuples as each node completes.
+    Optionally calls progress_callback(node_name, partial_state) for live updates.
+
+    Usage in app.py::
+
+        for node_name, state in stream_bio_short_seller(query):
+            emit_progress(node_name, ...)   # WebSocket push
+        final_state = state  # last emitted state = final
+    """
+    logger.info("🚀 [stream] BIO-SHORT-SELLER WORKFLOW INITIATED")
+
+    app = compile_workflow()
+
+    initial_state: AgentState = {
+        "user_query": user_query,
+        "pdf_paths": pdf_paths or [],
+        "harvested_data": [],
+        "text_evidence": [],
+        "forensic_evidence": [],
+        "final_report": None,
+        "project_name": None,
+        "status": "initialized",
+        "errors": [],
+    }
+
+    logger.info(f"📋 Query: {user_query}")
+    logger.info(f"📄 Pre-loaded PDFs: {len(pdf_paths or [])}")
+
+    try:
+        full_state = dict(initial_state)
+        for event in app.stream(initial_state, stream_mode="updates"):
+            for node_name, partial_state in event.items():
+                # Merge partial update into full accumulated state
+                for k, v in partial_state.items():
+                    if isinstance(v, list) and isinstance(full_state.get(k), list):
+                        full_state[k] = full_state[k] + v  # append list fields
+                    else:
+                        full_state[k] = v
+                logger.info(f"✅ Node completed: {node_name}")
+                if progress_callback:
+                    progress_callback(node_name, full_state)
+                yield node_name, full_state
+    except Exception as e:
+        logger.error(f"❌ Streaming workflow failed: {e}")
         import traceback
         traceback.print_exc()
         raise

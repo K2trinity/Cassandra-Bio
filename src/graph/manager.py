@@ -68,7 +68,9 @@ class GraphManager:
             from neo4j import basic_auth
             self.driver = GraphDatabase.driver(
                 self.uri,
-                auth=basic_auth(self.user, self.password)
+                auth=basic_auth(self.user, self.password),
+                connection_timeout=5,       # 5s max — avoids blocking analysis thread
+                max_connection_lifetime=60, # recycle idle connections quickly
             )
             self.verify_connection()
             logger.success(f"✅ Connected to Neo4j Knowledge Graph at {self.uri}")
@@ -277,6 +279,259 @@ class GraphManager:
             logger.error(f"Failed to query drug risk history: {e}")
             return []
     
+    def add_analysis_task(
+        self,
+        task_id: str,
+        query: str,
+        drug_name: str = "",
+        created_at: str = ""
+    ) -> bool:
+        """Create/merge an Analysis task node."""
+        if not self.driver:
+            return False
+        try:
+            q = """
+            MERGE (a:Analysis {task_id: $task_id})
+            SET a.query     = $query,
+                a.drug_name = $drug_name,
+                a.created_at = $created_at
+            RETURN a.task_id
+            """
+            with self.driver.session() as session:
+                session.run(q, task_id=task_id, query=query,
+                            drug_name=drug_name, created_at=created_at)
+            logger.info(f"📊 Graph: Task node created [{task_id}]")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add analysis task: {e}")
+            return False
+
+    def link_drug_to_task(self, task_id: str, drug: str) -> bool:
+        """Link a Drug node to an Analysis task."""
+        if not self.driver:
+            return False
+        try:
+            q = """
+            MERGE (a:Analysis {task_id: $task_id})
+            MERGE (d:Drug {name: $drug})
+            MERGE (a)-[:ANALYZED]->(d)
+            """
+            with self.driver.session() as session:
+                session.run(q, task_id=task_id, drug=drug)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to link drug to task: {e}")
+            return False
+
+    def add_risk_signal_with_task(
+        self,
+        task_id: str,
+        drug: str,
+        risk: str,
+        source: str = "",
+        target: str = "",
+        metadata: Optional[Dict] = None
+    ) -> bool:
+        """Add a risk signal linked to a specific analysis task."""
+        if not self.driver:
+            return False
+        try:
+            q = """
+            MERGE (a:Analysis {task_id: $task_id})
+            MERGE (d:Drug {name: $drug})
+            MERGE (r:Risk {name: $risk})
+            MERGE (a)-[:ANALYZED]->(d)
+            MERGE (d)-[:HAS_RISK]->(r)
+            MERGE (a)-[:FOUND_RISK]->(r)
+            """
+            params: Dict = dict(task_id=task_id, drug=drug, risk=risk)
+            if source:
+                q += "\nMERGE (s:Source {id: $source})\nMERGE (s)-[:REPORTS_FAILURE]->(d)\nMERGE (a)-[:USED_SOURCE]->(s)"
+                params["source"] = source
+            if target:
+                q += "\nMERGE (t:Target {name: $tgt})\nMERGE (d)-[:TARGETS]->(t)"
+                params["tgt"] = target
+            if metadata:
+                q += "\nSET r += $meta"
+                params["meta"] = metadata
+            with self.driver.session() as session:
+                session.run(q, **params)
+            logger.info(f"📊 Graph: [{task_id}] {drug} → {risk}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add risk signal with task: {e}")
+            return False
+
+    def add_rich_entities(
+        self,
+        task_id: str,
+        drug: str,
+        entities: List[Dict]
+    ) -> int:
+        """
+        批量写入多类型实体节点到知识图谱，大幅增加关键词节点数量。
+
+        entities 每项格式:
+        {
+          "label": "Disease"|"Mechanism"|"AdverseEvent"|"Endpoint"|"Gene"|"Pathway"|"Keyword",
+          "name":  "<实体名称>",
+          "rel":   "<关系类型>",      # 可选，默认按 label 自动推断
+          "props": {...}              # 可选额外属性
+        }
+        Returns: 成功写入的节点数
+        """
+        if not self.driver:
+            return 0
+
+        # 关系类型映射
+        _rel_map = {
+            "Disease":      "TREATS",
+            "Mechanism":    "HAS_MECHANISM",
+            "AdverseEvent": "CAUSES_AE",
+            "Endpoint":     "HAS_ENDPOINT",
+            "Gene":         "TARGETS_GENE",
+            "Pathway":      "AFFECTS_PATHWAY",
+            "Keyword":      "ASSOCIATED_WITH",
+            "Target":       "TARGETS",
+        }
+
+        written = 0
+        with self.driver.session() as session:
+            for ent in entities:
+                label = ent.get("label", "Keyword")
+                name  = (ent.get("name") or "").strip()[:200]
+                if not name:
+                    continue
+                rel   = ent.get("rel") or _rel_map.get(label, "ASSOCIATED_WITH")
+                props = ent.get("props") or {}
+                try:
+                    q = f"""
+                    MERGE (a:Analysis {{task_id: $task_id}})
+                    MERGE (d:Drug {{name: $drug}})
+                    MERGE (a)-[:ANALYZED]->(d)
+                    MERGE (e:{label} {{name: $name}})
+                    MERGE (d)-[:{rel}]->(e)
+                    MERGE (a)-[:FOUND_ENTITY]->(e)
+                    """
+                    params: Dict = dict(task_id=task_id, drug=drug, name=name)
+                    if props:
+                        q += "\nSET e += $props"
+                        params["props"] = props
+                    session.run(q, **params)
+                    written += 1
+                except Exception as e:
+                    logger.warning(f"Graph entity write failed [{label}:{name}]: {e}")
+        logger.info(f"📊 Graph: [{task_id}] +{written} rich entity nodes")
+        return written
+
+    def get_all_tasks(self) -> List[Dict]:
+        """Return all Analysis task nodes ordered by created_at desc."""
+        if not self.driver:
+            return []
+        try:
+            q = """
+            MATCH (a:Analysis)
+            OPTIONAL MATCH (a)-[:ANALYZED]->(d:Drug)
+            OPTIONAL MATCH (a)-[:FOUND_RISK]->(r:Risk)
+            RETURN a.task_id   AS task_id,
+                   a.query     AS query,
+                   a.drug_name AS drug_name,
+                   a.created_at AS created_at,
+                   count(DISTINCT d) AS drug_count,
+                   count(DISTINCT r) AS risk_count
+            ORDER BY a.created_at DESC
+            """
+            with self.driver.session() as session:
+                return [dict(rec) for rec in session.run(q)]
+        except Exception as e:
+            logger.error(f"Failed to get tasks: {e}")
+            return []
+
+    def get_task_graph(self, task_id: str) -> Dict:
+        """Return nodes + links for a specific analysis task."""
+        if not self.driver:
+            return {"nodes": [], "links": []}
+        try:
+            q = """
+            MATCH (a:Analysis {task_id: $task_id})
+            OPTIONAL MATCH (a)-[r1]->(n1)
+            OPTIONAL MATCH (n1)-[r2]->(n2)
+            WITH collect(DISTINCT a) + collect(DISTINCT n1) + collect(DISTINCT n2) AS all_nodes,
+                 collect(DISTINCT r1) + collect(DISTINCT r2) AS all_rels
+            UNWIND all_nodes AS n
+            WITH collect(DISTINCT n) AS nodes, all_rels
+            UNWIND all_rels AS r
+            RETURN nodes, collect(DISTINCT r) AS rels
+            """
+            nodes, links = [], []
+            node_ids: set = set()
+            with self.driver.session() as session:
+                rec = session.run(q, task_id=task_id).single()
+                if not rec:
+                    return {"nodes": [], "links": []}
+                for node in rec["nodes"]:
+                    if node is None:
+                        continue
+                    nid = str(node.id)
+                    if nid not in node_ids:
+                        node_ids.add(nid)
+                        lbl = list(node.labels)[0] if node.labels else "Unknown"
+                        nodes.append({
+                            "id": nid,
+                            "label": lbl,
+                            "name": node.get("name") or node.get("task_id") or node.get("id") or nid,
+                            "properties": dict(node)
+                        })
+                for rel in rec["rels"]:
+                    if rel is None:
+                        continue
+                    links.append({
+                        "source": str(rel.start_node.id),
+                        "target": str(rel.end_node.id),
+                        "type": rel.type,
+                        "properties": dict(rel)
+                    })
+            return {"nodes": nodes, "links": links}
+        except Exception as e:
+            logger.error(f"Failed to get task graph: {e}")
+            return {"nodes": [], "links": []}
+
+    def get_global_graph_data(self, limit: int = 200) -> Dict:
+        """Return all nodes and relationships (capped at limit)."""
+        if not self.driver:
+            return {"nodes": [], "links": []}
+        try:
+            q = f"""
+            MATCH (n)-[r]->(m)
+            RETURN n, r, m
+            LIMIT {limit}
+            """
+            nodes, links = [], []
+            node_ids: set = set()
+            with self.driver.session() as session:
+                for rec in session.run(q):
+                    for node in (rec["n"], rec["m"]):
+                        nid = str(node.id)
+                        if nid not in node_ids:
+                            node_ids.add(nid)
+                            lbl = list(node.labels)[0] if node.labels else "Unknown"
+                            nodes.append({
+                                "id": nid,
+                                "label": lbl,
+                                "name": node.get("name") or node.get("task_id") or node.get("id") or nid,
+                                "properties": dict(node)
+                            })
+                    rel = rec["r"]
+                    links.append({
+                        "source": str(rel.start_node.id),
+                        "target": str(rel.end_node.id),
+                        "type": rel.type
+                    })
+            return {"nodes": nodes, "links": links}
+        except Exception as e:
+            logger.error(f"Failed to get global graph: {e}")
+            return {"nodes": [], "links": []}
+
     def __enter__(self):
         """Context manager entry."""
         return self

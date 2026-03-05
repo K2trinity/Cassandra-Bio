@@ -555,40 +555,55 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             
             sections = [
                 {
+                    "slug": "drug_profile",
+                    "title": "Drug Profile & Developer Overview",
+                    "outline": (
+                        "Provide a structured overview of the drug/therapy under investigation. "
+                        "MUST include: (1) Drug/compound name, (2) Developer / sponsor company name "
+                        "(the pharmaceutical or biotech company responsible for developing this drug), "
+                        "(3) Mechanism of action, (4) Molecular target, "
+                        "(5) Current development stage (Phase I/II/III, Approved, etc.), "
+                        "(6) Therapeutic indication and patient population, "
+                        "(7) Market context and key competitors. "
+                        "The developer company name is MANDATORY and must appear in the opening paragraph."
+                    ),
+                    "order": 1
+                },
+                {
                     "slug": "executive_summary",
                     "title": "Executive Summary",
                     "outline": "High-level overview of findings, key risks, and recommendation",
-                    "order": 1
+                    "order": 2
                 },
                 {
                     "slug": "scientific_rationale",
                     "title": "Scientific Rationale",
                     "outline": "Mechanism of action, therapeutic potential, and scientific basis",
-                    "order": 2
+                    "order": 3
                 },
                 {
                     "slug": "dark_data_synthesis",
                     "title": "Dark Data Analysis",
                     "outline": "Buried negative results, statistical issues, and hidden concerns",
-                    "order": 3
+                    "order": 4
                 },
                 {
                     "slug": "forensic_findings",
                     "title": "Forensic Audit Results",
                     "outline": "Image manipulation findings and data integrity concerns",
-                    "order": 4
+                    "order": 5
                 },
                 {
                     "slug": "risk_scoring",
                     "title": "Risk Assessment",
                     "outline": "Quantitative risk scoring and investment implications",
-                    "order": 5
+                    "order": 6
                 },
                 {
                     "slug": "final_recommendation",
                     "title": "Investment Recommendation",
                     "outline": "Final verdict and actionable recommendations",
-                    "order": 6
+                    "order": 7
                 }
             ]
             
@@ -625,7 +640,15 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
                 "total_files": total_files,
                 "risk_override": risk_override,
                 "analysis_status": analysis_status,
-                "failed_files": failed_files or []
+                "failed_files": failed_files or [],
+                # 强制要求：每章节的生成必须明确提到药物开发公司
+                "require_sponsor_company": True,
+                "sponsor_company_instruction": (
+                    "MANDATORY: Every section that discusses clinical trials, safety data, "
+                    "regulatory submissions, or scientific findings MUST explicitly name the "
+                    "developer/sponsor company (the pharmaceutical or biotech company that "
+                    "developed or is developing this drug). Do NOT omit the company name."
+                )
             }
             
             logger.success("Context prepared")
@@ -977,7 +1000,16 @@ Generate JSON output with these sections:
 8. **red_flags_list**: Bullet list of top 5-10 critical red flags
 9. **decision_factors**: Key factors for investment decision
 10. **scientific_rationale**: Analysis of the drug's mechanism and biological plausibility
-11. **clinical_trial_analysis**: Detailed analysis of failed/terminated trials
+11. **clinical_trial_analysis**: Detailed analysis of failed/terminated trials.
+   For EACH trial discussed, you MUST include:
+   - NCT Number (e.g., NCT01234567) as a citation [Trial: NCTxxxxxxx]
+   - Study Title
+   - Study URL: https://clinicaltrials.gov/study/NCTxxxxxxx
+   - Acronym (if available)
+   - Study Status (TERMINATED / SUSPENDED / WITHDRAWN)
+   - Primary Outcome Measures
+   - Sponsor / Developer company name
+   Failure to cite NCT Numbers will cause report rejection.
 12. **dark_data_synthesis**: Analysis of buried negative results from supplementary materials
     🚨 IF no evidence text available: State "Data extraction failed - unable to analyze"
 13. **forensic_findings**: Assessment of suspicious images and their implications
@@ -1252,9 +1284,27 @@ Generate high-quality content NOW.
         summary_lines.append(f"  - Failed trials: {len(failed_trials)}")
         
         for trial in failed_trials[:3]:  # Show top 3
+            nct = trial.get('nct_id') or trial.get('metadata', {}).get('nct_id', 'Unknown')
+            title = trial.get('title', 'Unknown')
+            sponsor = trial.get('sponsor') or trial.get('metadata', {}).get('sponsor', 'Unknown')
+            why_stopped = trial.get('why_stopped') or trial.get('metadata', {}).get('why_stopped', 'Unknown')
+            primary_outcomes = trial.get('primary_outcome_measures') or trial.get('metadata', {}).get('primary_outcome_measures', 'N/A')
+            status = trial.get('status', 'Unknown')
+            url = trial.get('url') or trial.get('link', '')
             summary_lines.append(
-                f"    * {trial.get('title', 'Unknown')}: {trial.get('metadata', {}).get('why_stopped', 'Unknown')}"
+                f"    * [{nct}] {title}"
             )
+            summary_lines.append(
+                f"      Status: {status} | Sponsor: {sponsor}"
+            )
+            summary_lines.append(
+                f"      Why Stopped: {why_stopped}"
+            )
+            summary_lines.append(
+                f"      Primary Outcomes: {primary_outcomes[:200]}"
+            )
+            if url:
+                summary_lines.append(f"      URL: {url}")
         
         # Evidence data summary
         summary_lines.append(f"\n**DARK DATA:** {len(report_data.evidence_results)} risk signals")
@@ -1875,18 +1925,40 @@ Generate high-quality content NOW.
         # 1. Render Failed Trials section
         failed_trials_html = ""
         for idx, trial in enumerate(failed_trials[:5], 1):  # Top 5
-            failed_trials_html += f"""
-#### Trial {idx}: {trial.get('nct_id', 'N/A')} - {trial.get('title', 'Unknown')}
+            nct = trial.get('nct_id') or trial.get('metadata', {}).get('nct_id', 'N/A')
+            trial_title = trial.get('title', 'Unknown')
+            trial_url = trial.get('url') or trial.get('link') or f"https://clinicaltrials.gov/study/{nct}"
+            acronym = trial.get('acronym') or trial.get('metadata', {}).get('acronym', 'N/A')
+            study_status = trial.get('status') or trial.get('study_status', 'N/A')
+            phase = trial.get('phase') or trial.get('metadata', {}).get('phase', 'N/A')
+            why_stopped = trial.get('why_stopped') or trial.get('snippet', 'Not disclosed')
+            sponsor = trial.get('sponsor') or trial.get('metadata', {}).get('sponsor', 'N/A')
+            primary_outcomes = trial.get('primary_outcome_measures') or trial.get('metadata', {}).get('primary_outcome_measures', 'Not specified')
+            enrollment = trial.get('enrollment') or trial.get('metadata', {}).get('enrollment', 'N/A')
+            start_date = trial.get('start_date') or trial.get('metadata', {}).get('start_date', 'N/A')
+            completion_date = trial.get('completion_date') or trial.get('date', 'N/A')
 
-**Status:** {trial.get('status', 'TERMINATED')}  
-**Phase:** {trial.get('phase', 'N/A')}  
-**Termination Reason:** {trial.get('why_stopped', 'Not disclosed')}  
-**Sponsor:** {trial.get('sponsor', 'N/A')}
+            failed_trials_html += f"""
+#### Trial {idx}: [{nct}]({trial_url}) — {trial_title}
+
+| Field | Value |
+|---|---|
+| **NCT Number** | [{nct}]({trial_url}) |
+| **Study Title** | {trial_title} |
+| **Acronym** | {acronym} |
+| **Study Status** | {study_status} |
+| **Phase** | {phase} |
+| **Sponsor (Developer)** | {sponsor} |
+| **Primary Outcome Measures** | {primary_outcomes} |
+| **Enrollment** | {enrollment} |
+| **Start Date** | {start_date} |
+| **Completion Date** | {completion_date} |
+| **Study URL** | [{trial_url}]({trial_url}) |
+
+**Termination Reason:** {why_stopped}
 
 **Red Flag Analysis:**
 {trial.get('red_flag_analysis', 'Safety or efficacy concerns led to early termination.')}
-
-**Source:** [ClinicalTrials.gov](https://clinicaltrials.gov/study/{trial.get('nct_id', '')})
 
 ---
 """

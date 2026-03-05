@@ -19,7 +19,10 @@ numpy>=1.24.0          # Scientific Computing
 
 # ===== Report Generation & PDF Export =====
 markdown>=3.5.0        # Markdown to HTML Conversion
-pdfkit>=1.0.0          # HTML to PDF Conversion (requires wkhtmltopdf)
+pdfkit>=1.0.0          # HTML to PDF Conversion (fallback, requires wkhtmltopdf)
+weasyprint>=60.0       # Primary PDF renderer — CSS Paged Media standard (CJK + SVG + @page)
+reportlab>=4.0.0       # Last-resort PDF fallback (pure Python, no system deps)
+flask-cors>=4.0.0      # CORS support for API endpoints
 
 # ===== Knowledge Graph Database =====
 neo4j>=5.15.0          # Neo4j Driver for Graph DB

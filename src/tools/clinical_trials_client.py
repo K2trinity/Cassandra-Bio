@@ -44,19 +44,37 @@ def search_failed_trials(
         retries: Number of retry attempts on network failure (default: 3)
     
     Returns:
-        List of dictionaries containing:
+        List of dictionaries containing all key ClinicalTrials.gov fields:
         - nct_id: ClinicalTrials.gov identifier (e.g., "NCT01234567")
-        - title: Official study title
+        - title: Brief study title
+        - official_title: Official full study title
+        - url: Link to ClinicalTrials.gov page
+        - acronym: Study acronym (if any)
+        - other_ids: Secondary / registry IDs
         - status: Overall study status
         - why_stopped: Reason for termination/suspension (if available)
+        - brief_summary: Brief description of the study
+        - has_results: Whether results are posted ("True"/"False")
         - conditions: Medical conditions being studied
         - interventions: Drugs/treatments being tested
-        - phase: Clinical trial phase (e.g., "Phase 2", "Phase 3")
+        - primary_outcome_measures: Primary endpoint(s)
+        - secondary_outcome_measures: Secondary endpoint(s)
+        - other_outcome_measures: Other endpoints
+        - sponsor: Lead sponsor (developer company) name
+        - collaborators: Co-sponsors / collaborators
+        - funder_type: Funding class (INDUSTRY / NIH / OTHER_GOV / etc.)
+        - sex: Eligible sex (ALL / MALE / FEMALE)
+        - age: Eligible age range
+        - phase: Clinical trial phase(s)
         - enrollment: Number of participants
+        - study_type: Interventional / Observational / etc.
         - start_date: Study start date
-        - completion_date: Study completion/termination date
-        - sponsor: Primary study sponsor
-        - url: Link to ClinicalTrials.gov page
+        - primary_completion_date: Primary completion date
+        - completion_date: Study completion date
+        - first_posted: Date first posted on ClinicalTrials.gov
+        - results_first_posted: Date results first posted
+        - last_update_posted: Date of last update
+        - study_documents: List of study documents (protocols, ICF, etc.)
     
     Example:
         >>> trials = search_failed_trials("pembrolizumab", max_results=10)
@@ -80,8 +98,17 @@ def search_failed_trials(
         "filter.overallStatus": ",".join(include_statuses),
         "pageSize": min(max_results, 1000),  # API limit
         "format": "json",
-        "fields": "NCTId,BriefTitle,OverallStatus,WhyStopped,Condition,InterventionName,"
-                  "Phase,EnrollmentCount,StartDate,CompletionDate,LeadSponsorName"
+        "fields": (
+            "NCTId,BriefTitle,OfficialTitle,Acronym,OverallStatus,BriefSummary,HasResults,"
+            "Condition,InterventionName,"
+            "PrimaryOutcomeMeasure,SecondaryOutcomeMeasure,OtherOutcomeMeasure,"
+            "Phase,EnrollmentCount,StudyType,"
+            "StartDate,PrimaryCompletionDate,CompletionDate,"
+            "StudyFirstPostDate,ResultsFirstPostDate,LastUpdatePostDate,"
+            "LeadSponsorName,LeadSponsorClass,CollaboratorName,"
+            "Sex,MinimumAge,MaximumAge,"
+            "WhyStopped,SecondaryId,LargeDocLabel"
+        )
     }
     
     for attempt in range(retries):
@@ -127,12 +154,23 @@ def search_failed_trials(
 def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
     """
     Parse a single clinical trial record from the ClinicalTrials.gov API response.
-    
+
+    Extracts all key data fields including:
+    - NCT Number, Study Title, Study URL, Acronym
+    - Study Status, Brief Summary, Study Results
+    - Conditions, Interventions
+    - Primary / Secondary / Other Outcome Measures
+    - Sponsor, Collaborators, Funder Type
+    - Sex, Age, Phases, Enrollment, Study Type
+    - Start Date, Primary Completion Date, Completion Date
+    - First Posted, Results First Posted, Last Update Posted
+    - Study Documents, Other IDs
+
     Args:
         study: Study record from the API JSON response
-    
+
     Returns:
-        Dictionary with trial metadata or None if parsing fails
+        Dictionary with full trial metadata or None if parsing fails
     """
     try:
         protocol_section = study.get("protocolSection", {})
@@ -142,69 +180,150 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
         interventions_module = protocol_section.get("armsInterventionsModule", {})
         design_module = protocol_section.get("designModule", {})
         sponsor_module = protocol_section.get("sponsorCollaboratorsModule", {})
-        
-        # NCT ID
+        description_module = protocol_section.get("descriptionModule", {})
+        outcomes_module = protocol_section.get("outcomesModule", {})
+        eligibility_module = protocol_section.get("eligibilityModule", {})
+        document_section = study.get("documentSection", {})
+
+        # ── Identification ──────────────────────────────────────────────────
         nct_id = identification_module.get("nctId", "Unknown")
-        
-        # Title
         title = identification_module.get("briefTitle", "No title available")
-        
-        # Status
+        official_title = identification_module.get("officialTitle", title)
+        acronym = identification_module.get("acronym", "N/A")
+
+        # Other IDs (secondary / registry IDs)
+        secondary_ids_raw = identification_module.get("secondaryIdInfos", [])
+        other_ids = (
+            ", ".join(s.get("id", "") for s in secondary_ids_raw if s.get("id"))
+            or "N/A"
+        )
+
+        # Study URL
+        url = f"https://clinicaltrials.gov/study/{nct_id}"
+
+        # ── Status & Description ─────────────────────────────────────────────
         status = status_module.get("overallStatus", "Unknown")
-        
-        # 🔥 Critical: Why was the study stopped?
         why_stopped = status_module.get("whyStopped", "Reason not provided")
-        
-        # Conditions being studied
+        brief_summary = description_module.get("briefSummary", "Not available")
+        has_results = str(study.get("hasResults", False))
+
+        # ── Conditions ───────────────────────────────────────────────────────
         conditions = conditions_module.get("conditions", [])
         conditions_str = ", ".join(conditions) if conditions else "Not specified"
-        
-        # Interventions (drugs/treatments)
+
+        # ── Interventions ────────────────────────────────────────────────────
         interventions = interventions_module.get("interventions", [])
-        intervention_names = [
-            interv.get("name", "Unknown") 
-            for interv in interventions
-        ]
+        intervention_names = [i.get("name", "Unknown") for i in interventions]
         interventions_str = ", ".join(intervention_names) if intervention_names else "Not specified"
-        
-        # Phase
-        phases = design_module.get("phases", [])
-        phase = phases[0] if phases else "Not specified"
-        
-        # Enrollment
-        enrollment_info = design_module.get("enrollmentInfo", {})
-        enrollment = enrollment_info.get("count", "Unknown")
-        
-        # Dates
-        start_date_struct = status_module.get("startDateStruct", {})
-        start_date = start_date_struct.get("date", "Unknown")
-        
-        completion_date_struct = status_module.get("completionDateStruct", {}) or \
-                                 status_module.get("primaryCompletionDateStruct", {})
-        completion_date = completion_date_struct.get("date", "Unknown")
-        
-        # Sponsor
+
+        # ── Outcome Measures ─────────────────────────────────────────────────
+        primary_outcomes = outcomes_module.get("primaryOutcomes", [])
+        primary_outcome_measures = (
+            "; ".join(o.get("measure", "") for o in primary_outcomes if o.get("measure"))
+            or "Not specified"
+        )
+
+        secondary_outcomes = outcomes_module.get("secondaryOutcomes", [])
+        secondary_outcome_measures = (
+            "; ".join(o.get("measure", "") for o in secondary_outcomes if o.get("measure"))
+            or "Not specified"
+        )
+
+        other_outcomes = outcomes_module.get("otherOutcomes", [])
+        other_outcome_measures = (
+            "; ".join(o.get("measure", "") for o in other_outcomes if o.get("measure"))
+            or "Not specified"
+        )
+
+        # ── Sponsor & Collaborators ──────────────────────────────────────────
         lead_sponsor = sponsor_module.get("leadSponsor", {})
         sponsor = lead_sponsor.get("name", "Unknown sponsor")
-        
-        # URL
-        url = f"https://clinicaltrials.gov/study/{nct_id}"
-        
+        funder_type = lead_sponsor.get("class", "N/A")  # e.g. INDUSTRY / NIH / OTHER
+
+        collaborators = sponsor_module.get("collaborators", [])
+        collaborators_str = (
+            ", ".join(c.get("name", "") for c in collaborators if c.get("name"))
+            or "None"
+        )
+
+        # ── Eligibility ───────────────────────────────────────────────────────
+        sex = eligibility_module.get("sex", "All")
+        min_age = eligibility_module.get("minimumAge", "N/A")
+        max_age = eligibility_module.get("maximumAge", "N/A")
+        age = (
+            f"{min_age} to {max_age}"
+            if (min_age != "N/A" or max_age != "N/A")
+            else "Not specified"
+        )
+
+        # ── Design ────────────────────────────────────────────────────────────
+        phases = design_module.get("phases", [])
+        phase = ", ".join(phases) if phases else "Not specified"
+
+        enrollment_info = design_module.get("enrollmentInfo", {})
+        enrollment = str(enrollment_info.get("count", "Unknown"))
+
+        study_type = design_module.get("studyType", "Not specified")
+
+        # ── Dates ─────────────────────────────────────────────────────────────
+        start_date = status_module.get("startDateStruct", {}).get("date", "Unknown")
+        primary_completion_date = status_module.get("primaryCompletionDateStruct", {}).get("date", "Unknown")
+        completion_date = status_module.get("completionDateStruct", {}).get("date", "Unknown")
+        first_posted = status_module.get("studyFirstPostDateStruct", {}).get("date", "Unknown")
+        results_first_posted = status_module.get("resultsFirstPostDateStruct", {}).get("date", "N/A")
+        last_update_posted = status_module.get("lastUpdatePostDateStruct", {}).get("date", "Unknown")
+
+        # ── Study Documents ────────────────────────────────────────────────────
+        large_doc_module = document_section.get("largeDocumentModule", {})
+        large_docs = large_doc_module.get("largeDocs", [])
+        study_documents = (
+            "; ".join(doc.get("label", "") for doc in large_docs if doc.get("label"))
+            or "None"
+        )
+
         return {
+            # Core identification
             "nct_id": nct_id,
             "title": title,
+            "official_title": official_title,
+            "url": url,
+            "acronym": acronym,
+            "other_ids": other_ids,
+            # Status
             "status": status,
             "why_stopped": why_stopped,
+            # Description & results
+            "brief_summary": brief_summary,
+            "has_results": has_results,
+            # Conditions & interventions
             "conditions": conditions_str,
             "interventions": interventions_str,
-            "phase": phase,
-            "enrollment": str(enrollment),
-            "start_date": start_date,
-            "completion_date": completion_date,
+            # Outcome measures
+            "primary_outcome_measures": primary_outcome_measures,
+            "secondary_outcome_measures": secondary_outcome_measures,
+            "other_outcome_measures": other_outcome_measures,
+            # Sponsor & funding
             "sponsor": sponsor,
-            "url": url,
+            "collaborators": collaborators_str,
+            "funder_type": funder_type,
+            # Eligibility
+            "sex": sex,
+            "age": age,
+            # Design
+            "phase": phase,
+            "enrollment": enrollment,
+            "study_type": study_type,
+            # Dates
+            "start_date": start_date,
+            "primary_completion_date": primary_completion_date,
+            "completion_date": completion_date,
+            "first_posted": first_posted,
+            "results_first_posted": results_first_posted,
+            "last_update_posted": last_update_posted,
+            # Documents
+            "study_documents": study_documents,
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to parse clinical trial record: {e}")
         return None

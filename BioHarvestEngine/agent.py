@@ -404,7 +404,7 @@ Only respond with valid JSON, no additional text."""
         # Process failed clinical trials
         for trial in failed_trials:
             nct_id = trial.get('nct_id')
-            
+
             evidence_candidates.append({
                 'title': trial.get('title', 'No title'),
                 'source': 'ClinicalTrials.gov',
@@ -412,13 +412,65 @@ Only respond with valid JSON, no additional text."""
                 'link': trial.get('url', ''),
                 'status': trial.get('status', 'UNKNOWN'),
                 'date': trial.get('completion_date', 'Unknown'),
+                # ── Top-level fields for direct template access ──────────────
+                'nct_id': nct_id,
+                'url': trial.get('url', ''),
+                'acronym': trial.get('acronym', 'N/A'),
+                'study_status': trial.get('status', 'N/A'),
+                'brief_summary': trial.get('brief_summary', 'N/A'),
+                'has_results': trial.get('has_results', 'False'),
+                'phase': trial.get('phase', 'N/A'),
+                'why_stopped': trial.get('why_stopped', 'N/A'),
+                'interventions': trial.get('interventions', 'N/A'),
+                'conditions': trial.get('conditions', 'N/A'),
+                'primary_outcome_measures': trial.get('primary_outcome_measures', 'Not specified'),
+                'secondary_outcome_measures': trial.get('secondary_outcome_measures', 'Not specified'),
+                'other_outcome_measures': trial.get('other_outcome_measures', 'Not specified'),
+                'sponsor': trial.get('sponsor', 'N/A'),
+                'collaborators': trial.get('collaborators', 'None'),
+                'funder_type': trial.get('funder_type', 'N/A'),
+                'sex': trial.get('sex', 'N/A'),
+                'age': trial.get('age', 'N/A'),
+                'enrollment': trial.get('enrollment', 'N/A'),
+                'study_type': trial.get('study_type', 'N/A'),
+                'other_ids': trial.get('other_ids', 'N/A'),
+                'start_date': trial.get('start_date', 'N/A'),
+                'primary_completion_date': trial.get('primary_completion_date', 'N/A'),
+                'completion_date': trial.get('completion_date', 'N/A'),
+                'first_posted': trial.get('first_posted', 'N/A'),
+                'results_first_posted': trial.get('results_first_posted', 'N/A'),
+                'last_update_posted': trial.get('last_update_posted', 'N/A'),
+                'study_documents': trial.get('study_documents', 'None'),
+                # ── Structured metadata dict (for programmatic access) ────────
                 'metadata': {
                     'nct_id': nct_id,
+                    'url': trial.get('url', ''),
+                    'acronym': trial.get('acronym', 'N/A'),
+                    'study_status': trial.get('status', 'N/A'),
+                    'brief_summary': trial.get('brief_summary', 'N/A'),
+                    'has_results': trial.get('has_results', 'False'),
                     'phase': trial.get('phase'),
+                    'why_stopped': trial.get('why_stopped', 'N/A'),
                     'interventions': trial.get('interventions'),
                     'conditions': trial.get('conditions'),
+                    'primary_outcome_measures': trial.get('primary_outcome_measures', 'Not specified'),
+                    'secondary_outcome_measures': trial.get('secondary_outcome_measures', 'Not specified'),
+                    'other_outcome_measures': trial.get('other_outcome_measures', 'Not specified'),
                     'sponsor': trial.get('sponsor'),
-                    'enrollment': trial.get('enrollment')
+                    'collaborators': trial.get('collaborators', 'None'),
+                    'funder_type': trial.get('funder_type', 'N/A'),
+                    'sex': trial.get('sex', 'N/A'),
+                    'age': trial.get('age', 'N/A'),
+                    'enrollment': trial.get('enrollment'),
+                    'study_type': trial.get('study_type', 'N/A'),
+                    'other_ids': trial.get('other_ids', 'N/A'),
+                    'start_date': trial.get('start_date'),
+                    'primary_completion_date': trial.get('primary_completion_date', 'N/A'),
+                    'completion_date': trial.get('completion_date'),
+                    'first_posted': trial.get('first_posted', 'N/A'),
+                    'results_first_posted': trial.get('results_first_posted', 'N/A'),
+                    'last_update_posted': trial.get('last_update_posted', 'N/A'),
+                    'study_documents': trial.get('study_documents', 'None'),
                 }
             })
             

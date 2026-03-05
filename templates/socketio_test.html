@@ -45,7 +45,7 @@
         <button onclick="sendTestLogs()">📤 发送测试日志（含图片）</button>
         <button onclick="sendScanningLog()">🔍 发送扫描日志</button>
         <button onclick="sendWarningLog()">⚠️ 发送警告日志</button>
-        <button onclick="window.open('http://localhost:7897', '_blank')">🚀 打开主页面</button>
+        <button onclick="window.open('http://localhost:8765', '_blank')">🚀 打开主页面</button>
     </div>
     
     <div style="margin-top: 30px; padding: 20px; background: #0f172a; border-radius: 8px;">
@@ -60,7 +60,7 @@
 
     <script>
         // 连接到主服务器
-        const socket = io('http://localhost:7897');
+        const socket = io('http://localhost:8765');
         
         socket.on('connect', () => {
             document.getElementById('connectionStatus').textContent = '✅ 已连接';

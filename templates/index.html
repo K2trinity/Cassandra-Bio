@@ -4,7 +4,10 @@
 
 {% block head %}
 <!-- Force Graph Library for Knowledge Graph Visualization -->
-<script src="https://unpkg.com/force-graph@1.43.0/dist/force-graph.min.js"></script>
+<script
+  src="https://cdn.jsdelivr.net/npm/force-graph@1.43.0/dist/force-graph.min.js"
+  onerror="var s=document.createElement('script');s.src='https://unpkg.com/force-graph@1.43.0/dist/force-graph.min.js';document.head.appendChild(s);"
+></script>
 
 <!-- Marked.js for Markdown Rendering -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -88,6 +91,192 @@
         from { transform: translateX(0); opacity: 1; }
         to { transform: translateX(400px); opacity: 0; }
     }
+
+    /* ── Skeleton Screen ── */
+    .skeleton-line {
+        height: 14px;
+        border-radius: 6px;
+        background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+        background-size: 400% 100%;
+        animation: skeleton-shimmer 1.6s infinite;
+        margin-bottom: 10px;
+    }
+    .skeleton-line.short { width: 60%; }
+    .skeleton-line.medium { width: 80%; }
+    .skeleton-line.long { width: 100%; }
+    @keyframes skeleton-shimmer {
+        0%   { background-position: 100% 0; }
+        100% { background-position: -100% 0; }
+    }
+    .skeleton-block {
+        background: #1e293b;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+    }
+
+    /* ── Precise Progress Bar ── */
+    .progress-track {
+        position: relative;
+        width: 100%;
+        height: 6px;
+        background: #1e293b;
+        border-radius: 99px;
+        overflow: hidden;
+        margin-top: 24px;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #059669, #10b981);
+        border-radius: 99px;
+        transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        will-change: width;
+    }
+    /* Shimmer overlay when analysis is running */
+    .progress-fill.running {
+        background: linear-gradient(
+            90deg,
+            #059669 0%,
+            #10b981 30%,
+            #34d399 50%,
+            #10b981 70%,
+            #059669 100%
+        );
+        background-size: 300% 100%;
+        animation: progress-shimmer 1.8s linear infinite;
+    }
+    @keyframes progress-shimmer {
+        0%   { background-position: 100% 0; }
+        100% { background-position: -100% 0; }
+    }
+    /* Glowing dot riding the progress bar tip */
+    .progress-track::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 8px 3px rgba(52,211,153,0.7);
+        left: var(--progress-tip, 0%);
+        transition: left 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        opacity: 0;
+        pointer-events: none;
+    }
+    .progress-track.running::after {
+        opacity: 1;
+        animation: tip-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes tip-pulse {
+        0%, 100% { box-shadow: 0 0 8px 3px rgba(52,211,153,0.7); }
+        50%       { box-shadow: 0 0 14px 6px rgba(52,211,153,0.4); }
+    }
+    /* Elapsed-time counter */
+    #elapsedTimer {
+        font-variant-numeric: tabular-nums;
+        font-size: 0.7rem;
+        color: #64748b;
+        margin-left: auto;
+        min-width: 42px;
+        text-align: right;
+    }
+    .progress-pct-badge {
+        position: absolute;
+        right: 0;
+        top: -22px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #10b981;
+        min-width: 36px;
+        text-align: right;
+        transition: right 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .step-pct-label {
+        font-size: 0.65rem;
+        color: #64748b;
+        margin-top: 2px;
+        font-variant-numeric: tabular-nums;
+    }
+    .step-state-badge {
+        display: inline-block;
+        font-size: 0.6rem;
+        padding: 1px 5px;
+        border-radius: 99px;
+        font-weight: 700;
+        letter-spacing: .04em;
+        margin-top: 3px;
+    }
+    .badge-pending   { background: #1e293b; color: #64748b; }
+    .badge-active    { background: #064e3b; color: #34d399; }
+    .badge-complete  { background: #14532d; color: #86efac; }
+    .badge-error     { background: #4c0519; color: #fca5a5; }
+
+    /* ── Connection Status Bar ── */
+    .conn-bar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 9999;
+        padding: 8px 24px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-align: center;
+        transition: all 0.4s ease;
+        pointer-events: none;
+    }
+    .conn-bar.disconnected {
+        background: #7f1d1d;
+        color: #fecaca;
+    }
+    .conn-bar.reconnecting {
+        background: #78350f;
+        color: #fde68a;
+    }
+    .conn-bar.polling {
+        background: #1e3a5f;
+        color: #93c5fd;
+    }
+    .conn-bar.hidden-bar { display: none; }
+
+    /* ── Error Card ── */
+    .error-card {
+        background: rgba(127,29,29,0.3);
+        border: 1px solid #991b1b;
+        border-radius: 12px;
+        padding: 20px;
+    }
+    .retry-btn {
+        margin-top: 12px;
+        padding: 8px 20px;
+        background: #dc2626;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    .retry-btn:hover { background: #ef4444; }
+
+    /* Cancel button pulse when analysis is running */
+    #cancelBtn:not(.hidden) {
+        animation: cancel-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes cancel-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+        50%       { box-shadow: 0 0 0 6px rgba(239,68,68,0.25); }
+    }
+
+    /* ── Log Virtual Scroll ── */
+    #logContainer {
+        contain: layout style paint;
+        content-visibility: auto;
+    }
+    .log-entry {
+        transform: translateZ(0);
+        will-change: opacity;
+    }
 </style>
 {% endblock %}
 
@@ -138,6 +327,21 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
                             <span>Launch Analysis</span>
+                        </span>
+                    </button>
+                    <!-- Cancel / Reset button (hidden while idle) -->
+                    <button
+                        type="button"
+                        id="cancelBtn"
+                        onclick="cancelAnalysis()"
+                        class="hidden px-6 py-4 bg-red-700 hover:bg-red-600 text-white font-semibold rounded-xl transition-all"
+                        title="Force-reset stuck analysis"
+                    >
+                        <span class="flex items-center space-x-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                            <span>Cancel</span>
                         </span>
                     </button>
                 </div>
@@ -196,10 +400,23 @@
             <div class="relative">
                 <div class="absolute top-5 left-0 right-0 h-0.5 bg-slate-700"></div>
                 <div id="progressBar" class="absolute top-5 left-0 h-0.5 bg-emerald-500 transition-all duration-500" style="width: 0%"></div>
+
+                <!-- Precise percentage progress bar -->
+                <div class="mt-12">
+                  <div class="progress-track" id="progressTrack">
+                    <div id="progressFill" class="progress-fill" style="width:0%"></div>
+                    <span id="progressPctBadge" class="progress-pct-badge">0%</span>
+                  </div>
+                  <div class="flex justify-between text-xs text-gray-500 mt-1">
+                    <span id="progressMsg" class="text-gray-400 italic">Waiting for analysis to start...</span>
+                    <span id="elapsedTimer">00:00</span>
+                    <span id="progressPctText" class="font-bold text-emerald-400">0%</span>
+                  </div>
+                </div>
                 
                 <div class="relative flex justify-between">
                     <!-- Step 1: BioHarvest -->
-                    <div class="step-item flex flex-col items-center" data-step="harvest">
+                    <div class="step-item flex flex-col items-center" data-step="harvest" data-step-pct="0">
                         <div class="w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all">
                             <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
@@ -207,6 +424,8 @@
                         </div>
                         <span class="text-sm text-gray-400 font-medium">Harvesting</span>
                         <span class="text-xs text-gray-600 mt-1">PubMed + Trials</span>
+                        <span class="step-pct-label" id="pct-harvest">—</span>
+                        <span class="step-state-badge badge-pending" id="badge-harvest">PENDING</span>
                     </div>
                     
                     <!-- Step 2: Evidence Mining -->
@@ -218,6 +437,8 @@
                         </div>
                         <span class="text-sm text-gray-400 font-medium">Mining</span>
                         <span class="text-xs text-gray-600 mt-1">Extract Evidence</span>
+                        <span class="step-pct-label" id="pct-mining">—</span>
+                        <span class="step-state-badge badge-pending" id="badge-mining">PENDING</span>
                     </div>
                     
                     <!-- Step 3: Forensic Audit -->
@@ -229,6 +450,8 @@
                         </div>
                         <span class="text-sm text-gray-400 font-medium">Auditing</span>
                         <span class="text-xs text-gray-600 mt-1">Safety Review</span>
+                        <span class="step-pct-label" id="pct-auditing">—</span>
+                        <span class="step-state-badge badge-pending" id="badge-auditing">PENDING</span>
                     </div>
                     
                     <!-- Step 4: Report Writing -->
@@ -240,6 +463,8 @@
                         </div>
                         <span class="text-sm text-gray-400 font-medium">Writing</span>
                         <span class="text-xs text-gray-600 mt-1">Final Report</span>
+                        <span class="step-pct-label" id="pct-writing">—</span>
+                        <span class="step-state-badge badge-pending" id="badge-writing">PENDING</span>
                     </div>
                 </div>
             </div>
@@ -304,6 +529,82 @@
             </div>
         </div>
 
+        <!-- ===== Neo4j Knowledge Graph Panel ===== -->
+        <div id="investigateGraphSection" class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+            <!-- Panel Header -->
+            <div class="px-8 py-5 flex items-center justify-between cursor-pointer select-none hover:bg-slate-700/40 transition-colors" onclick="toggleInvestigateGraph()">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-bold text-white">🧠 Neo4j Knowledge Graph</h3>
+                        <p class="text-sm text-gray-400 mt-0.5">实时生物医药风险网络 · 药物·靶点·不良事件·临床试验全链路可视化</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div id="ig-status-badge" class="flex items-center gap-2 px-3 py-1.5 bg-slate-900/60 rounded-lg border border-slate-600">
+                        <div id="ig-status-dot" class="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                        <span id="ig-status-text" class="text-xs text-gray-400">未加载</span>
+                    </div>
+                    <button
+                        onclick="event.stopPropagation(); loadInvestigateGraph()"
+                        class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-gray-300 text-xs rounded-lg transition-colors border border-slate-600"
+                        title="刷新图谱数据">
+                        🔄 刷新
+                    </button>
+                    <svg id="ig-chevron" class="w-5 h-5 text-gray-400 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Task Selector Bar -->
+            <div id="ig-task-bar" class="hidden px-8 py-3 bg-slate-900/80 border-t border-slate-700 flex items-center gap-3 flex-wrap">
+                <span class="text-xs text-gray-400 whitespace-nowrap">📋 选择图谱视图:</span>
+                <!-- Task buttons injected by JS -->
+                <div id="ig-task-buttons" class="flex items-center gap-2 flex-wrap">
+                    <button
+                        onclick="igSelectView('global')"
+                        id="ig-btn-global"
+                        class="ig-task-btn active px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-emerald-500 bg-emerald-500/20 text-emerald-300">
+                        🌐 全局图谱
+                    </button>
+                    <span id="ig-task-empty" class="text-xs text-gray-600 italic">（运行分析后将在此显示各任务图谱）</span>
+                </div>
+            </div>
+
+            <!-- Legend bar -->
+            <div id="ig-legend" class="hidden px-8 py-3 bg-slate-900/50 border-t border-slate-700 flex flex-wrap gap-4">
+                <span class="text-xs text-gray-500 self-center">节点类型:</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444"></span>Drug</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#f59e0b"></span>Target / Paper</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#dc2626"></span>Risk</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#8b5cf6"></span>AdverseEvent</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#06b6d4"></span>Mechanism</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#a855f7"></span>Disease</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#84cc16"></span>Endpoint</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#f97316"></span>Gene</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#14b8a6"></span>Keyword</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#3b82f6"></span>Source / Trial</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#10b981"></span>Author / Analysis</span>
+                <span class="flex items-center gap-1.5 text-xs text-gray-300"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ec4899"></span>Company</span>
+                <span class="ml-auto text-xs text-gray-500" id="ig-count-label"></span>
+            </div>
+
+            <!-- Graph canvas -->
+            <div id="ig-graph-body" class="hidden">
+                <div
+                    id="investigate-graph-container"
+                    style="height: 540px; position: relative; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);"
+                ></div>
+            </div>
+        </div>
+        <!-- ===== End Neo4j Knowledge Graph Panel ===== -->
+
+
     </div>
 </div>
 </div>
@@ -357,6 +658,49 @@
 </div>
 <!-- End Reports Tab -->
 
+<!-- PDF Preview Modal -->
+<div id="pdfPreviewModal" class="fixed inset-0 z-50 hidden flex flex-col bg-black/90">
+    <div class="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-700 shrink-0">
+        <div class="flex items-center gap-3">
+            <svg class="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"></path>
+            </svg>
+            <span id="pdfPreviewTitle" class="text-white font-semibold text-sm truncate max-w-lg"></span>
+        </div>
+        <div class="flex items-center gap-2">
+            <a id="pdfPreviewDownload" href="#"
+               class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                Download PDF
+            </a>
+            <button onclick="closePdfModal()"
+                    class="px-4 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+                Close
+            </button>
+        </div>
+    </div>
+    <!-- Loading indicator shown while PDF renders -->
+    <div id="pdfPreviewLoading" class="absolute inset-0 flex items-center justify-center pointer-events-none" style="top:52px">
+        <div class="flex flex-col items-center gap-3 text-gray-400">
+            <svg class="w-10 h-10 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span class="text-sm">Generating PDF preview…</span>
+        </div>
+    </div>
+    <iframe id="pdfPreviewFrame"
+            class="flex-1 w-full border-0"
+            style="background:#525659;"
+            onload="document.getElementById('pdfPreviewLoading').style.display='none'">
+    </iframe>
+</div>
+<!-- End PDF Preview Modal -->
+
 <!-- Settings Tab -->
 <div id="settingsTab" class="flex-1 flex flex-col hidden">
     <header class="bg-slate-950 border-b border-slate-800 px-8 py-4">
@@ -397,30 +741,49 @@
             const data = await response.json();
             
             if (data.success && data.reports && data.reports.length > 0) {
-                reportsList.innerHTML = data.reports.map(report => `
+                reportsList.innerHTML = data.reports.map(report => {
+                    const stem = report.filename.replace(/\.[^.]+$/, '');
+                    const sourceType = (report.source_type || 'md').toUpperCase();
+                    const typeColor = {HTML:'blue', PDF:'red', MD:'green', JSON:'yellow'}[sourceType] || 'gray';
+                    return `
                     <div class="bg-slate-800 rounded-xl p-6 border border-slate-700 hover:border-emerald-500 transition-all">
-                        <div class="flex items-start justify-between">
-                            <div class="flex-1">
-                                <h3 class="text-lg font-semibold text-white mb-2">${report.title || report.filename}</h3>
-                                <div class="flex items-center gap-4 text-sm text-gray-400 mb-3">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-${typeColor}-900/50 text-${typeColor}-300 border border-${typeColor}-700/50">
+                                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"></path></svg>
+                                        PDF
+                                    </span>
+                                    <h3 class="text-base font-semibold text-white truncate">${report.title || stem}</h3>
+                                </div>
+                                <div class="flex items-center gap-4 text-xs text-gray-400">
                                     <span>📅 ${new Date(report.timestamp).toLocaleString()}</span>
                                     <span>📄 ${(report.size / 1024).toFixed(1)} KB</span>
                                 </div>
-                                ${report.preview ? `<p class="text-gray-300 text-sm line-clamp-2">${report.preview}</p>` : ''}
+                                ${report.preview ? `<p class="text-gray-400 text-xs mt-2 line-clamp-2">${report.preview}</p>` : ''}
                             </div>
-                            <div class="flex gap-2 ml-4">
-                                <a href="/api/reports/download/${report.filename}" 
-                                   class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                            <div class="flex gap-2 shrink-0">
+                                <a href="/api/reports/download/${report.filename}"
+                                   title="Download as PDF"
+                                   class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                                    </svg>
                                     Download
                                 </a>
-                                <button onclick="viewReport('${report.filename}')" 
-                                        class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors">
+                                <button onclick="viewReport('${report.filename}')"
+                                        title="Preview PDF in browser"
+                                        class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                    </svg>
                                     View
                                 </button>
                             </div>
                         </div>
-                    </div>
-                `).join('');
+                    </div>`;
+                }).join('');
             } else {
                 reportsList.innerHTML = `
                     <div class="text-center text-gray-400 py-12">
@@ -443,10 +806,36 @@
         }
     }
     
-    // View report in modal or new page
-    async function viewReport(filename) {
-        window.open(`/api/reports/view/${filename}`, '_blank');
+    // Open PDF preview modal
+    function viewReport(filename) {
+        const stem = filename.replace(/\.[^.]+$/, '');
+        const modal   = document.getElementById('pdfPreviewModal');
+        const frame   = document.getElementById('pdfPreviewFrame');
+        const title   = document.getElementById('pdfPreviewTitle');
+        const dlBtn   = document.getElementById('pdfPreviewDownload');
+        const loading = document.getElementById('pdfPreviewLoading');
+
+        title.textContent = stem.replace(/_/g, ' ');
+        dlBtn.href = `/api/reports/download/${filename}`;
+        loading.style.display = 'flex';
+        // Use the dedicated inline PDF route so browser renders PDF natively
+        frame.src = `/api/reports/pdf/${filename}`;
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
     }
+
+    function closePdfModal() {
+        const modal = document.getElementById('pdfPreviewModal');
+        const frame = document.getElementById('pdfPreviewFrame');
+        frame.src = 'about:blank';
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+    }
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closePdfModal();
+    });
     
     // ===== Knowledge Graph Visualization =====
     let graphInstance = null;
@@ -611,11 +1000,20 @@
         // Color mapping
         const nodeColors = {
             'Drug': '#ef4444',
+            'Target': '#f59e0b',
+            'Risk': '#dc2626',
+            'Analysis': '#10b981',
+            'Source': '#3b82f6',
+            'Mechanism': '#06b6d4',
+            'Disease': '#a855f7',
+            'AdverseEvent': '#8b5cf6',
+            'Endpoint': '#84cc16',
+            'Gene': '#f97316',
+            'Keyword': '#14b8a6',
+            'Company': '#ec4899',
             'Paper': '#f59e0b',
             'Author': '#10b981',
             'ClinicalTrial': '#3b82f6',
-            'AdverseEvent': '#8b5cf6',
-            'Company': '#ec4899',
             'RegulatoryWarning': '#dc2626',
             'Unknown': '#6b7280'
         };
@@ -709,12 +1107,239 @@
         }, 3000);
     }
     
-    // Load Knowledge Graph
+    // Load Knowledge Graph (stub – kept for tab compatibility)
     function loadGraph() {
-        // Will implement with Neovis.js in next step
-        console.log('Loading knowledge graph...');
+        console.log('Loading knowledge graph (graph tab)...');
     }
-    
+
+    // ===== Investigate-tab inline Neo4j graph =====
+    let _igInstance = null;
+    let _igExpanded = false;
+    let _igCurrentView = 'global';  // 'global' | task_id string
+
+    const _igNodeColors = {
+        'Drug': '#ef4444', 'Target': '#f59e0b', 'Risk': '#dc2626',
+        'Analysis': '#10b981', 'Source': '#3b82f6', 'Trial': '#3b82f6',
+        'Mechanism': '#06b6d4', 'Disease': '#a855f7', 'AdverseEvent': '#8b5cf6',
+        'Endpoint': '#84cc16', 'Gene': '#f97316', 'Keyword': '#14b8a6',
+        'Paper': '#f59e0b', 'Author': '#10b981', 'ClinicalTrial': '#3b82f6',
+        'Company': '#ec4899', 'RegulatoryWarning': '#dc2626', 'Unknown': '#6b7280'
+    };
+
+    function toggleInvestigateGraph() {
+        _igExpanded = !_igExpanded;
+        const body    = document.getElementById('ig-graph-body');
+        const legend  = document.getElementById('ig-legend');
+        const taskBar = document.getElementById('ig-task-bar');
+        const chevron = document.getElementById('ig-chevron');
+        if (_igExpanded) {
+            body.classList.remove('hidden');
+            legend.classList.remove('hidden');
+            taskBar.classList.remove('hidden');
+            chevron.style.transform = 'rotate(180deg)';
+            if (!_igInstance) loadInvestigateGraph();
+            igRefreshTaskList();
+        } else {
+            body.classList.add('hidden');
+            legend.classList.add('hidden');
+            taskBar.classList.add('hidden');
+            chevron.style.transform = '';
+        }
+    }
+
+    // Fetch task list and render buttons
+    async function igRefreshTaskList() {
+        try {
+            const resp = await fetch('/api/graph/tasks');
+            const data = await resp.json();
+            const tasks = data.tasks || [];
+            const btnContainer = document.getElementById('ig-task-buttons');
+            const emptyHint    = document.getElementById('ig-task-empty');
+
+            // Remove previously added task buttons (keep global btn)
+            btnContainer.querySelectorAll('.ig-task-dynamic').forEach(el => el.remove());
+
+            if (tasks.length === 0) {
+                emptyHint && (emptyHint.style.display = '');
+            } else {
+                emptyHint && (emptyHint.style.display = 'none');
+                tasks.forEach(t => {
+                    const btn = document.createElement('button');
+                    btn.className = 'ig-task-btn ig-task-dynamic px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-slate-600 bg-slate-700/50 text-gray-300 hover:border-violet-400 hover:text-violet-300';
+                    const drugLabel = t.drug_name ? `💊 ${t.drug_name}` : '🔬 Task';
+                    const dateLabel = t.created_at ? t.created_at.substring(0, 10) : '';
+                    const riskCnt  = t.risk_count > 0 ? ` · ${t.risk_count} risks` : '';
+                    btn.innerHTML  = `${drugLabel}<span class="opacity-60 ml-1">${dateLabel}${riskCnt}</span>`;
+                    btn.title      = t.query || t.task_id;
+                    btn.onclick    = () => igSelectView(t.task_id);
+                    btn.dataset.taskId = t.task_id;
+                    btnContainer.appendChild(btn);
+                });
+            }
+        } catch(e) {
+            console.warn('[igRefreshTaskList] failed:', e);
+        }
+    }
+
+    // Switch view: 'global' or a task_id
+    async function igSelectView(viewId) {
+        _igCurrentView = viewId;
+
+        // Update button active states
+        document.querySelectorAll('.ig-task-btn').forEach(b => {
+            b.classList.remove('border-emerald-500', 'bg-emerald-500/20', 'text-emerald-300',
+                               'border-violet-500', 'bg-violet-500/20', 'text-violet-300');
+            b.classList.add('border-slate-600', 'bg-slate-700/50', 'text-gray-300');
+        });
+        if (viewId === 'global') {
+            const gb = document.getElementById('ig-btn-global');
+            gb && gb.classList.replace('border-slate-600', 'border-emerald-500') &&
+                 gb.classList.replace('bg-slate-700/50', 'bg-emerald-500/20') &&
+                 gb.classList.replace('text-gray-300', 'text-emerald-300');
+            loadInvestigateGraph();
+        } else {
+            const tb = document.querySelector(`[data-task-id="${viewId}"]`);
+            if (tb) {
+                tb.classList.remove('border-slate-600', 'bg-slate-700/50', 'text-gray-300');
+                tb.classList.add('border-violet-500', 'bg-violet-500/20', 'text-violet-300');
+            }
+            igLoadTaskGraph(viewId);
+        }
+    }
+
+    // Load a task-specific subgraph
+    async function igLoadTaskGraph(taskId) {
+        const container = document.getElementById('investigate-graph-container');
+        const dot  = document.getElementById('ig-status-dot');
+        const txt  = document.getElementById('ig-status-text');
+        const cntl = document.getElementById('ig-count-label');
+        if (!container) return;
+
+        await _igEnsureLib();
+
+        dot.className   = 'w-2 h-2 bg-yellow-400 rounded-full animate-pulse';
+        txt.textContent = '加载任务图谱...';
+        container.innerHTML = `<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#9ca3af;"><p>加载任务 ${taskId} 图谱...</p></div>`;
+
+        try {
+            const resp = await fetch('/api/graph/task/' + encodeURIComponent(taskId));
+            const data = await resp.json();
+            if (!data.success || !data.nodes.length) throw new Error(data.error || '任务图谱无数据');
+
+            if (_igInstance && _igInstance._destructor) _igInstance._destructor();
+            container.innerHTML = '';
+            _igInstance = _igBuildGraph(container, data);
+
+            dot.className   = 'w-2 h-2 bg-violet-400 rounded-full pulse-safe';
+            txt.textContent = `任务: ${taskId.substring(0, 12)}...`;
+            if (cntl) cntl.textContent = `${data.nodes.length} 节点 · ${data.links.length} 关系`;
+        } catch(e) {
+            dot.className   = 'w-2 h-2 bg-red-400 rounded-full';
+            txt.textContent = '加载失败';
+            container.innerHTML = `<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#ef4444;"><p>${e.message}</p></div>`;
+        }
+    }
+
+    // Ensure ForceGraph lib is loaded
+    async function _igEnsureLib() {
+        if (typeof ForceGraph !== 'undefined') return;
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/force-graph@1.43.0/dist/force-graph.min.js';
+            s.onload = resolve;
+            s.onerror = () => {
+                const s2 = document.createElement('script');
+                s2.src = 'https://unpkg.com/force-graph@1.43.0/dist/force-graph.min.js';
+                s2.onload = resolve; s2.onerror = reject;
+                document.head.appendChild(s2);
+            };
+            document.head.appendChild(s);
+        }).catch(() => { throw new Error('force-graph 渲染库加载失败，请检查网络连接'); });
+    }
+
+    // Build a ForceGraph instance in container with data
+    function _igBuildGraph(container, data) {
+        const inst = ForceGraph()(container)
+            .graphData({
+                nodes: data.nodes.map(n => ({...n})),
+                links: data.links.map(l => ({...l}))
+            })
+            .nodeLabel(node => {
+                const p = node.properties || {};
+                let h = `<div style="background:rgba(15,23,42,.97);padding:10px 14px;border-radius:8px;border:1px solid #10b981;max-width:280px;">`;
+                h += `<div style="font-weight:700;color:#10b981;margin-bottom:6px;">${node.name}</div>`;
+                h += `<div style="color:#94a3b8;font-size:12px;">Type: ${node.label}</div>`;
+                if (p.query) h += `<div style="color:#94a3b8;font-size:11px;margin-top:4px;">${String(p.query).substring(0,80)}...</div>`;
+                if (p.suspicious) h += '<div style="color:#ef4444;font-size:12px;">⚠️ Suspicious</div>';
+                if (p.retracted)  h += '<div style="color:#ef4444;font-size:12px;">🚫 Retracted</div>';
+                h += '</div>';
+                return h;
+            })
+            .nodeColor(node => {
+                if (node.properties && node.properties.suspicious) return '#ef4444';
+                return _igNodeColors[node.label] || _igNodeColors['Unknown'];
+            })
+            .nodeVal(n => n.label === 'Drug' ? 14 : n.label === 'Analysis' ? 12 : 7)
+            .linkLabel(l => l.type || '')
+            .linkColor(() => '#475569')
+            .linkWidth(1.5)
+            .linkDirectionalParticles(1)
+            .linkDirectionalParticleSpeed(0.005)
+            .onNodeClick(node => console.log('[Graph] Node:', node.name, node.label))
+            .d3Force('charge').strength(-180);
+        return inst;
+    }
+
+    async function loadInvestigateGraph() {
+        const container = document.getElementById('investigate-graph-container');
+        const dot  = document.getElementById('ig-status-dot');
+        const txt  = document.getElementById('ig-status-text');
+        const cntl = document.getElementById('ig-count-label');
+        if (!container) return;
+
+        await _igEnsureLib();
+
+        dot.className   = 'w-2 h-2 bg-yellow-400 rounded-full animate-pulse';
+        txt.textContent = '加载中...';
+        container.innerHTML = `
+            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#9ca3af;">
+                <svg style="width:48px;height:48px;margin:0 auto 12px;animation:spin 1s linear infinite" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <p style="font-size:14px;">正在连接 Neo4j 知识图谱...</p>
+            </div>`;
+
+        try {
+            const resp = await fetch('/api/graph/global');
+            const data = await resp.json();
+            if (!data.success) throw new Error(data.error || 'API returned failure');
+
+            if (_igInstance && _igInstance._destructor) _igInstance._destructor();
+            container.innerHTML = '';
+            _igInstance = _igBuildGraph(container, data);
+
+            dot.className   = 'w-2 h-2 bg-emerald-400 rounded-full pulse-safe';
+            txt.textContent = data.source === 'neo4j' ? 'Neo4j 实时' : 'Mock 演示';
+            if (cntl) cntl.textContent = `${data.nodes.length} 节点 · ${data.links.length} 关系`;
+
+        } catch (e) {
+            console.error('[InvestigateGraph] Load failed:', e);
+            dot.className   = 'w-2 h-2 bg-red-400 rounded-full';
+            txt.textContent = '加载失败';
+            container.innerHTML = `
+                <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#ef4444;">
+                    <svg style="width:40px;height:40px;margin:0 auto 8px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p style="font-size:13px;">图谱加载失败</p>
+                    <p style="font-size:11px;color:#6b7280;margin-top:4px;">${e.message}</p>
+                </div>`;
+        }
+    }
+
+    // ===== End Investigate-tab inline Neo4j graph =====
+
+
     // Load Settings
     async function loadSettings() {
         const settingsContent = document.getElementById('settingsContent');
@@ -949,11 +1574,35 @@
         }
     }
     
-    // On page load, check for stored report
-    window.addEventListener('DOMContentLoaded', () => {
+    // On page load, cancel any stale analysis left from a previous refresh
+    window.addEventListener('DOMContentLoaded', async () => {
         const lastReport = localStorage.getItem('last_report');
         if (lastReport) {
             console.log('Found cached report, available via Reports tab');
+        }
+        // Auto-expand and load the inline knowledge graph
+        toggleInvestigateGraph();
+        // If server still has a running analysis from a previous session / refresh,
+        // reset it immediately so the user starts with a clean state.
+        try {
+            const resp = await fetch('/api/status');
+            const status = await resp.json();
+            if (status.running) {
+                await fetch('/api/reset', { method: 'POST' });
+                _analysisRunning = false;  // 确保本地标志与服务器同步
+                addLog('warning', `♻️  Previous analysis cancelled on page load (was: ${status.query || ''})`);
+            }
+        } catch (e) { /* ignore */ }
+    });
+
+    // When the page is refreshed or closed while an analysis is running,
+    // send a best-effort beacon to /api/reset so the backend thread is cancelled.
+    // 使用 _analysisRunning 标志代替 analyzeBtn.disabled，避免按钮因其他原因
+    // 被禁用时误触发 reset（例如：表单校验失败时的按钮状态）。
+    window.addEventListener('beforeunload', () => {
+        if (_analysisRunning) {
+            // navigator.sendBeacon is fire-and-forget, works even during unload
+            navigator.sendBeacon('/api/reset', new Blob(['{}'], { type: 'application/json' }));
         }
     });
     
@@ -978,6 +1627,8 @@
     const fileInput = document.getElementById('fileInput');
     const fileList = document.getElementById('fileList');
     let uploadedFiles = [];
+    let _lastSubmittedQuery = '';  // 记录最近一次提交的查询，防止 Retry 误用残留文本
+    let _analysisRunning = false;    // 可靠的运行状态标志（代替 analyzeBtn.disabled 检测）
     
     dropZone.addEventListener('click', () => fileInput.click());
     
@@ -1040,7 +1691,8 @@
     document.getElementById('queryForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         
-        const query = document.getElementById('queryInput').value;
+        const query = document.getElementById('queryInput').value.trim();
+        _lastSubmittedQuery = query;  // 快照本次查询，供 Retry 按钮复用
         const progressSection = document.getElementById('progressSection');
         const logContainer = document.getElementById('logContainer');
         const resultsSection = document.getElementById('resultsSection');
@@ -1050,10 +1702,47 @@
         resultsSection.classList.add('hidden');
         logContainer.innerHTML = '';
         
-        // Disable submit button
+        // Reset step badges + progress bar
+        ['harvest','mining','auditing','writing'].forEach(s => {
+            const b = document.getElementById(`badge-${s}`);
+            const p = document.getElementById(`pct-${s}`);
+            if (b) { b.className = 'step-state-badge badge-pending'; b.textContent = 'PENDING'; }
+            if (p) p.textContent = '—';
+            const el = document.querySelector(`[data-step="${s}"] div`);
+            if (el) el.className = 'w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all';
+        });
+        updateProgressBar(0, 'Initializing analysis pipeline...', false);
+        // Reset elapsed timer
+        stopElapsedTimer();
+        const timerEl = document.getElementById('elapsedTimer');
+        if (timerEl) timerEl.textContent = '00:00';
+        startElapsedTimer();
+
+        // Show skeleton lines in log while waiting for first event
+        logContainer.innerHTML = `
+            <div class="skeleton-block" style="width:100%;height:14px;margin-bottom:8px;border-radius:4px;"></div>
+            <div class="skeleton-block" style="width:85%;height:14px;margin-bottom:8px;border-radius:4px;"></div>
+            <div class="skeleton-block" style="width:70%;height:14px;margin-bottom:8px;border-radius:4px;"></div>
+        `;
+        // Remove skeleton on first real log (MutationObserver)
+        const _skeletonObserver = new MutationObserver((mutations) => {
+            const hasRealLog = mutations.some(m =>
+                [...m.addedNodes].some(n => n.classList && n.classList.contains('log-entry') &&
+                    !n.querySelector('.skeleton-block'))
+            );
+            if (hasRealLog) {
+                logContainer.querySelectorAll('.skeleton-block').forEach(s => s.remove());
+                _skeletonObserver.disconnect();
+            }
+        });
+        _skeletonObserver.observe(logContainer, { childList: true });
+
+        // Disable submit button + show cancel
         const analyzeBtn = document.getElementById('analyzeBtn');
         analyzeBtn.disabled = true;
         analyzeBtn.innerHTML = '<span class="flex items-center gap-2"><svg class="animate-spin w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>Analyzing...</span></span>';
+        document.getElementById('cancelBtn')?.classList.remove('hidden');
+        _analysisRunning = true;  // 标记分析已启动
         
         // 🔥 Auto-switch to drug-specific subgraph when analysis starts
         const drugMatch = query.match(/(?:analyze|assess|evaluate|investigate)\s+(\w+)/i);
@@ -1102,80 +1791,133 @@
         }
     });
     
-    // Step progress tracking
-    function updateStep(step, status) {
+    // Step progress tracking — v2: precise % + badge
+    function updateStep(step, status, pct) {
         const stepEl = document.querySelector(`[data-step="${step}"]`);
         if (!stepEl) return;
         const circle = stepEl.querySelector('div');
-        const svg = circle.querySelector('svg');
+        const svg = circle ? circle.querySelector('svg') : null;
         
-        if (status === 'active') {
-            circle.className = 'w-10 h-10 rounded-full bg-emerald-600 border-2 border-emerald-400 flex items-center justify-center mb-2 pulse-safe';
-            if (svg) {
+        // Bubble color
+        if (circle) {
+            circle.className = 'w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all ' +
+                (status === 'active'   ? 'bg-emerald-600 border-2 border-emerald-400 pulse-safe' :
+                 status === 'complete' ? 'bg-emerald-600 border-2 border-emerald-400' :
+                 status === 'error'    ? 'bg-red-700 border-2 border-red-500' :
+                                        'bg-slate-700 border-2 border-slate-600');
+            if (status === 'complete') {
+                circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>';
+            } else if (status === 'error') {
+                circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+            } else if (svg) {
                 svg.classList.remove('text-gray-500');
                 svg.classList.add('text-white');
             }
-        } else if (status === 'complete') {
-            circle.className = 'w-10 h-10 rounded-full bg-emerald-600 border-2 border-emerald-400 flex items-center justify-center mb-2';
-            circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>';
         }
         
-        // Update progress bar
+        // State badge
+        const badge = document.getElementById(`badge-${step}`);
+        if (badge) {
+            badge.className = 'step-state-badge ' +
+                (status === 'active'   ? 'badge-active'  :
+                 status === 'complete' ? 'badge-complete' :
+                 status === 'error'    ? 'badge-error'    : 'badge-pending');
+            badge.textContent = status.toUpperCase();
+        }
+        
+        // Percentage label below step
+        if (typeof pct === 'number') {
+            const pctEl = document.getElementById(`pct-${step}`);
+            if (pctEl) pctEl.textContent = pct + '%';
+        }
+        
+        // Overall progress bar (legacy position-based)
         const steps = ['harvest', 'mining', 'auditing', 'writing'];
-        const currentIndex = steps.indexOf(step);
-        const progress = ((currentIndex + 1) / steps.length) * 100;
-        document.getElementById('progressBar').style.width = `${progress}%`;
+        const idx = steps.indexOf(step);
+        const legacy = ((idx + 1) / steps.length) * 100;
+        document.getElementById('progressBar').style.width = `${legacy}%`;
     }
     
-    // Enhanced log system with image support
+    // Precise progress bar update
+    function updateProgressBar(pct, message, running) {
+        const fill  = document.getElementById('progressFill');
+        const track = document.getElementById('progressTrack');
+        const badge = document.getElementById('progressPctBadge');
+        const text  = document.getElementById('progressPctText');
+        const msg   = document.getElementById('progressMsg');
+        const p = Math.min(100, Math.max(0, parseInt(pct || 0)));
+        if (fill)  fill.style.width  = p + '%';
+        if (track) track.style.setProperty('--progress-tip', p + '%');
+        if (badge) { badge.textContent = p + '%'; badge.style.right = (100 - p) + '%'; }
+        if (text)  text.textContent  = p + '%';
+        if (msg && message) msg.textContent = message;
+        // Toggle shimmer animation
+        const isRunning = running !== undefined ? running : (p > 0 && p < 100);
+        if (fill) {
+            if (isRunning) fill.classList.add('running');
+            else           fill.classList.remove('running');
+        }
+        if (track) {
+            if (isRunning) track.classList.add('running');
+            else           track.classList.remove('running');
+        }
+    }
+
+    // Elapsed Timer
+    let _timerInterval = null;
+    let _timerStart    = null;
+    function startElapsedTimer() {
+        _timerStart = Date.now();
+        _timerInterval = setInterval(() => {
+            const sec = Math.floor((Date.now() - _timerStart) / 1000);
+            const m = String(Math.floor(sec / 60)).padStart(2, '0');
+            const s = String(sec % 60).padStart(2, '0');
+            const el = document.getElementById('elapsedTimer');
+            if (el) el.textContent = `${m}:${s}`;
+        }, 1000);
+    }
+    function stopElapsedTimer() {
+        clearInterval(_timerInterval);
+        _timerInterval = null;
+    }
+    
+    // Enhanced log system with image support + throttled auto-scroll
+    let _logScrollThrottle = null;
     function addLog(type, message, imagePath = null) {
         const logContainer = document.getElementById('logContainer');
+        if (!logContainer) return;
         const logEntry = document.createElement('div');
         logEntry.className = 'log-entry';
         
         const timestamp = new Date().toLocaleTimeString();
+        let icon = '●', levelClass = 'log-info', levelText = 'INFO';
+        if (type === 'success')  { icon = '✓';  levelClass = 'log-success';  levelText = 'SUCCESS'; }
+        else if (type === 'error')   { icon = '✗';  levelClass = 'log-error';    levelText = 'ERROR';   }
+        else if (type === 'warning') { icon = '⚠';  levelClass = 'log-warning';  levelText = 'WARN';    }
+        else if (type === 'scanning'){ icon = '🔍'; levelClass = 'log-scanning'; levelText = 'SCAN';    }
         
-        let icon = '●';
-        let levelClass = 'log-info';
-        let levelText = 'INFO';
-        
-        if (type === 'success') {
-            icon = '✓';
-            levelClass = 'log-success';
-            levelText = 'SUCCESS';
-        } else if (type === 'error') {
-            icon = '✗';
-            levelClass = 'log-error';
-            levelText = 'ERROR';
-        } else if (type === 'warning') {
-            icon = '⚠';
-            levelClass = 'log-warning';
-            levelText = 'WARNING';
-        } else if (type === 'scanning') {
-            icon = '🔍';
-            levelClass = 'log-scanning';
-            levelText = 'SCANNING';
-        }
-        
-        let imageHtml = '';
-        if (imagePath) {
-            imageHtml = `<img src="${imagePath}" class="log-image-preview" alt="Scanning" title="Click to enlarge" />`;
-        }
+        let imageHtml = imagePath
+            ? `<img src="${imagePath}" class="log-image-preview" alt="Scanning" title="Click to enlarge" />`
+            : '';
         
         logEntry.innerHTML = `
             <span class="timestamp">[${timestamp}]</span>
             <span class="${levelClass}">[${levelText}]</span>
             <span class="text-gray-300 flex-1">${message}${imageHtml}</span>
         `;
-        
         logContainer.appendChild(logEntry);
-        logContainer.scrollTop = logContainer.scrollHeight;
         
-        // Auto-remove old logs if too many (keep last 200)
-        const logs = logContainer.querySelectorAll('.log-entry');
-        if (logs.length > 200) {
-            logs[0].remove();
+        // Throttled scroll (avoid 60fps reflow for fast log bursts)
+        if (!_logScrollThrottle) {
+            _logScrollThrottle = setTimeout(() => {
+                logContainer.scrollTop = logContainer.scrollHeight;
+                _logScrollThrottle = null;
+            }, 80);
         }
+        
+        // Keep last 300 entries (virtual scroll-lite)
+        const logs = logContainer.querySelectorAll('.log-entry');
+        if (logs.length > 300) logs[0].remove();
     }
     
     document.getElementById('clearLogs').addEventListener('click', () => {
@@ -1187,196 +1929,333 @@
             </div>
         `;
     });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Connection Manager v2 — HeartBeat + Polling Fallback + Event Replay
+    // ═══════════════════════════════════════════════════════════════════════
     
-    // Socket.IO for real-time updates (if available)
+    // Inject connection status bar into DOM
+    const connBar = document.createElement('div');
+    connBar.id = 'connectionBar';
+    connBar.className = 'conn-bar hidden-bar';
+    document.body.prepend(connBar);
+    
+    function showConnBar(type, msg) {
+        connBar.className = `conn-bar ${type}`;
+        connBar.textContent = msg;
+    }
+    function hideConnBar() {
+        connBar.className = 'conn-bar hidden-bar';
+    }
+
+    // === Polling fallback (when WebSocket is down) ===
+    let _pollingInterval = null;
+    let _pollingActive = false;
+
+    function startPollingFallback() {
+        if (_pollingActive) return;
+        _pollingActive = true;
+        showConnBar('polling', '⚠ WebSocket offline — polling every 2s');
+        _pollingInterval = setInterval(async () => {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+                if (data.running) {
+                    updateProgressBar(data.progress, `[Poll] Step: ${data.current_step || '...'}`);
+                    if (data.current_step) updateStep(data.current_step, 'active', data.progress);
+                } else if (!data.running && data.error) {
+                    stopPollingFallback();
+                    showConnBar('disconnected', `❌ Analysis failed: ${data.error}`);
+                    addLog('error', `Analysis failed: ${data.error}`);
+                } else if (!data.running && data.step_status && data.step_status.writing === 'complete') {
+                    stopPollingFallback();
+                    hideConnBar();
+                    addLog('success', '✅ Analysis complete (detected via polling)');
+                }
+            } catch (e) {
+                /* ignore poll errors */
+            }
+        }, 2000);
+    }
+
+    function stopPollingFallback() {
+        _pollingActive = false;
+        clearInterval(_pollingInterval);
+        _pollingInterval = null;
+    }
+
+    // === Event Replay ===
+    let _lastEventId = 0;
+    async function replayMissedEvents(socket) {
+        try {
+            const resp = await fetch(`/api/events/history?since=${_lastEventId}`);
+            const data = await resp.json();
+            if (data.events && data.events.length) {
+                addLog('info', `↩ Replaying ${data.events.length} missed events...`);
+                data.events.forEach(ev => {
+                    if (ev.type === 'log')   addLog(ev.payload.level, ev.payload.message, ev.payload.image_path);
+                    if (ev.type === 'step')  updateStep(ev.payload.step, ev.payload.status, ev.payload.percentage);
+                    if (ev.type === 'progress') updateProgressBar(ev.payload.percentage, ev.payload.message);
+                    if (ev.type === 'analysis_complete') handleAnalysisComplete(ev.payload);
+                    if (ev.type === 'analysis_error')    handleAnalysisError(ev.payload);
+                });
+                _lastEventId = data.latest_id;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    // === Cancel / Force-Reset Analysis ===
+    async function cancelAnalysis() {
+        if (!confirm('Force-reset the current analysis?\nThis will clear the running state so you can start a new one.\n(The background process may still run briefly until it errors.)')) return;
+        try {
+            const resp = await fetch('/api/reset', { method: 'POST' });
+            const data = await resp.json();
+            addLog('warning', `♻️  ${data.message}`);
+        } catch (e) {
+            addLog('error', `Reset failed: ${e.message}`);
+        }
+        // Re-enable UI regardless
+        _analysisRunning = false;  // 用户主动取消，清除运行标志
+        stopPollingFallback();
+        stopElapsedTimer();
+        updateProgressBar(0, 'Reset — ready for new analysis.', false);
+        document.getElementById('cancelBtn')?.classList.add('hidden');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        if (analyzeBtn) {
+            analyzeBtn.disabled = false;
+            analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
+        }
+    }
+
+    // === analysis_complete handler (extracted for reuse) ===
+    function handleAnalysisComplete(data) {
+        stopPollingFallback();
+        stopElapsedTimer();
+        hideConnBar();
+        updateProgressBar(100, '✅ Analysis complete!', false);
+
+        // Cache to localStorage
+        const reportData = {
+            timestamp: new Date().toISOString(),
+            executive_summary: data.executive_summary || '',
+            full_report_markdown: data.full_report_markdown || '',
+            summary: data.summary || {},
+            report_path: data.report_path,
+            html_report_path: data.html_report_path,
+        };
+        localStorage.setItem('last_report', JSON.stringify(reportData));
+
+        // Show completion section
+        const resultsSection = document.getElementById('resultsSection');
+        if (resultsSection) resultsSection.classList.remove('hidden');
+
+        const summary = data.summary || {};
+        const executiveSummary = data.executive_summary || '';
+        let summaryHTML = '';
+
+        if (executiveSummary && executiveSummary.length > 50) {
+            const riskLevel = executiveSummary.toLowerCase().includes('high risk') ? 'HIGH RISK' :
+                             executiveSummary.toLowerCase().includes('medium risk') ? 'MEDIUM RISK' :
+                             executiveSummary.toLowerCase().includes('avoid') ? 'CAUTION' : 'ANALYSIS';
+            const riskColor = { 'HIGH RISK': 'text-red-400', 'MEDIUM RISK': 'text-yellow-400', 'CAUTION': 'text-orange-400', 'ANALYSIS': 'text-emerald-400' }[riskLevel];
+            const riskBg    = { 'HIGH RISK': 'bg-red-950/40 border-red-800/50', 'MEDIUM RISK': 'bg-yellow-950/40 border-yellow-800/50', 'CAUTION': 'bg-orange-950/40 border-orange-800/50', 'ANALYSIS': 'bg-emerald-950/40 border-emerald-800/50' }[riskLevel];
+            summaryHTML = `
+                <div class="${riskBg} rounded-xl p-6 border-2 mb-4 font-mono">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0 mt-1">
+                            <svg class="w-8 h-8 ${riskColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center gap-3 mb-3">
+                                <span class="${riskColor} font-bold text-lg tracking-wider">[${riskLevel} DETECTED]</span>
+                                <span class="text-gray-500 text-sm">// Strategic Assessment</span>
+                            </div>
+                            <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
+                            <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
+                                <div class="flex gap-4 text-gray-500">
+                                    <span>📊 ${summary.harvested_items || 0} sources</span>
+                                    <span>🔍 ${summary.text_evidence || 0} evidence</span>
+                                    <span>🖼️ ${summary.forensic_evidence || 0} forensics</span>
+                                </div>
+                                <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        } else {
+            summaryHTML = `<div class="text-gray-400 text-center p-4">Report summary unavailable — see full report below</div>`;
+        }
+
+        const msgEl = document.getElementById('completionMessage');
+        if (msgEl) msgEl.innerHTML = summaryHTML;
+
+        // Render full report — prefer HTML iframe, fallback to marked.js Markdown
+        const reportContainer = document.getElementById('fullReportContainer');
+        const reportContent   = document.getElementById('fullReportContent');
+        if (reportContainer && reportContent) {
+            reportContainer.classList.remove('hidden');
+            if (data.html_report_path) {
+                // Normalise path separators (Windows \ → /) then take filename
+                const htmlFilename = data.html_report_path.replace(/\\/g, '/').split('/').pop();
+                reportContent.innerHTML = `<iframe src="/api/reports/view/${htmlFilename}" style="width:100%;height:600px;border:none;border-radius:8px;" title="Full Report"></iframe>`;
+            } else if (data.full_report_markdown && typeof marked !== 'undefined') {
+                reportContent.innerHTML = marked.parse(data.full_report_markdown);
+            }
+            const toggleBtn  = document.getElementById('toggleReportBtn');
+            const toggleIcon = document.getElementById('toggleIcon');
+            if (toggleBtn) toggleBtn.onclick = () => {
+                reportContent.classList.toggle('hidden');
+                if (toggleIcon) toggleIcon.classList.toggle('rotate-180');
+            };
+        }
+
+        // Download button
+        const downloadBtn = document.getElementById('downloadBtn');
+        if (downloadBtn) {
+            downloadBtn.href = '/api/reports/latest?format=pdf';
+            downloadBtn.onclick = (e) => { e.preventDefault(); window.location.href = '/api/reports/latest?format=pdf'; };
+        }
+
+        // Re-enable analyze button + hide cancel
+        _analysisRunning = false;  // 分析完成，清除运行标志
+        document.getElementById('cancelBtn')?.classList.add('hidden');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        if (analyzeBtn) {
+            analyzeBtn.disabled = false;
+            analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
+        }
+        addLog('success', '✅ Strategic assessment complete!');
+    }
+
+    function handleAnalysisError(data) {
+        stopPollingFallback();
+        stopElapsedTimer();
+        _analysisRunning = false;  // 分析出错，清除运行标志
+        document.getElementById('cancelBtn')?.classList.add('hidden');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        if (analyzeBtn) {
+            analyzeBtn.disabled = false;
+            analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
+        }
+        if (data.step)     updateStep(data.step, 'error', data.progress);
+        if (data.progress !== undefined) updateProgressBar(data.progress, `❌ ${data.error}`, false);
+        
+        // Show nice error card in log
+        const logContainer = document.getElementById('logContainer');
+        if (logContainer) {
+            const errCard = document.createElement('div');
+            errCard.className = 'error-card mt-4';
+            errCard.innerHTML = `
+                <div class="text-red-400 font-bold mb-2">❌ Analysis Failed</div>
+                <div class="text-gray-300 text-sm">${data.error || 'Unknown error'}</div>
+                <button class="retry-btn" onclick="document.getElementById('queryInput').value = _lastSubmittedQuery; document.getElementById('queryForm').dispatchEvent(new Event('submit'))">Retry</button>
+            `;
+            logContainer.appendChild(errCard);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+    }
+
+    // === Socket.IO v2 ===
     if (typeof io !== 'undefined') {
-        const socket = io();
-        
+        const socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionDelayMax: 8000 });
+        let _heartbeatTimer = null;
+        let _reconnectAttempts = 0;
+
+        // ── Heartbeat ──────────────────────────────────────────────
+        function startHeartbeat() {
+            if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+            _heartbeatTimer = setInterval(() => {
+                socket.emit('heartbeat', { timestamp: Date.now() });
+            }, 15000);
+        }
+        function stopHeartbeat() {
+            clearInterval(_heartbeatTimer);
+            _heartbeatTimer = null;
+        }
+
+        // ── Connection events ──────────────────────────────────────
+        socket.on('connect', async () => {
+            _reconnectAttempts = 0;
+            hideConnBar();
+            stopPollingFallback();
+            startHeartbeat();
+            // Replay missed events after reconnect
+            if (_lastEventId > 0) {
+                socket.emit('request_replay', { since: _lastEventId });
+            }
+            addLog('info', `🔌 Connected (${socket.id})`);
+        });
+
+        socket.on('disconnect', (reason) => {
+            stopHeartbeat();
+            showConnBar('disconnected', `🔌 Disconnected: ${reason}. Reconnecting...`);
+            // Start polling fallback only if analysis is running
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            const isRunning = analyzeBtn && analyzeBtn.disabled;
+            if (isRunning) startPollingFallback();
+        });
+
+        socket.on('reconnecting', (attempt) => {
+            _reconnectAttempts = attempt;
+            showConnBar('reconnecting', `⟳ Reconnecting (attempt ${attempt}/10)...`);
+        });
+
+        socket.on('reconnect_failed', () => {
+            showConnBar('disconnected', '⚠ WebSocket reconnection failed — using polling mode');
+            startPollingFallback();
+        });
+
+        socket.on('heartbeat_ack', () => { /* silent — heartbeat OK */ });
+
+        // ── Core events ────────────────────────────────────────────
         socket.on('log', (data) => {
-            // Enhanced log handler with image support
-            const level = data.level || 'info';
-            const message = data.message || '';
-            const imagePath = data.image_path || data.imagePath || null;
-            
-            // Map level names
-            let logType = level.toLowerCase();
-            if (logType === 'forensic' || logType === 'scan' || message.includes('Scanning')) {
-                logType = 'scanning';
-            }
-            
-            addLog(logType, message, imagePath);
+            _lastEventId = Math.max(_lastEventId, data.id || 0);
+            const logType = ({
+                'error': 'error', 'warning': 'warning', 'success': 'success',
+                'scanning': 'scanning', 'forensic': 'scanning', 'scan': 'scanning',
+            })[data.level?.toLowerCase()] || 'info';
+            addLog(logType, data.message || '', data.image_path || null);
         });
-        
+
+        socket.on('progress', (data) => {
+            _lastEventId = Math.max(_lastEventId, data.id || 0);
+            const isRunning = (data.percentage < 100 && data.status !== 'error');
+            updateProgressBar(data.percentage, data.message, isRunning);
+            if (data.step) updateStep(data.step, data.status, data.percentage);
+        });
+
         socket.on('step', (data) => {
-            updateStep(data.step, data.status);
+            _lastEventId = Math.max(_lastEventId, data.id || 0);
+            updateStep(data.step, data.status, data.percentage);
         });
-        
-        // 🔥 Real-time knowledge graph updates
+
+        // Real-time knowledge graph updates
         socket.on('graph_update', (update) => {
-            console.log('📊 Graph update received:', update);
-            
-            // Show notification
-            if (update.type === 'node') {
-                showGraphNotification(`New ${update.data.label} discovered: ${update.data.name}`);
-            }
-            
-            // Update graph if it's currently visible
+            if (update.type === 'node') showGraphNotification(`New ${update.data.label} discovered: ${update.data.name}`);
             if (graphInstance && currentGraphData) {
-                if (update.type === 'node') {
-                    // Check if node already exists
-                    const exists = currentGraphData.nodes.find(n => n.id === update.data.id);
-                    if (!exists) {
-                        currentGraphData.nodes.push(update.data);
-                        graphInstance.graphData(currentGraphData);
-                    }
-                } else if (update.type === 'relationship') {
-                    // Check if relationship already exists
-                    const exists = currentGraphData.links.find(l => 
-                        l.source === update.data.source && l.target === update.data.target
-                    );
-                    if (!exists) {
-                        currentGraphData.links.push(update.data);
-                        graphInstance.graphData(currentGraphData);
-                    }
+                if (update.type === 'node' && !currentGraphData.nodes.find(n => n.id === update.data.id)) {
+                    currentGraphData.nodes.push(update.data);
+                    graphInstance.graphData(currentGraphData);
+                } else if (update.type === 'relationship' && !currentGraphData.links.find(l => l.source === update.data.source && l.target === update.data.target)) {
+                    currentGraphData.links.push(update.data);
+                    graphInstance.graphData(currentGraphData);
                 }
             }
         });
-        
+
         socket.on('analysis_complete', (data) => {
-            // PHASE 3.2 FIX: Save report to localStorage immediately to prevent data loss
-            const reportData = {
-                timestamp: new Date().toISOString(),
-                executive_summary: data.executive_summary || '',
-                full_report_markdown: data.full_report_markdown || '',
-                summary: data.summary || {},
-                report_path: data.report_path
-            };
-            localStorage.setItem('last_report', JSON.stringify(reportData));
-            
-            // Show completion
-            const resultsSection = document.getElementById('resultsSection');
-            resultsSection.classList.remove('hidden');
-            
-            const summary = data.summary || {};
-            const executiveSummary = data.executive_summary || '';
-            
-            // Text-First Intelligence Card Design
-            let summaryHTML = '';
-            
-            if (executiveSummary && executiveSummary.length > 50) {
-                // PRIMARY: Show AI analysis with Terminal aesthetic
-                const riskLevel = executiveSummary.toLowerCase().includes('high risk') ? 'HIGH RISK' :
-                                 executiveSummary.toLowerCase().includes('medium risk') ? 'MEDIUM RISK' :
-                                 executiveSummary.toLowerCase().includes('avoid') ? 'CAUTION' : 'ANALYSIS';
-                
-                const riskColor = riskLevel === 'HIGH RISK' ? 'text-red-400' :
-                                 riskLevel === 'MEDIUM RISK' ? 'text-yellow-400' :
-                                 riskLevel === 'CAUTION' ? 'text-orange-400' : 'text-emerald-400';
-                
-                const riskBg = riskLevel === 'HIGH RISK' ? 'bg-red-950/40 border-red-800/50' :
-                              riskLevel === 'MEDIUM RISK' ? 'bg-yellow-950/40 border-yellow-800/50' :
-                              riskLevel === 'CAUTION' ? 'bg-orange-950/40 border-orange-800/50' : 'bg-emerald-950/40 border-emerald-800/50';
-                
-                summaryHTML = `
-                    <!-- Strategic Intelligence Card -->
-                    <div class="${riskBg} rounded-xl p-6 border-2 mb-4 font-mono">
-                        <div class="flex items-start gap-4">
-                            <div class="flex-shrink-0 mt-1">
-                                <svg class="w-8 h-8 ${riskColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                </svg>
-                            </div>
-                            <div class="flex-1">
-                                <div class="flex items-center gap-3 mb-3">
-                                    <span class="${riskColor} font-bold text-lg tracking-wider">[${riskLevel} DETECTED]</span>
-                                    <span class="text-gray-500 text-sm">// Strategic Assessment</span>
-                                </div>
-                                <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
-                                <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
-                                    <div class="flex gap-4 text-gray-500">
-                                        <span>📊 ${summary.harvested_items || 0} sources</span>
-                                        <span>🔍 ${summary.text_evidence || 0} evidence</span>
-                                        <span>🖼️ ${summary.forensic_evidence || 0} forensics</span>
-                                    </div>
-                                    <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                // FALLBACK: Show stats-only view if no executive summary
-                summaryHTML = `
-                    <div class="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
-                        <div class="text-center">
-                            <div class="text-emerald-400 font-bold text-xl mb-3">✅ Analysis Complete</div>
-                            <div class="grid grid-cols-3 gap-4 text-center mt-4">
-                                <div class="bg-slate-900/50 rounded-lg p-4">
-                                    <div class="text-3xl font-bold text-white">${summary.harvested_items || 0}</div>
-                                    <div class="text-sm text-gray-400 mt-1">Papers/Trials</div>
-                                </div>
-                                <div class="bg-slate-900/50 rounded-lg p-4">
-                                    <div class="text-3xl font-bold text-white">${summary.text_evidence || 0}</div>
-                                    <div class="text-sm text-gray-400 mt-1">Evidence Items</div>
-                                </div>
-                                <div class="bg-slate-900/50 rounded-lg p-4">
-                                    <div class="text-3xl font-bold text-white">${summary.forensic_evidence || 0}</div>
-                                    <div class="text-sm text-gray-400 mt-1">Forensic Findings</div>
-                                </div>
-                            </div>
-                            <p class="text-gray-400 mt-4">📄 Full report ready for download below</p>
-                        </div>
-                    </div>
-                `;
-            }
-            
-            document.getElementById('completionMessage').innerHTML = summaryHTML;
-            
-            // Render full report in viewer (if available)
-            const fullMarkdown = data.full_report_markdown || '';
-            if (fullMarkdown && typeof marked !== 'undefined') {
-                const reportContainer = document.getElementById('fullReportContainer');
-                const reportContent = document.getElementById('fullReportContent');
-                const toggleBtn = document.getElementById('toggleReportBtn');
-                const toggleIcon = document.getElementById('toggleIcon');
-                
-                reportContainer.classList.remove('hidden');
-                
-                // Render Markdown to HTML
-                reportContent.innerHTML = marked.parse(fullMarkdown);
-                
-                // Toggle functionality
-                toggleBtn.addEventListener('click', () => {
-                    reportContent.classList.toggle('hidden');
-                    toggleIcon.classList.toggle('rotate-180');
-                });
-            }
-            
-            // Enable download button
-            const downloadBtn = document.getElementById('downloadBtn');
-            if (data.report_path) {
-                downloadBtn.href = `/api/reports/latest?format=pdf`;
-                downloadBtn.onclick = async (e) => {
-                    e.preventDefault();
-                    window.location.href = `/api/reports/latest?format=pdf`;
-                };
-            }
-            
-            // Re-enable analyze button
-            const analyzeBtn = document.getElementById('analyzeBtn');
-            analyzeBtn.disabled = false;
-            analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
-            
-            addLog('success', '✅ Strategic assessment complete!');
+            _lastEventId = Math.max(_lastEventId, data.id || 0);
+            handleAnalysisComplete(data);
+            // Refresh investigate-tab task list if expanded
+            if (typeof _igExpanded !== 'undefined' && _igExpanded) igRefreshTaskList();
         });
-        
+
         socket.on('analysis_error', (data) => {
+            _lastEventId = Math.max(_lastEventId, data.id || 0);
+            handleAnalysisError(data);
             addLog('error', `✗ Analysis failed: ${data.error}`);
-            
-            // Re-enable analyze button
-            const analyzeBtn = document.getElementById('analyzeBtn');
-            analyzeBtn.disabled = false;
-            analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
         });
     }
 </script>
