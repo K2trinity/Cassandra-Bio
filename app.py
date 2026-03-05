@@ -1770,10 +1770,22 @@ def get_drug_graph(drug_name: str):
         }
     """
     try:
-        # 🔥 直接返回Mock数据，因为GraphManager.query()方法不存在
-        logger.info(f"📊 Returning mock drug graph for: {drug_name}")
+        if NEO4J_AVAILABLE:
+            gm = GraphManager()
+            if gm.driver:
+                data = gm.get_drug_subgraph(drug_name)
+                gm.close()
+                if data["nodes"]:
+                    return jsonify({
+                        "success": True,
+                        "source": "neo4j",
+                        "drug": drug_name,
+                        "nodes": data["nodes"],
+                        "links": data["links"]
+                    })
+        logger.info(f"📊 Neo4j empty/unavailable — returning mock drug graph for: {drug_name}")
         return jsonify(_get_mock_drug_graph(drug_name))
-            
+
     except Exception as e:
         logger.error(f"Failed to fetch drug graph for {drug_name}: {e}")
         return jsonify(_get_mock_drug_graph(drug_name))

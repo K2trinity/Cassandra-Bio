@@ -424,6 +424,67 @@ class GraphManager:
         logger.info(f"📊 Graph: [{task_id}] +{written} rich entity nodes")
         return written
 
+    def get_drug_subgraph(self, drug_name: str, depth: int = 2) -> Dict:
+        """
+        返回以指定药物为中心的知识子图（深度 2 跳）。
+        包含：靶点、不良事件、风险信号、临床试验、文献来源、关联任务等。
+
+        Args:
+            drug_name: 药物名称（大小写不敏感，支持部分匹配）
+            depth: 遍历深度（默认 2）
+
+        Returns:
+            {"nodes": [...], "links": [...]}
+        """
+        if not self.driver:
+            return {"nodes": [], "links": []}
+        try:
+            # 深度 1：药物直接邻居
+            q = """
+            MATCH (d:Drug)
+            WHERE d.name =~ ('(?i).*' + $drug + '.*')
+            OPTIONAL MATCH (d)-[r1]->(n1)
+            OPTIONAL MATCH (n1)-[r2]->(n2)
+            WITH collect(DISTINCT d)  + collect(DISTINCT n1) + collect(DISTINCT n2) AS all_nodes,
+                 collect(DISTINCT r1) + collect(DISTINCT r2) AS all_rels
+            UNWIND all_nodes AS n
+            WITH collect(DISTINCT n) AS nodes, all_rels
+            UNWIND all_rels AS r
+            RETURN nodes, collect(DISTINCT r) AS rels
+            """
+            nodes, links = [], []
+            node_ids: set = set()
+            with self.driver.session() as session:
+                rec = session.run(q, drug=drug_name).single()
+                if not rec:
+                    return {"nodes": [], "links": []}
+                for node in rec["nodes"]:
+                    if node is None:
+                        continue
+                    nid = str(node.id)
+                    if nid not in node_ids:
+                        node_ids.add(nid)
+                        lbl = list(node.labels)[0] if node.labels else "Unknown"
+                        nodes.append({
+                            "id": nid,
+                            "label": lbl,
+                            "name": node.get("name") or node.get("task_id") or node.get("id") or nid,
+                            "properties": dict(node)
+                        })
+                for rel in rec["rels"]:
+                    if rel is None:
+                        continue
+                    links.append({
+                        "source": str(rel.start_node.id),
+                        "target": str(rel.end_node.id),
+                        "type": rel.type,
+                        "properties": dict(rel)
+                    })
+            return {"nodes": nodes, "links": links}
+        except Exception as e:
+            logger.error(f"Failed to get drug subgraph for '{drug_name}': {e}")
+            return {"nodes": [], "links": []}
+
     def get_all_tasks(self) -> List[Dict]:
         """Return all Analysis task nodes ordered by created_at desc."""
         if not self.driver:
