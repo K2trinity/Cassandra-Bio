@@ -532,6 +532,112 @@ class GraphManager:
             logger.error(f"Failed to get global graph: {e}")
             return {"nodes": [], "links": []}
 
+    # ── Cross-task analytics queries ──────────────────────────────────────────
+
+    def get_shared_targets(self, min_drugs: int = 2, limit: int = 20) -> List[Dict]:
+        """返回被多个药物共同靶向的 Target 节点（跨任务关联）。"""
+        if not self.driver:
+            return []
+        try:
+            q = """
+            MATCH (d:Drug)-[:TARGETS]->(t:Target)
+            WITH t, collect(DISTINCT d.name) AS drugs
+            WHERE size(drugs) >= $min_drugs
+            RETURN t.name AS target, drugs, size(drugs) AS drug_count
+            ORDER BY drug_count DESC
+            LIMIT $limit
+            """
+            with self.driver.session() as session:
+                return [dict(r) for r in session.run(q, min_drugs=min_drugs, limit=limit)]
+        except Exception as e:
+            logger.error(f"get_shared_targets failed: {e}")
+            return []
+
+    def get_shared_risks(self, min_drugs: int = 2, limit: int = 20) -> List[Dict]:
+        """返回被多个药物共同关联的 Risk / AdverseEvent 节点（跨任务关联）。"""
+        if not self.driver:
+            return []
+        try:
+            q = """
+            MATCH (d:Drug)-[:HAS_RISK|CAUSES_AE]->(r)
+            WHERE r:Risk OR r:AdverseEvent
+            WITH r, labels(r)[0] AS rtype, collect(DISTINCT d.name) AS drugs
+            WHERE size(drugs) >= $min_drugs
+            RETURN r.name AS risk, rtype AS type, drugs, size(drugs) AS drug_count
+            ORDER BY drug_count DESC
+            LIMIT $limit
+            """
+            with self.driver.session() as session:
+                return [dict(r) for r in session.run(q, min_drugs=min_drugs, limit=limit)]
+        except Exception as e:
+            logger.error(f"get_shared_risks failed: {e}")
+            return []
+
+    def get_drug_comparison(self, drug1: str, drug2: str, limit: int = 30) -> List[Dict]:
+        """返回两个药物共享的实体节点（用于药物间对比）。"""
+        if not self.driver:
+            return []
+        try:
+            q = """
+            MATCH (d1:Drug)-[]->(e)<-[]-(d2:Drug)
+            WHERE d1.name =~ ('(?i)' + $drug1) AND d2.name =~ ('(?i)' + $drug2)
+            WITH e, labels(e)[0] AS entity_type, count(*) AS connections
+            RETURN e.name AS entity, entity_type, connections
+            ORDER BY connections DESC
+            LIMIT $limit
+            """
+            with self.driver.session() as session:
+                return [dict(r) for r in session.run(q, drug1=drug1, drug2=drug2, limit=limit)]
+        except Exception as e:
+            logger.error(f"get_drug_comparison failed: {e}")
+            return []
+
+    def get_top_entities(self, label: str = "Keyword", limit: int = 20) -> List[Dict]:
+        """返回指定类型中出现频率最高的实体（跨所有任务）。"""
+        if not self.driver:
+            return []
+        try:
+            q = """
+            MATCH (d:Drug)-[]->(e)
+            WHERE $label IN labels(e)
+            WITH e, collect(DISTINCT d.name) AS drugs, count(*) AS connections
+            RETURN e.name AS name, drugs, connections
+            ORDER BY connections DESC
+            LIMIT $limit
+            """
+            with self.driver.session() as session:
+                return [dict(r) for r in session.run(q, label=label, limit=limit)]
+        except Exception as e:
+            logger.error(f"get_top_entities failed: {e}")
+            return []
+
+    def get_cross_task_summary(self) -> Dict:
+        """返回跨任务统计摘要：总节点数、各类型分布、药物列表。"""
+        if not self.driver:
+            return {}
+        try:
+            q = """
+            MATCH (n)
+            WITH labels(n)[0] AS lbl, count(n) AS cnt
+            RETURN lbl, cnt
+            ORDER BY cnt DESC
+            """
+            q2 = "MATCH (d:Drug) RETURN collect(DISTINCT d.name) AS drugs"
+            q3 = "MATCH ()-[r]->() RETURN count(r) AS rel_count"
+            with self.driver.session() as session:
+                label_dist = {r["lbl"]: r["cnt"] for r in session.run(q)}
+                drugs = session.run(q2).single()["drugs"]
+                rel_count = session.run(q3).single()["rel_count"]
+            return {
+                "label_distribution": label_dist,
+                "drugs": drugs,
+                "total_nodes": sum(label_dist.values()),
+                "total_relationships": rel_count,
+            }
+        except Exception as e:
+            logger.error(f"get_cross_task_summary failed: {e}")
+            return {}
+
     def __enter__(self):
         """Context manager entry."""
         return self

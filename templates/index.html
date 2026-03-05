@@ -604,6 +604,67 @@
         </div>
         <!-- ===== End Neo4j Knowledge Graph Panel ===== -->
 
+        <!-- ===== Cross-Task Analysis Panel ===== -->
+        <div class="mt-4 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-3 bg-slate-800/60 cursor-pointer select-none"
+                 onclick="toggleCrossQuery()">
+                <div class="flex items-center gap-3">
+                    <span class="text-base font-semibold text-white">🔗 跨任务关联分析</span>
+                    <span class="text-xs text-gray-400">基于 Neo4j 图数据库</span>
+                    <span id="cq-neo4j-badge" class="hidden text-xs px-2 py-0.5 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-700">Neo4j Live</span>
+                </div>
+                <span id="cq-chevron" class="text-gray-400 transition-transform">▼</span>
+            </div>
+            <!-- Body -->
+            <div id="cq-body" class="hidden p-5">
+                <!-- Query type buttons -->
+                <div class="flex flex-wrap gap-2 mb-4">
+                    <button onclick="cqRun('summary')"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-gray-200 transition-colors">
+                        📊 统计摘要
+                    </button>
+                    <button onclick="cqRun('shared_targets')"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-amber-200 transition-colors">
+                        🎯 共享靶点
+                    </button>
+                    <button onclick="cqRun('shared_risks')"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-red-200 transition-colors">
+                        ⚠️ 共享风险
+                    </button>
+                    <button onclick="cqRun('top_entities', {label:'AdverseEvent'})"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-purple-200 transition-colors">
+                        💊 高频不良事件
+                    </button>
+                    <button onclick="cqRun('top_entities', {label:'Keyword'})"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-cyan-200 transition-colors">
+                        🔑 高频关键词
+                    </button>
+                    <button onclick="cqRun('top_entities', {label:'Mechanism'})"
+                        class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-slate-700 hover:bg-slate-600 text-sky-200 transition-colors">
+                        ⚙️ 高频机制
+                    </button>
+                    <!-- Drug compare row -->
+                    <div class="flex items-center gap-2 ml-2">
+                        <input id="cq-drug1" type="text" placeholder="药物 A"
+                            class="w-28 px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500">
+                        <span class="text-gray-500 text-xs">vs</span>
+                        <input id="cq-drug2" type="text" placeholder="药物 B"
+                            class="w-28 px-2 py-1 text-xs rounded bg-slate-700 border border-slate-600 text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500">
+                        <button onclick="cqDrugCompare()"
+                            class="cq-btn px-3 py-1.5 text-xs rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white transition-colors">
+                            比较
+                        </button>
+                    </div>
+                </div>
+                <!-- Results area -->
+                <div id="cq-result" class="text-xs text-gray-400 min-h-[60px]">
+                    点击上方按钮开始跨任务查询...
+                </div>
+            </div>
+        </div>
+        <!-- ===== End Cross-Task Analysis Panel ===== -->
+
 
     </div>
 </div>
@@ -1164,12 +1225,12 @@
             } else {
                 emptyHint && (emptyHint.style.display = 'none');
                 tasks.forEach(t => {
+                    // 跳过没有有效关键词（drug_name）的缓存任务，避免显示无意义的 "Task" 按钮
+                    if (!t.drug_name) return;
                     const btn = document.createElement('button');
                     btn.className = 'ig-task-btn ig-task-dynamic px-3 py-1.5 rounded-lg text-xs font-medium transition-all border border-slate-600 bg-slate-700/50 text-gray-300 hover:border-violet-400 hover:text-violet-300';
-                    const drugLabel = t.drug_name ? `💊 ${t.drug_name}` : '🔬 Task';
                     const dateLabel = t.created_at ? t.created_at.substring(0, 10) : '';
-                    const riskCnt  = t.risk_count > 0 ? ` · ${t.risk_count} risks` : '';
-                    btn.innerHTML  = `${drugLabel}<span class="opacity-60 ml-1">${dateLabel}${riskCnt}</span>`;
+                    btn.innerHTML  = `💊 ${t.drug_name}<span class="opacity-60 ml-1">${dateLabel}</span>`;
                     btn.title      = t.query || t.task_id;
                     btn.onclick    = () => igSelectView(t.task_id);
                     btn.dataset.taskId = t.task_id;
@@ -1289,6 +1350,116 @@
             .d3Force('charge').strength(-180);
         return inst;
     }
+
+    // ── Cross-task query panel ────────────────────────────────────────────────
+    let _cqExpanded = false;
+
+    function toggleCrossQuery() {
+        _cqExpanded = !_cqExpanded;
+        const body    = document.getElementById('cq-body');
+        const chevron = document.getElementById('cq-chevron');
+        body.classList.toggle('hidden', !_cqExpanded);
+        chevron.style.transform = _cqExpanded ? 'rotate(180deg)' : '';
+        if (_cqExpanded) cqRun('summary');  // auto-load summary on open
+    }
+
+    async function cqRun(type, extra = {}) {
+        const el = document.getElementById('cq-result');
+        const badge = document.getElementById('cq-neo4j-badge');
+        el.innerHTML = `<span class="text-gray-500">查询中 (${type})...</span>`;
+        const params = new URLSearchParams({ type, ...extra });
+        try {
+            const resp = await fetch('/api/graph/cross-query?' + params);
+            const data = await resp.json();
+            if (!data.success) {
+                el.innerHTML = `<span class="text-red-400">❌ ${data.error || '查询失败'}</span>`;
+                return;
+            }
+            badge.classList.remove('hidden');
+            el.innerHTML = _cqRenderResult(type, data);
+        } catch(e) {
+            el.innerHTML = `<span class="text-red-400">❌ 网络错误: ${e.message}</span>`;
+        }
+    }
+
+    async function cqDrugCompare() {
+        const d1 = document.getElementById('cq-drug1').value.trim();
+        const d2 = document.getElementById('cq-drug2').value.trim();
+        if (!d1 || !d2) { alert('请输入两个药物名'); return; }
+        await cqRun('drug_compare', { drug1: d1, drug2: d2 });
+    }
+
+    function _cqRenderResult(type, data) {
+        if (type === 'summary') {
+            const dist = data.label_distribution || {};
+            const drugs = (data.drugs || []).join(', ') || '暂无';
+            let rows = Object.entries(dist).map(([k,v]) =>
+                `<tr><td class="pr-6 text-gray-300">${k}</td><td class="text-emerald-400 font-mono">${v}</td></tr>`
+            ).join('');
+            return `<div class="flex gap-8 flex-wrap">
+                <div>
+                    <div class="text-gray-400 mb-2">节点分布 (共 <span class="text-white">${data.total_nodes||0}</span> 节点 · <span class="text-white">${data.total_relationships||0}</span> 关系)</div>
+                    <table>${rows}</table>
+                </div>
+                <div>
+                    <div class="text-gray-400 mb-2">已分析药物</div>
+                    <div class="text-white">${drugs}</div>
+                </div>
+            </div>`;
+        }
+        if (type === 'shared_targets' || type === 'shared_risks') {
+            if (!data.results.length)
+                return `<span class="text-gray-400">暂无共享 ${type==='shared_targets'?'靶点':'风险'}（min_drugs=${data.min_drugs}）</span>`;
+            let rows = data.results.map(r => {
+                const name = r.target || r.risk || r.name || '';
+                const drugs = (r.drugs || []).join(' · ');
+                return `<tr class="border-b border-slate-800">
+                    <td class="py-1 pr-4 text-white">${name}</td>
+                    <td class="py-1 pr-4 text-amber-300 font-mono text-center">${r.drug_count}</td>
+                    <td class="py-1 text-gray-400">${drugs}</td>
+                </tr>`;
+            }).join('');
+            const label = type === 'shared_targets' ? '靶点' : `风险 (${data.results[0]?.type||''})`;
+            return `<table class="w-full text-xs">
+                <thead><tr class="text-gray-500">
+                    <th class="text-left pr-4 pb-1">${label}</th>
+                    <th class="text-center pr-4 pb-1">药物数</th>
+                    <th class="text-left pb-1">相关药物</th>
+                </tr></thead><tbody>${rows}</tbody></table>`;
+        }
+        if (type === 'top_entities') {
+            if (!data.results.length)
+                return `<span class="text-gray-400">暂无 ${data.label} 数据</span>`;
+            let rows = data.results.map(r =>
+                `<tr class="border-b border-slate-800">
+                    <td class="py-1 pr-4 text-white">${r.name}</td>
+                    <td class="py-1 pr-4 text-cyan-300 font-mono text-center">${r.connections}</td>
+                    <td class="py-1 text-gray-400 text-xs">${(r.drugs||[]).join(' · ')}</td>
+                </tr>`
+            ).join('');
+            return `<div class="text-gray-400 mb-2 text-xs">高频 ${data.label}（共 ${data.count} 条）</div>
+                <table class="w-full text-xs">
+                <thead><tr class="text-gray-500"><th class="text-left pr-4 pb-1">实体</th><th class="text-center pr-4 pb-1">关联数</th><th class="text-left pb-1">药物</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+        if (type === 'drug_compare') {
+            if (!data.results.length)
+                return `<span class="text-gray-400">${data.drug1} 与 ${data.drug2} 暂无共享实体</span>`;
+            let rows = data.results.map(r =>
+                `<tr class="border-b border-slate-800">
+                    <td class="py-1 pr-4 text-white">${r.entity}</td>
+                    <td class="py-1 pr-4 text-indigo-300">${r.entity_type}</td>
+                    <td class="py-1 text-gray-400 font-mono text-center">${r.connections}</td>
+                </tr>`
+            ).join('');
+            return `<div class="text-gray-400 mb-2 text-xs">${data.drug1} vs ${data.drug2} — 共 ${data.count} 个共享实体</div>
+                <table class="w-full text-xs">
+                <thead><tr class="text-gray-500"><th class="text-left pr-4 pb-1">共享实体</th><th class="text-left pr-4 pb-1">类型</th><th class="text-center pb-1">关联数</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+        return `<pre class="text-xs text-gray-400">${JSON.stringify(data, null, 2)}</pre>`;
+    }
+    // ── End Cross-task query panel ────────────────────────────────────────────
 
     async function loadInvestigateGraph() {
         const container = document.getElementById('investigate-graph-container');

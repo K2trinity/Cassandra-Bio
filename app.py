@@ -1779,6 +1779,95 @@ def get_drug_graph(drug_name: str):
         return jsonify(_get_mock_drug_graph(drug_name))
 
 
+@app.route('/api/graph/cross-query', methods=['GET'])
+def get_cross_query():
+    """
+    GET /api/graph/cross-query
+
+    跨任务关联查询 — 利用 Neo4j 图数据库跨越所有历史分析任务做关联分析。
+
+    Query params:
+        type  : shared_targets | shared_risks | drug_compare | top_entities | summary
+        drug1 : 药物名（drug_compare 用）
+        drug2 : 药物名（drug_compare 用）
+        label : 节点类型（top_entities 用，默认 Keyword）
+        min_drugs : 最少共享药物数（shared_* 用，默认 2）
+        limit : 最大返回条数（默认 20）
+
+    Examples:
+        /api/graph/cross-query?type=shared_targets
+        /api/graph/cross-query?type=shared_risks&min_drugs=2
+        /api/graph/cross-query?type=drug_compare&drug1=Nivolumab&drug2=Pembrolizumab
+        /api/graph/cross-query?type=top_entities&label=AdverseEvent&limit=15
+        /api/graph/cross-query?type=summary
+    """
+    qtype     = request.args.get('type', 'summary')
+    drug1     = request.args.get('drug1', '')
+    drug2     = request.args.get('drug2', '')
+    label     = request.args.get('label', 'Keyword')
+    min_drugs = int(request.args.get('min_drugs', 2))
+    limit     = int(request.args.get('limit', 20))
+
+    try:
+        if not NEO4J_AVAILABLE:
+            return jsonify({"success": False, "error": "Neo4j driver not installed",
+                            "hint": "pip install neo4j"}), 503
+
+        gm = GraphManager()
+        if not gm.driver:
+            return jsonify({"success": False,
+                            "error": "Neo4j unavailable — is the container running?",
+                            "hint": "docker-compose up neo4j"}), 503
+
+        if qtype == 'shared_targets':
+            data = gm.get_shared_targets(min_drugs=min_drugs, limit=limit)
+            gm.close()
+            return jsonify({"success": True, "type": qtype,
+                            "min_drugs": min_drugs, "results": data,
+                            "count": len(data)})
+
+        elif qtype == 'shared_risks':
+            data = gm.get_shared_risks(min_drugs=min_drugs, limit=limit)
+            gm.close()
+            return jsonify({"success": True, "type": qtype,
+                            "min_drugs": min_drugs, "results": data,
+                            "count": len(data)})
+
+        elif qtype == 'drug_compare':
+            if not drug1 or not drug2:
+                gm.close()
+                return jsonify({"success": False,
+                                "error": "drug_compare requires drug1 and drug2 params"}), 400
+            data = gm.get_drug_comparison(drug1, drug2, limit=limit)
+            gm.close()
+            return jsonify({"success": True, "type": qtype,
+                            "drug1": drug1, "drug2": drug2,
+                            "results": data, "count": len(data)})
+
+        elif qtype == 'top_entities':
+            data = gm.get_top_entities(label=label, limit=limit)
+            gm.close()
+            return jsonify({"success": True, "type": qtype,
+                            "label": label, "results": data,
+                            "count": len(data)})
+
+        elif qtype == 'summary':
+            data = gm.get_cross_task_summary()
+            gm.close()
+            return jsonify({"success": True, "type": qtype, **data})
+
+        else:
+            gm.close()
+            return jsonify({"success": False,
+                            "error": f"Unknown type '{qtype}'",
+                            "valid_types": ["shared_targets", "shared_risks",
+                                            "drug_compare", "top_entities", "summary"]}), 400
+
+    except Exception as e:
+        logger.error(f"Cross-query failed [{qtype}]: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 def _get_mock_global_graph() -> Dict[str, Any]:
     """返回模拟的全局欺诈网络数据（返回字典，不是jsonify）"""
     mock_data = {
