@@ -514,7 +514,10 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
             
             try:
                 if os.path.exists(pdf_path):
-                    audit_results = agent.audit_paper(pdf_path)
+                    # 固定输出目录：使 serve_temp_image() 路由能找到图片
+                    _forensic_out = os.path.join("downloads", "temp")
+                    os.makedirs(_forensic_out, exist_ok=True)
+                    audit_results = agent.audit_paper(pdf_path, output_dir=_forensic_out)
                     
                     # Convert ImageAuditResult dataclasses to dicts
                     audit_dicts = [
@@ -785,6 +788,8 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
         return {
             "final_report": report_output.markdown_content,
             "final_report_path": report_output.markdown_path,  # NEW: Add file path
+            "final_report_html_path": report_output.html_path,
+            "final_report_pdf_path": report_output.pdf_path,
             "final_report_markdown": report_output.markdown_content,
             "recommendation": report_output.recommendation,
             "risk_score": report_output.risk_score,
@@ -865,30 +870,52 @@ def create_bio_short_seller_workflow() -> StateGraph:
     return workflow
 
 
-def compile_workflow():
+def compile_workflow(checkpointer=None, interrupt_before=None):
     """
     Compile the Bio-Short-Seller workflow.
+    
+    Args:
+        checkpointer: Optional LangGraph checkpointer (e.g. RedisSaver) for
+                      state persistence and cancellation support.
+        interrupt_before: Optional list of nodes to interrupt before.
     
     Returns:
         Compiled LangGraph application ready for execution
     """
     workflow = create_bio_short_seller_workflow()
-    app = workflow.compile()
     
-    logger.success("✅ Workflow compiled successfully")
+    compile_kwargs = {}
+    if checkpointer:
+        compile_kwargs["checkpointer"] = checkpointer
+    if interrupt_before:
+        compile_kwargs["interrupt_before"] = interrupt_before
+        
+    app = workflow.compile(**compile_kwargs)
+    
+    if checkpointer:
+        logger.success(f"✅ Workflow compiled with Redis checkpointer (interrupt_before={interrupt_before})")
+    else:
+        logger.success("✅ Workflow compiled successfully (no checkpointer)")
     
     return app
 
 
 # ========== Workflow Execution ==========
 
-def run_bio_short_seller(user_query: str, pdf_paths: list = None) -> Dict[str, Any]:
+def run_bio_short_seller(
+    user_query: str,
+    pdf_paths: list = None,
+    checkpointer=None,
+    thread_id: str = None,
+) -> Dict[str, Any]:
     """
     Execute the Bio-Short-Seller workflow end-to-end.
     
     Args:
         user_query: User's research question (e.g., "Analyze CAR-T therapy X safety")
         pdf_paths: Optional list of local PDF paths to analyze
+        checkpointer: Optional LangGraph checkpointer for state persistence
+        thread_id: Unique thread ID for checkpoint tracking (required if checkpointer is set)
     
     Returns:
         Final state dictionary with all results
@@ -905,7 +932,7 @@ def run_bio_short_seller(user_query: str, pdf_paths: list = None) -> Dict[str, A
     logger.info("🚀"*40 + "\n")
     
     # Compile workflow
-    app = compile_workflow()
+    app = compile_workflow(checkpointer=checkpointer)
     
     # Initialize state
     initial_state: AgentState = {
@@ -924,9 +951,12 @@ def run_bio_short_seller(user_query: str, pdf_paths: list = None) -> Dict[str, A
     logger.info(f"📋 Query: {user_query}")
     logger.info(f"📄 Pre-loaded PDFs: {len(pdf_paths or [])}\n")
     
+    # Build config with thread_id for checkpoint tracking
+    run_config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+
     try:
         # Run the workflow
-        final_state = app.invoke(initial_state)
+        final_state = app.invoke(initial_state, config=run_config)
         
         logger.info("\n" + "="*80)
         logger.info("✅ WORKFLOW COMPLETE")
@@ -958,11 +988,19 @@ def stream_bio_short_seller(
     user_query: str,
     pdf_paths: list = None,
     progress_callback=None,
+    checkpointer=None,
+    thread_id: str = None,
+    interrupt_before: list = None,
 ):
     """
     Execute the Bio-Short-Seller workflow using LangGraph streaming mode.
     Yields (node_name, partial_state) tuples as each node completes.
     Optionally calls progress_callback(node_name, partial_state) for live updates.
+
+    Args:
+        checkpointer: Optional LangGraph checkpointer for state persistence
+        thread_id: Unique thread ID for checkpoint tracking
+        interrupt_before: Optional list of nodes to interrupt before.
 
     Usage in app.py::
 
@@ -972,7 +1010,7 @@ def stream_bio_short_seller(
     """
     logger.info("🚀 [stream] BIO-SHORT-SELLER WORKFLOW INITIATED")
 
-    app = compile_workflow()
+    app = compile_workflow(checkpointer=checkpointer, interrupt_before=interrupt_before)
 
     initial_state: AgentState = {
         "user_query": user_query,
@@ -989,16 +1027,24 @@ def stream_bio_short_seller(
     logger.info(f"📋 Query: {user_query}")
     logger.info(f"📄 Pre-loaded PDFs: {len(pdf_paths or [])}")
 
+    # Build config with thread_id for checkpoint tracking
+    run_config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+
     try:
         full_state = dict(initial_state)
-        for event in app.stream(initial_state, stream_mode="updates"):
+        for event in app.stream(initial_state, config=run_config, stream_mode="updates"):
             for node_name, partial_state in event.items():
+                if node_name == "__interrupt__":
+                    logger.info("⏸️ Interrupt event received")
+                    continue
+                
                 # Merge partial update into full accumulated state
-                for k, v in partial_state.items():
-                    if isinstance(v, list) and isinstance(full_state.get(k), list):
-                        full_state[k] = full_state[k] + v  # append list fields
-                    else:
-                        full_state[k] = v
+                if isinstance(partial_state, dict):
+                    for k, v in partial_state.items():
+                        if isinstance(v, list) and isinstance(full_state.get(k), list):
+                            full_state[k] = full_state[k] + v  # append list fields
+                        else:
+                            full_state[k] = v
                 logger.info(f"✅ Node completed: {node_name}")
                 if progress_callback:
                     progress_callback(node_name, full_state)
@@ -1009,6 +1055,44 @@ def stream_bio_short_seller(
         traceback.print_exc()
         raise
 
+def get_workflow_state(thread_id: str, checkpointer=None):
+    """Get the current state of a workflow execution (e.g. to check if it's paused)."""
+    if not checkpointer:
+        return None
+    app = compile_workflow(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": thread_id}}
+    return app.get_state(config)
+
+def resume_workflow(thread_id: str, checkpointer, progress_callback=None):
+    """Resume a paused workflow from the checkpointer."""
+    logger.info(f"▶️ Resuming workflow for thread {thread_id}")
+    app = compile_workflow(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    full_state = app.get_state(config).values
+    
+    # We yield just like stream_bio_short_seller
+    try:
+        for event in app.stream(None, config=config, stream_mode="updates"):
+            for node_name, partial_state in event.items():
+                if node_name == "__interrupt__":
+                    logger.info("⏸️ Interrupt event received (Resumed)")
+                    continue
+                
+                # Merge partial update into full accumulated state
+                if isinstance(partial_state, dict):
+                    for k, v in partial_state.items():
+                        if isinstance(v, list) and isinstance(full_state.get(k), list):
+                            full_state[k] = full_state[k] + v
+                        else:
+                            full_state[k] = v
+                logger.info(f"✅ Node completed: {node_name} (Resumed)")
+                if progress_callback:
+                    progress_callback(node_name, full_state)
+                yield node_name, full_state
+    except Exception as e:
+        logger.error(f"❌ Resumed streaming failed: {e}")
+        raise
 
 if __name__ == "__main__":
     # Test the workflow

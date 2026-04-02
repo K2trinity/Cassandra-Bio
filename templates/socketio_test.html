@@ -2,151 +2,142 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>SocketIO 测试</title>
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <title>图片预览功能测试</title>
     <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'Segoe UI', sans-serif;
-            background: #1e293b;
+            background: #0f172a;
             color: #e2e8f0;
-            padding: 20px;
+            padding: 32px;
+            max-width: 700px;
+            margin: 0 auto;
         }
+        h1 { font-size: 1.4rem; color: #38bdf8; margin-bottom: 24px; }
+        .card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card h3 { font-size: 0.9rem; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
         button {
             background: #3b82f6;
             color: white;
             border: none;
-            padding: 12px 24px;
-            margin: 10px 5px;
-            border-radius: 8px;
+            padding: 10px 20px;
+            margin: 6px 4px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: background 0.15s;
         }
-        button:hover {
-            background: #2563eb;
+        button:hover { background: #2563eb; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        button.secondary { background: #475569; }
+        button.secondary:hover { background: #64748b; }
+        #log {
+            background: #020617;
+            border: 1px solid #1e3a5f;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 0.78rem;
+            min-height: 120px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 12px;
+            color: #94a3b8;
         }
-        #status {
-            padding: 20px;
-            background: #0f172a;
-            border-radius: 8px;
-            margin: 20px 0;
-        }
-        .success { color: #10b981; }
-        .error { color: #ef4444; }
+        .log-ok  { color: #10b981; }
+        .log-err { color: #ef4444; }
+        .log-info { color: #38bdf8; }
+        .steps ol { padding-left: 1.2rem; line-height: 2; font-size: 0.9rem; color: #94a3b8; }
+        .steps li strong { color: #e2e8f0; }
     </style>
 </head>
 <body>
-    <h1>🧪 Real-Time Terminal 图片测试</h1>
-    
-    <div id="status">
-        <h3>连接状态: <span id="connectionStatus" class="error">未连接</span></h3>
-    </div>
-    
-    <div>
-        <button onclick="sendTestLogs()">📤 发送测试日志（含图片）</button>
-        <button onclick="sendScanningLog()">🔍 发送扫描日志</button>
-        <button onclick="sendWarningLog()">⚠️ 发送警告日志</button>
-        <button onclick="window.open('http://localhost:8765', '_blank')">🚀 打开主页面</button>
-    </div>
-    
-    <div style="margin-top: 30px; padding: 20px; background: #0f172a; border-radius: 8px;">
-        <h3>📋 测试步骤：</h3>
+    <h1>🧪 实时图片预览功能测试</h1>
+
+    <div class="card steps">
+        <h3>📋 测试步骤</h3>
         <ol>
-            <li>打开主页面 (点击上面的"打开主页面"按钮)</li>
-            <li>返回这个页面</li>
-            <li>点击"发送测试日志"按钮</li>
-            <li>在主页面观察Real-Time Terminal中的日志和图片预览</li>
+            <li><strong>先在新标签页打开主界面</strong>（点击下方按钮）</li>
+            <li>回到本页，点击 <strong>「启动图片预览测试」</strong></li>
+            <li>在主页面 Real-Time Terminal 观察：
+                <ul style="padding-left:1rem; line-height:1.8; margin-top:4px;">
+                    <li>日志行内出现 40×40 缩略图</li>
+                    <li>终端正下方大图预览面板自动显示并切换</li>
+                    <li>面板显示 Figure N/M 进度计数</li>
+                    <li>测试完成后面板自动隐藏</li>
+                </ul>
+            </li>
         </ol>
     </div>
 
+    <div class="card">
+        <h3>🎛️ 控制</h3>
+        <button onclick="openMain()">🚀 打开主界面</button>
+        <button id="startBtn" onclick="startTest()">▶ 启动图片预览测试（5张图）</button>
+        <button class="secondary" onclick="clearLog()">🗑 清空日志</button>
+    </div>
+
+    <div class="card">
+        <h3>📜 测试日志</h3>
+        <div id="log"><span class="log-info">等待操作...</span></div>
+    </div>
+
     <script>
-        // 连接到主服务器
-        const socket = io('http://localhost:8765');
-        
-        socket.on('connect', () => {
-            document.getElementById('connectionStatus').textContent = '✅ 已连接';
-            document.getElementById('connectionStatus').className = 'success';
-            console.log('✅ Connected to Cassandra server');
-        });
-        
-        socket.on('disconnect', () => {
-            document.getElementById('connectionStatus').textContent = '❌ 断开';
-            document.getElementById('connectionStatus').className = 'error';
-            console.log('❌ Disconnected');
-        });
-        
-        function sendTestLogs() {
-            console.log('📤 Sending test logs with images...');
-            
-            // 测试图片路径
-            const testImages = [
-                'western_blot_1.png',
-                'gel_electrophoresis.png',
-                'microscopy_image.png',
-                'figure_analysis.png'
-            ];
-            
-            // 开始分析
-            socket.emit('log', {
-                level: 'info',
-                message: '🚀 [TEST] Starting forensic analysis simulation...'
-            });
-            
-            // 逐个扫描图片
-            testImages.forEach((imgName, idx) => {
-                setTimeout(() => {
-                    // 扫描日志（带图片）
-                    socket.emit('log', {
-                        level: 'scanning',
-                        message: `🔍 Analyzing figure ${idx + 1}/${testImages.length}: ${imgName}`,
-                        image_path: `/static/temp/${imgName}`
-                    });
-                    
-                    // 分析结果
+        function openMain() {
+            window.open(`${location.protocol}//${location.hostname}:${location.port || 7897}`, '_blank');
+        }
+
+        function appendLog(msg, cls = '') {
+            const el = document.getElementById('log');
+            const line = document.createElement('div');
+            if (cls) line.className = cls;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            el.appendChild(line);
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        async function startTest() {
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 测试进行中...';
+            appendLog('正在调用 /api/test/image-preview ...', 'log-info');
+
+            try {
+                const resp = await fetch('/api/test/image-preview', { method: 'POST' });
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    appendLog(`✅ ${data.message}`, 'log-ok');
+                    appendLog(`生成图片: ${data.files_created.join(', ')}`, 'log-info');
+                    appendLog('请切换到主界面观察 Real-Time Terminal ↗', 'log-info');
+
+                    // 等待测试完成（5张×约1.5s + buffer）
                     setTimeout(() => {
-                        if (idx === 1) {
-                            socket.emit('log', {
-                                level: 'warning',
-                                message: `    ⚠️  SUSPICIOUS (risk: 0.75) - Potential manipulation`,
-                                image_path: `/static/temp/${imgName}`
-                            });
-                        } else {
-                            socket.emit('log', {
-                                level: 'success',
-                                message: '    ✅ CLEAN (risk: 0.00) - No anomalies detected'
-                            });
-                        }
-                    }, 500);
-                    
-                }, idx * 1500);
-            });
-            
-            // 完成
-            setTimeout(() => {
-                socket.emit('log', {
-                    level: 'success',
-                    message: `✅ [TEST] Forensic audit complete: ${testImages.length} figures analyzed`
-                });
-            }, testImages.length * 1500 + 500);
-            
-            alert('✅ 测试日志已发送！\n请查看主页面的Real-Time Terminal');
-        }
-        
-        function sendScanningLog() {
-            socket.emit('log', {
-                level: 'scanning',
-                message: '🔍 Analyzing figure: test_western_blot.png',
-                image_path: '/static/temp/test_western_blot.png'
-            });
-            alert('✅ 扫描日志已发送！');
-        }
-        
-        function sendWarningLog() {
-            socket.emit('log', {
-                level: 'warning',
-                message: '⚠️  SUSPICIOUS - Detected image manipulation',
-                image_path: '/static/temp/suspicious_image.png'
-            });
-            alert('✅ 警告日志已发送！');
+                        btn.disabled = false;
+                        btn.textContent = '▶ 启动图片预览测试（5张图）';
+                        appendLog('✅ 测试序列已结束，可重复测试', 'log-ok');
+                    }, 10000);
+                } else {
+                    appendLog(`❌ 服务端错误: ${data.error || resp.statusText}`, 'log-err');
+                    btn.disabled = false;
+                    btn.textContent = '▶ 启动图片预览测试（5张图）';
+                }
+            } catch (e) {
+                appendLog(`❌ 请求失败: ${e.message}（服务器是否已启动？）`, 'log-err');
+                btn.disabled = false;
+                btn.textContent = '▶ 启动图片预览测试（5张图）';
+            }
         }
     </script>
 </body>

@@ -501,6 +501,39 @@ class GeminiClient:
                         logger.error("❌ All fallback models exhausted - cannot proceed")
                         raise
                 
+                # Check for server disconnection errors (common with large payloads)
+                is_disconnect = (
+                    "disconnected" in error_msg.lower() or
+                    "server disconnected" in error_msg.lower() or
+                    "remote end closed connection" in error_msg.lower() or
+                    "connection reset" in error_msg.lower() or
+                    "RemoteProtocolError" in str(type(e).__name__)
+                )
+                
+                if is_disconnect:
+                    last_exception = e
+                    logger.warning(f"⚠️ Server disconnected on attempt {attempt}/{max_attempts}: {error_msg[:200]}")
+                    
+                    if attempt < max_attempts:
+                        backoff = min(10.0 * (2 ** (attempt - 1)), 120.0)
+                        logger.info(f"🔄 Server disconnected, retrying in {backoff:.1f}s...")
+                        
+                        # Recreate client to establish fresh connection
+                        try:
+                            self.client = genai.Client(
+                                api_key=self.api_key,
+                                http_options={'api_version': 'v1alpha'}
+                            )
+                            logger.debug("🔧 Recreated Gemini client after disconnect")
+                        except Exception as recreate_error:
+                            logger.debug(f"⚠️ Client recreation failed: {recreate_error}")
+                        
+                        time.sleep(backoff)
+                        continue  # Retry
+                    else:
+                        logger.error(f"❌ Server disconnections persisted after {max_attempts} attempts")
+                        raise ConnectionError(f"Server disconnected after {max_attempts} attempts: {error_msg}") from e
+                
                 # Not a quota exhaustion error - re-raise
                 # Other errors - don't retry, just fail
                 logger.error(f"Gemini generation failed: {e}")
@@ -739,7 +772,7 @@ def create_forensic_client() -> GeminiClient:
     🔧 Token Fix: Increased to 8192 to prevent JSON truncation (System Prompt ~2.5k + Image ~1.5k + Output ~4k)
     """
     return GeminiClient(
-        model_name=os.getenv("FORENSIC_MODEL_NAME", "gemini-3-pro-preview"),
+        model_name=os.getenv("FORENSIC_MODEL_NAME", "gemini-3.1-pro-preview"),
         temperature=float(os.getenv("FORENSIC_TEMPERATURE", "1.0")),  # ✅ Gemini 3 default
         max_output_tokens=int(os.getenv("FORENSIC_MAX_TOKENS", "8192")),  # 🔥 FIXED: 4096 → 8192
     )

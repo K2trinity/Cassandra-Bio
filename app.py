@@ -44,8 +44,12 @@ from loguru import logger
 from config import Settings
 
 # Import the core LangGraph workflow
-from src.agents.supervisor import run_bio_short_seller, stream_bio_short_seller
+from src.agents.supervisor import run_bio_short_seller, stream_bio_short_seller, get_workflow_state, resume_workflow, compile_workflow, get_workflow_state, resume_workflow, compile_workflow
 from src.graph.state import AgentState
+from langgraph.checkpoint.memory import MemorySaver
+
+# Initialize Checkpointer
+_redis_checkpointer = MemorySaver()
 
 # Conditionally import Neo4j GraphManager
 try:
@@ -280,9 +284,13 @@ class SocketIOLogHandler:
             elif "Scanning" in message or "Analyzing figure" in message or "🔍" in message:
                 level = "scanning"
                 import re as _re
-                img_match = _re.search(r'(figure_\d+|page_\d+_img_\d+)\.png', message)
+                # 匹配实际文件名格式：figure_001_p3.png / page_2_img_1.png
+                img_match = _re.search(
+                    r'(figure_\d+[^\s.]*\.(?:png|jpe?g)|page_\d+_img_\d+[^\s.]*\.(?:png|jpe?g))',
+                    message, _re.IGNORECASE
+                )
                 if img_match:
-                    image_path = f'/static/temp/{img_match.group(0)}'
+                    image_path = f'/static/temp/{img_match.group(1)}'
 
             clean_msg = message.strip()
             _emit_event('log', {
@@ -364,6 +372,27 @@ def serve_temp_image(filename: str):
 # ============================================================================
 # Routes: Core API Endpoints
 # ============================================================================
+
+@app.route('/api/debug/hitl', methods=['POST'])
+def debug_hitl():
+    """Temporary endpoint for UI testing of HITL modal."""
+    global active_analysis
+    active_analysis["status"] = "waiting_for_approval"
+    
+    mock_data = {
+        "task_id": "debug-task-123",
+        "text_evidence": [
+            {"claim": "The phase III trial omitted 43 adverse patient reports.", "severity": "critical", "source_file": "Clinical_Data_Suppressed.pdf", "page": 17},
+            {"claim": "Cash runway is indicated to be < 6 months instead of stated 18.", "severity": "high", "source_file": "Internal_Audit.pdf", "page": 2}
+        ],
+        "forensic_evidence": [
+            {"finding": "Western blot band duplication detected.", "severity": "critical", "image_path": "temp/figure_002_p7.jpeg", "explanation": "Bands in lane 2 and 4 appear manually spliced."}
+        ]
+    }
+    
+    _emit_event('analysis_paused', mock_data)
+    logger.info("🛠️ [DEBUG] Triggered HITL modal simulation.")
+    return jsonify({"status": "ok", "message": "Triggered HITL Modal"})
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
@@ -512,6 +541,9 @@ def analyze():
             result = None
             for node_name, partial_state in stream_bio_short_seller(
                 user_query=query,
+                checkpointer=_redis_checkpointer,
+                thread_id=_this_task_id,
+                interrupt_before=["writer"],
                 pdf_paths=pdf_paths if pdf_paths else None
             ):
                 # Check for cancellation signal from /api/reset or page refresh.
@@ -541,6 +573,21 @@ def analyze():
                         pass
 
             _ticker_stop.set()
+
+            # ── Check for HITL Breakpoint Pause ──
+            if _redis_checkpointer:
+                wk_state = get_workflow_state(_this_task_id, _redis_checkpointer)
+                if wk_state and wk_state.next:
+                    logger.warning(f"⏸️  Workflow paused. Next step: {wk_state.next}")
+                    active_analysis["status"] = "waiting_for_approval"
+                    
+                    # Send current state data to UI for review
+                    _emit_event('analysis_paused', {
+                        'task_id': _this_task_id,
+                        'text_evidence': result.get('text_evidence', []) if result else [],
+                        'forensic_evidence': result.get('forensic_evidence', []) if result else []
+                    })
+                    return  # Terminate this thread, wait for /api/hitl/resume
 
             # ── result is the full accumulated state from stream ──
             # If streaming somehow missed the final_report, fall back to sync invoke
@@ -778,32 +825,46 @@ def analyze():
             # ── Generate HTML report from IR/Markdown ──
             html_report_path = None
             pdf_report_path_v2 = None
-            try:
-                from src.report_engine.renderers import PDFRenderer, HTMLRenderer
-                title = f"Cassandra Analysis: {query[:60]}"
-                
-                # Generate HTML
-                html_renderer = HTMLRenderer()
-                html_content = html_renderer.render_from_markdown(
-                    full_report_markdown, title=title, query=query, standalone=True
-                )
-                html_path = Path("final_reports") / f"{Path(report_path).stem}.html" if report_path else \
-                    Path("final_reports") / f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-                html_path.parent.mkdir(exist_ok=True)
-                html_path.write_text(html_content, encoding="utf-8")
-                html_report_path = str(html_path)
-                logger.success(f"✅ HTML report generated: {html_path.name}")
-                
-                # Generate PDF via WeasyPrint/pdfkit
-                pdf_renderer = PDFRenderer()
-                pdf_path_v2 = html_path.with_suffix(".pdf")
-                pdf_renderer.render_markdown_to_file(
-                    full_report_markdown, pdf_path_v2, title=title, query=query
-                )
-                pdf_report_path_v2 = str(pdf_path_v2)
-                logger.success(f"✅ Professional PDF generated: {pdf_path_v2.name}")
-            except Exception as e:
-                logger.warning(f"Advanced PDF generation failed, falling back to legacy: {e}")
+
+            # 优先使用 IR 管线生成的 HTML/PDF（含图表和完整排版）
+            _ir_html = result.get('final_report_html_path')
+            _ir_pdf = result.get('final_report_pdf_path')
+            if _ir_html and os.path.exists(_ir_html):
+                html_report_path = _ir_html
+                logger.info(f"✅ Using IR-pipeline HTML: {_ir_html}")
+            if _ir_pdf and os.path.exists(_ir_pdf):
+                pdf_report_path_v2 = _ir_pdf
+                logger.info(f"✅ Using IR-pipeline PDF: {_ir_pdf}")
+
+            # 降级：如果 IR 管线未生成，从 Markdown 渲染
+            if not html_report_path or not pdf_report_path_v2:
+                try:
+                    from src.report_engine.renderers import PDFRenderer, HTMLRenderer
+                    title = f"Cassandra Analysis: {query[:60]}"
+
+                    if not html_report_path:
+                        html_renderer = HTMLRenderer()
+                        html_content = html_renderer.render_from_markdown(
+                            full_report_markdown, title=title, query=query, standalone=True
+                        )
+                        html_path = Path("final_reports") / f"{Path(report_path).stem}.html" if report_path else \
+                            Path("final_reports") / f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+                        html_path.parent.mkdir(exist_ok=True)
+                        html_path.write_text(html_content, encoding="utf-8")
+                        html_report_path = str(html_path)
+                        logger.success(f"✅ HTML report generated (fallback): {html_path.name}")
+
+                    if not pdf_report_path_v2:
+                        pdf_renderer = PDFRenderer()
+                        pdf_path_v2 = Path(html_report_path).with_suffix(".pdf") if html_report_path else \
+                            Path("final_reports") / f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                        pdf_renderer.render_markdown_to_file(
+                            full_report_markdown, pdf_path_v2, title=title, query=query
+                        )
+                        pdf_report_path_v2 = str(pdf_path_v2)
+                        logger.success(f"✅ PDF generated (fallback): {pdf_path_v2.name}")
+                except Exception as e:
+                    logger.warning(f"Advanced PDF generation failed, falling back to legacy: {e}")
 
             # ── Emit completion ──
             _emit_progress("writing", "complete", 100, "✅ Analysis complete!")
@@ -904,6 +965,91 @@ def reset_analysis():
     return jsonify({"status": "ok", "message": "Analysis state reset. You can start a new analysis."})
 
 
+
+@app.route('/api/hitl/resume', methods=['POST'])
+def resume_hitl_analysis():
+    """
+    POST /api/hitl/resume
+    Resume the workflow from a paused state (Human-In-The-Loop approval).
+    """
+    global active_analysis
+
+    if active_analysis.get("status") != "waiting_for_approval":
+        return jsonify({"status": "error", "message": "Workflow is not waiting for approval"}), 400
+
+    data = request.json or {}
+    updated_text = data.get("text_evidence", [])
+    updated_forensic = data.get("forensic_evidence", [])
+
+    task_id = active_analysis.get("task_id")
+    if not task_id or not _redis_checkpointer:
+        return jsonify({"status": "error", "message": "No checkpoint available to resume"}), 500
+
+    logger.info(f"▶️ Resuming task {task_id} with updated evidence ({len(updated_text)} text, {len(updated_forensic)} forensic)")
+
+    # Define background thread to continue streaming
+    def run_resume_async():
+        global active_analysis
+
+        try:
+            active_analysis["running"] = True
+            active_analysis["status"] = "resuming"
+
+            _ticker_stop = threading.Event()
+            _emit_progress("writing", "active", 90, "✍️ Resuming... Analyzing evidence and drafting structural report...")
+
+            app_compiled = compile_workflow(checkpointer=_redis_checkpointer)
+            config = {"configurable": {"thread_id": task_id}}
+
+            # Apply modified evidence to state
+            # Generate the overwrite narrative for LLM
+            compiled_text = "[Human In The Loop Override]\n"
+            for ix, e in enumerate(updated_text):
+                compiled_text += f"Evidence {ix+1}: {e.get('claim', '')} (Severity: {e.get('severity', '')})\n"
+            
+            app_compiled.update_state(config, {
+                "text_evidence": {"$replace": updated_text},
+                "forensic_evidence": {"$replace": updated_forensic},
+                "compiled_evidence_text": compiled_text
+            }, as_node="graph_builder")
+
+            result = None
+            for node_name, partial_state in resume_workflow(task_id, _redis_checkpointer):
+                result = partial_state
+                _emit_progress("writing", "active", 97, f"✍️ Generating {node_name} chunks...")
+
+            _ticker_stop.set()
+
+            if result and "final_report" in result:
+                active_analysis["status"] = "complete"
+                active_analysis["progress"] = 100
+                active_analysis["running"] = False
+                active_analysis["result"] = result["final_report"]
+                active_analysis["nodes_completed"] = ["harvest", "mining", "auditing", "writing"]
+                
+                # Extract risk score for frontend badge
+                risk_score = result.get("risk_score", "Unknown")
+                
+                _emit_progress("writing", "complete", 100, f"✅ Report Synthesis Complete (Risk: {risk_score})")
+
+                _emit_event('analysis_complete', {
+                    'report': result["final_report"],
+                    'risk_score': risk_score
+                })
+        except Exception as e:
+            _ticker_stop.set()
+            active_analysis["running"] = False
+            active_analysis["status"] = "error"
+            active_analysis["error"] = str(e)
+            logger.error(f"❌ Resume stream failed: {e}")
+            _emit_event('analysis_error', {'error': str(e)})
+
+    resume_thread = threading.Thread(target=run_resume_async, daemon=True)
+    resume_thread.start()
+
+    return jsonify({"status": "success", "message": "Resumed analysis"}), 200
+
+
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """
@@ -985,9 +1131,15 @@ def get_latest_report():
         requested_format = request.args.get('format', 'pdf').lower()
         file_extension = '.pdf' if requested_format == 'pdf' else '.md'
         
-        # Find all matching files
-        report_files = list(reports_dir.glob(f"*{file_extension}"))
-        
+        # Find all matching files，过滤掉乱码 PDF（旧 reportlab 回退生成）
+        all_pdf_files = list(reports_dir.glob(f"*{file_extension}"))
+        if file_extension == '.pdf':
+            report_files = [p for p in all_pdf_files if not _is_pdf_garbled(p)]
+            if len(report_files) < len(all_pdf_files):
+                logger.warning(f"⚠️ Skipped {len(all_pdf_files)-len(report_files)} garbled PDF(s)")
+        else:
+            report_files = all_pdf_files
+
         if not report_files:
             # Fallback: try alternative format
             fallback_ext = '.md' if file_extension == '.pdf' else '.pdf'
@@ -1222,13 +1374,17 @@ def download_report(filename: str):
 
         # ── Case 1: pre-existing PDF sibling ──
         if pdf_candidate.exists() and report_path.suffix != '.pdf':
-            logger.info(f"📥 Serving pre-built PDF: {pdf_candidate.name}")
-            return send_file(
-                pdf_candidate,
-                as_attachment=True,
-                download_name=stem + ".pdf",
-                mimetype='application/pdf'
-            )
+            if _is_pdf_garbled(pdf_candidate):
+                logger.warning(f"⚠️ Garbled PDF detected, deleting for regeneration: {pdf_candidate.name}")
+                pdf_candidate.unlink(missing_ok=True)
+            else:
+                logger.info(f"📥 Serving pre-built PDF: {pdf_candidate.name}")
+                return send_file(
+                    pdf_candidate,
+                    as_attachment=True,
+                    download_name=stem + ".pdf",
+                    mimetype='application/pdf'
+                )
 
         # ── Case 2: source is already PDF ──
         if report_path.suffix == '.pdf':
@@ -1345,17 +1501,38 @@ def view_report_pdf(filename: str):
 
 
 # ============================================================================
-# Helper Functions: PDF Generation (v2 — WeasyPrint / pdfkit / reportlab)
+# Helper Functions: PDF Generation (v2 — WeasyPrint / pdfkit / PyMuPDF / reportlab)
 # ============================================================================
+
+def _is_pdf_garbled(pdf_path: Path) -> bool:
+    """
+    快速检测 PDF 是否包含 JS/CSS 乱码内容。
+    若首页文字中出现典型 JavaScript 标志，则认为是就是旧 reportlab 回退生成的乱码 PDF。
+    """
+    try:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        if not doc.page_count:
+            return True
+        text = doc[0].get_text()[:800]
+        doc.close()
+        garbled_markers = ["MathJax", ":root {", "function(", "var chartData",
+                           "--primary:", "box-sizing", "@keyframes", ".report-"]
+        return any(m in text for m in garbled_markers)
+    except Exception:
+        return False
+
 
 def convert_html_to_pdf(html_path: Path) -> Path:
     """
-    将 HTML 文件转换为 PDF（WeasyPrint 优先，pdfkit 降级）。
+    将 HTML 文件转换为 PDF（WeasyPrint → pdfkit → PyMuPDF 降级）。
+    若当前 PDF 已存在且检测为乱码，则重新生成。
     Returns the Path to the generated PDF (same stem, .pdf suffix).
     """
     pdf_path = html_path.with_suffix(".pdf")
-    if pdf_path.exists():
-        return pdf_path  # already generated, reuse
+    # 如果已有 PDF 并且没有乱码，直接复用
+    if pdf_path.exists() and not _is_pdf_garbled(pdf_path):
+        return pdf_path
 
     html_content = html_path.read_text(encoding="utf-8")
 
@@ -1381,7 +1558,39 @@ def convert_html_to_pdf(html_path: Path) -> Path:
         logger.info(f"✅ HTML→PDF via pdfkit: {pdf_path.name}")
         return pdf_path
     except Exception as e:
-        logger.error(f"pdfkit also failed: {e}")
+        logger.warning(f"pdfkit also failed: {e}, trying PyMuPDF…")
+
+    # ── PyMuPDF (fitz.Story) ──
+    try:
+        import re as _re
+        import fitz
+        clean = _re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html_content, flags=_re.IGNORECASE)
+        clean = _re.sub(r'<style[^>]*>[\s\S]*?</style>', '', clean, flags=_re.IGNORECASE)
+        clean = _re.sub(r'<link[^>]+>', '', clean, flags=_re.IGNORECASE)
+        clean = _re.sub(r'@import\s+url\([^)]+\);?', '', clean)
+        user_css = (
+            "body { font-family: serif; font-size: 11pt; line-height: 1.6; }"
+            "h1,h2,h3,h4 { font-weight: bold; margin-top: 1em; }"
+            "table { border-collapse: collapse; width: 100%; }"
+            "th, td { border: 1px solid #ccc; padding: 4px 8px; }"
+        )
+        story = fitz.Story(html=clean, user_css=user_css)
+        import io as _io
+        buf = _io.BytesIO()
+        writer = fitz.DocumentWriter(buf, "pdf")
+        mediabox = fitz.paper_rect("a4")
+        more = 1
+        while more:
+            device = writer.begin_page(mediabox)
+            more, _ = story.place(mediabox)
+            story.draw(device)
+            writer.end_page()
+        writer.close()
+        pdf_path.write_bytes(buf.getvalue())
+        logger.info(f"✅ HTML→PDF via PyMuPDF: {pdf_path.name}")
+        return pdf_path
+    except Exception as e:
+        logger.error(f"PyMuPDF also failed: {e}")
         raise RuntimeError(f"All HTML→PDF converters failed: {e}")
 
 

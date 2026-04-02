@@ -120,31 +120,28 @@
             <!-- Logo -->
             <div class="p-6 border-b border-slate-800">
                 <div class="flex items-center space-x-3">
-                    <div class="w-10 h-10 bg-gradient-to-br from-purple-500 via-blue-500 to-emerald-500 rounded-lg flex items-center justify-center relative overflow-hidden">
-                        <!-- DNA双螺旋 + 水晶球预言元素 -->
-                        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                            <!-- 外圈：预言水晶球 -->
-                            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
-                            <!-- DNA双螺旋 -->
-                            <path d="M8 4 Q 12 6, 16 4" stroke="currentColor" stroke-linecap="round"/>
-                            <path d="M8 8 Q 12 10, 16 8" stroke="currentColor" stroke-linecap="round"/>
-                            <path d="M8 12 Q 12 14, 16 12" stroke="currentColor" stroke-linecap="round"/>
-                            <path d="M8 16 Q 12 18, 16 16" stroke="currentColor" stroke-linecap="round"/>
-                            <path d="M8 20 Q 12 22, 16 20" stroke="currentColor" stroke-linecap="round"/>
-                            <!-- DNA纵向连接线 -->
-                            <line x1="8" y1="4" x2="8" y2="20" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-                            <line x1="16" y1="4" x2="16" y2="20" stroke="currentColor" stroke-width="1.5" opacity="0.6"/>
-                            <!-- 横向碱基对 -->
-                            <line x1="9" y1="6" x2="15" y2="6" stroke="currentColor" stroke-width="1"/>
-                            <line x1="9" y1="10" x2="15" y2="10" stroke="currentColor" stroke-width="1"/>
-                            <line x1="9" y1="14" x2="15" y2="14" stroke="currentColor" stroke-width="1"/>
-                            <line x1="9" y1="18" x2="15" y2="18" stroke="currentColor" stroke-width="1"/>
+                    <div class="w-10 h-10 flex items-center justify-center relative">
+                        <!-- Abstract geometric logo: Circle with 3 nodes on it, ChatGPT minimalist style -->
+                        <svg class="w-9 h-9 flex-shrink-0 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <!-- Central hexagonal hub (avoids center overlap, adds AI/Bio molecular feel) -->
+                            <polygon points="15,12 13.5,14.6 10.5,14.6 9,12 10.5,9.4 13.5,9.4" />
+                            
+                            <!-- Connective paths dropping perfectly perpendicular to the hexagon faces -->
+                            <path d="M12 5 L12 9.4" />
+                            <path d="M18.06 15.5 L14.25 13.3" />
+                            <path d="M5.94 15.5 L9.75 13.3" />
+                            
+                            <!-- Main structural ring -->
+                            <circle cx="12" cy="12" r="7" />
+                            
+                            <!-- 3 structural nodes on the vertices -->
+                            <circle cx="12" cy="5" r="2.5" fill="currentColor" stroke="none" />
+                            <circle cx="18.06" cy="15.5" r="2.5" fill="currentColor" stroke="none" />
+                            <circle cx="5.94" cy="15.5" r="2.5" fill="currentColor" stroke="none" />
                         </svg>
-                        <!-- 闪烁效果 -->
-                        <div class="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent animate-pulse"></div>
                     </div>
                     <div>
-                        <h1 class="text-xl font-bold text-white">Cassandra</h1>
+                        <h1 class="text-xl font-bold text-white tracking-tight" style="font-family: 'Inter', sans-serif;">Cassandra</h1>
                     </div>
                 </div>
             </div>

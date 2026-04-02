@@ -28,7 +28,8 @@ flask-cors>=4.0.0      # CORS support for API endpoints
 neo4j>=5.15.0          # Neo4j Driver for Graph DB
 
 # ===== Cache & State Management =====
-redis>=5.0.0           # Redis Client for State Management
+redis>=5.2.1           # Redis Client for State Management
+langgraph-checkpoint-redis>=0.4.0  # LangGraph Redis Checkpoint for State Persistence & Cancellation
 
 # ===== Infrastructure =====
 flask>=2.3.3           # API Server

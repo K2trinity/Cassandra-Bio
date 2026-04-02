@@ -717,6 +717,44 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             
             # ===== 阶段6: 渲染输出 =====
             logger.info("\n[Phase 6] Rendering output...")
+
+            # ── 6a: 自动注入图表/表格/文献图片 ──
+            try:
+                from src.report_engine.utils.chart_injector import ChartInjector
+                injector = ChartInjector()
+
+                # 收集 evidence 数据用于图表生成
+                chart_evidence = {
+                    "harvested_data": harvest_data if isinstance(harvest_data, list) else (harvest_data or {}).get("harvested_data", []),
+                    "text_evidence": evidence_data if isinstance(evidence_data, list) else [],
+                    "risk_flags": (harvest_data or {}).get("risk_flags", []) if isinstance(harvest_data, dict) else [],
+                    "pmc_articles": (harvest_data or {}).get("pmc_articles", []) if isinstance(harvest_data, dict) else [],
+                }
+                chart_forensic = {
+                    "forensic_evidence": forensic_data if isinstance(forensic_data, list) else [],
+                }
+
+                # 收集已提取的文献图片
+                extracted_figs = []
+                downloads_dir = Path("downloads")
+                if downloads_dir.exists():
+                    for img_file in downloads_dir.rglob("*.png"):
+                        if img_file.stat().st_size > 20_000:  # >20KB = likely a real figure
+                            extracted_figs.append({
+                                "path": str(img_file),
+                                "caption": img_file.stem.replace("_", " "),
+                                "source": img_file.parent.name,
+                            })
+
+                document = injector.enrich(
+                    document,
+                    evidence_data=chart_evidence,
+                    forensic_data=chart_forensic,
+                    extracted_figures=extracted_figs[:6],
+                )
+                logger.success("✅ Chart/table/figure injection complete")
+            except Exception as inj_err:
+                logger.warning(f"Chart injection skipped: {inj_err}")
             
             # 生成Markdown
             markdown_content = self.composer.render_markdown(document)
@@ -737,6 +775,57 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             # 保存IR JSON
             ir_file = output_path / f"{project_slug}_{timestamp}_ir.json"
             self.composer.save_document(document, ir_file, format="json")
+
+            # ── 生成 HTML + PDF（从 IR 文档完整渲染，包含图表） ──
+            html_path_str = None
+            pdf_path_str = None
+            try:
+                import gc
+                import re as _re
+                from src.report_engine.renderers import HTMLRenderer, PDFRenderer
+
+                html_renderer = HTMLRenderer()
+                html_content = html_renderer.render(document, standalone=True)
+                html_file = output_path / f"{project_slug}_{timestamp}_segmented.html"
+                html_file.write_text(html_content, encoding="utf-8")
+                html_path_str = str(html_file)
+                logger.success(f"✅ HTML report: {html_file.name}")
+
+                # PDF: 直接从已生成的 HTML 渲染，避免重复生成 HTML 导致内存溢出
+                pdf_renderer = PDFRenderer()
+                pdf_file = output_path / f"{project_slug}_{timestamp}_segmented.pdf"
+                try:
+                    # 移除超大 base64 图片以节省 PDF 渲染内存
+                    html_for_pdf = _re.sub(
+                        r'src="data:image/[^"]{1000,}"',
+                        'src="" alt="[See HTML version for images]"',
+                        html_content
+                    )
+                    del html_content
+                    gc.collect()
+                    
+                    html_for_pdf = pdf_renderer._inject_pdf_font_css(html_for_pdf)
+                    html_for_pdf = pdf_renderer._inject_pdf_enhanced_css(html_for_pdf)
+                    try:
+                        html_for_pdf = pdf_renderer.chart_preprocessor.preprocess(html_for_pdf)
+                    except Exception:
+                        pass
+                    html_for_pdf = pdf_renderer.layout_optimizer.optimize(html_for_pdf)
+                    pdf_bytes = pdf_renderer._html_to_pdf_bytes(html_for_pdf)
+                    del html_for_pdf
+                    gc.collect()
+                    
+                    pdf_file.write_bytes(pdf_bytes)
+                    pdf_path_str = str(pdf_file)
+                    del pdf_bytes
+                    gc.collect()
+                    logger.success(f"✅ PDF report: {pdf_file.name}")
+                except MemoryError:
+                    logger.warning("⚠️ PDF rendering hit MemoryError, skipping PDF")
+                except Exception as pdf_err:
+                    logger.warning(f"PDF rendering failed: {pdf_err}")
+            except Exception as render_err:
+                logger.warning(f"HTML/PDF rendering skipped: {render_err}")
             
             # 生成风险评分（简化版）
             total_words = document.total_word_count()
@@ -748,8 +837,8 @@ Your role is to synthesize disparate data points—failed clinical trials, burie
             report_output = ReportOutput(
                 markdown_content=markdown_content,
                 markdown_path=str(markdown_file),
-                html_path=None,
-                pdf_path=None,
+                html_path=html_path_str,
+                pdf_path=pdf_path_str,
                 recommendation=recommendation,
                 confidence_score=confidence_score,
                 risk_score=risk_score

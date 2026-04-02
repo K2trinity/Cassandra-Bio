@@ -8,6 +8,15 @@ The state acts as shared memory passed between all agent nodes.
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 import operator
 
+def add_or_replace_list(left: list, right: Any) -> list:
+    if left is None: left = []
+    if right is None: return left
+    if isinstance(right, dict) and "$replace" in right:
+        return right["$replace"]
+    if isinstance(right, list):
+        return left + right
+    return left + [right]
+
 
 class AgentState(TypedDict):
     """
@@ -66,9 +75,9 @@ class AgentState(TypedDict):
     # Core workflow data
     user_query: str  # Single value, last-write-wins
     pdf_paths: Annotated[List[str], operator.add]  # Can be accumulated
-    harvested_data: Annotated[List[Dict[str, Any]], operator.add]  # Can be accumulated
-    text_evidence: Annotated[List[Dict[str, Any]], operator.add]  # Parallel miner can add
-    forensic_evidence: Annotated[List[Dict[str, Any]], operator.add]  # Parallel auditor can add
+    harvested_data: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Can be accumulated
+    text_evidence: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Parallel miner can add
+    forensic_evidence: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Parallel auditor can add
     final_report: Optional[str]  # Last-write-wins (markdown content)
     final_report_path: Optional[str]  # Last-write-wins (file path)
     final_report_markdown: Optional[str]  # Last-write-wins (duplicate for clarity)
