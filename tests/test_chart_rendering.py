@@ -89,6 +89,18 @@ def _make_wordcloud_block() -> ChapterBlock:
     )
 
 
+def _extract_chart_payload(html_snippet: str) -> dict:
+    """从 _render_chart 输出中提取 push 的 JSON payload。"""
+    match = re.search(
+        r'window\.__cassandraCharts\.push\((\{.*\})\);</script>',
+        html_snippet,
+        re.DOTALL,
+    )
+    if not match:
+        raise AssertionError("Chart payload not found in rendered HTML snippet")
+    return json.loads(match.group(1))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 测试组 1：IRValidator — chart 块结构校验
 # ─────────────────────────────────────────────────────────────────────────────
@@ -232,7 +244,7 @@ class TestHTMLRendererChartFragment(unittest.TestCase):
     def test_render_chart_embeds_correct_type(self):
         block = _make_chart_block(VALID_CHART_CONTENT)
         html = _render_chart(block, chart_index=0)
-        config = json.loads(re.search(r'config: (\{.*?\})\}\);', html, re.DOTALL).group(1))
+        config = _extract_chart_payload(html)["config"]
         self.assertEqual(config["type"], "bar")
 
     def test_render_chart_embeds_labels(self):
@@ -261,7 +273,7 @@ class TestHTMLRendererChartFragment(unittest.TestCase):
     def test_render_pie_chart(self):
         block = _make_chart_block(VALID_PIE_CONTENT)
         html = _render_chart(block, chart_index=1)
-        config = json.loads(re.search(r'config: (\{.*?\})\}\);', html, re.DOTALL).group(1))
+        config = _extract_chart_payload(html)["config"]
         self.assertEqual(config["type"], "pie")
 
     def test_render_multiple_charts_unique_ids(self):
