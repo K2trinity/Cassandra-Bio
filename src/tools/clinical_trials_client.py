@@ -1,11 +1,12 @@
 """
-ClinicalTrials.gov Client - Bio-Short-Seller Clinical Trial Failure Detector
+ClinicalTrials.gov Client
 
-This module provides tools to search ClinicalTrials.gov for terminated, suspended,
-or withdrawn clinical trials - critical "dark data" for biomedical due diligence.
+This module provides tools to search ClinicalTrials.gov API v2 and parse
+study-level metadata into structured dictionaries.
 
-Key Function:
-- search_failed_trials: Find trials with negative outcomes and extract termination reasons
+Key Functions:
+- search_trials: General search across configurable statuses (all-status capable)
+- search_failed_trials: Convenience wrapper for terminated/suspended/withdrawn trials
 
 Official ClinicalTrials.gov API v2 Documentation:
 https://clinicaltrials.gov/data-api/api
@@ -21,6 +22,107 @@ from loguru import logger
 CLINICALTRIALS_API_BASE = "https://clinicaltrials.gov/api/v2/studies"
 DEFAULT_TIMEOUT = 30  # seconds
 MAX_RETRIES = 3
+
+
+ALL_KNOWN_STATUSES = [
+    "ACTIVE_NOT_RECRUITING",
+    "COMPLETED",
+    "ENROLLING_BY_INVITATION",
+    "NOT_YET_RECRUITING",
+    "RECRUITING",
+    "SUSPENDED",
+    "TERMINATED",
+    "WITHDRAWN",
+    "UNKNOWN",
+]
+
+
+def search_trials(
+    keyword: str,
+    max_results: int = 50,
+    include_statuses: Optional[List[str]] = None,
+    retries: int = MAX_RETRIES,
+) -> List[Dict[str, str]]:
+    """
+    Search ClinicalTrials.gov studies with broad status coverage and pagination.
+
+    Args:
+        keyword: Search keyword (drug/target/condition/company)
+        max_results: Maximum number of studies to return (bounded by API page size and pagination)
+        include_statuses: Optional statuses to filter. If None, uses ALL_KNOWN_STATUSES.
+        retries: Number of retries per page request
+
+    Returns:
+        List of parsed trial dictionaries in the unified format.
+    """
+    statuses = include_statuses or ALL_KNOWN_STATUSES
+    logger.info(f"Searching ClinicalTrials.gov studies: '{keyword}' (statuses={statuses})")
+
+    page_size = min(max(max_results, 1), 100)
+    next_page_token = None
+    parsed_trials: List[Dict[str, str]] = []
+
+    while len(parsed_trials) < max_results:
+        params = {
+            "query.term": keyword,
+            "filter.overallStatus": ",".join(statuses),
+            "pageSize": page_size,
+            "format": "json",
+            "fields": (
+                "NCTId,BriefTitle,OfficialTitle,Acronym,OverallStatus,BriefSummary,HasResults,"
+                "Condition,InterventionName,"
+                "PrimaryOutcomeMeasure,SecondaryOutcomeMeasure,OtherOutcomeMeasure,"
+                "Phase,EnrollmentCount,StudyType,"
+                "StartDate,PrimaryCompletionDate,CompletionDate,"
+                "StudyFirstPostDate,ResultsFirstPostDate,LastUpdatePostDate,"
+                "LeadSponsorName,LeadSponsorClass,CollaboratorName,"
+                "Sex,MinimumAge,MaximumAge,"
+                "WhyStopped,SecondaryId,LargeDocLabel"
+            ),
+        }
+        if next_page_token:
+            params["pageToken"] = next_page_token
+
+        response_data = None
+        for attempt in range(retries):
+            try:
+                response = requests.get(
+                    CLINICALTRIALS_API_BASE,
+                    params=params,
+                    timeout=DEFAULT_TIMEOUT,
+                    headers={"User-Agent": "Bio-Short-Seller/1.0"},
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                break
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"ClinicalTrials page request attempt {attempt + 1}/{retries} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.error("ClinicalTrials.gov page request exhausted retries")
+                    return parsed_trials[:max_results]
+
+        if not response_data:
+            break
+
+        studies = response_data.get("studies", [])
+        if not studies:
+            break
+
+        for study in studies:
+            trial_data = _parse_clinical_trial(study)
+            if trial_data:
+                parsed_trials.append(trial_data)
+                if len(parsed_trials) >= max_results:
+                    break
+
+        next_page_token = response_data.get("nextPageToken")
+        if not next_page_token:
+            break
+
+    logger.success(f"ClinicalTrials search returned {len(parsed_trials)} studies")
+    return parsed_trials[:max_results]
 
 
 def search_failed_trials(
@@ -86,69 +188,14 @@ def search_failed_trials(
         Exception: If all retry attempts fail
     """
     if include_statuses is None:
-        # Default to statuses indicating study problems
         include_statuses = ["TERMINATED", "SUSPENDED", "WITHDRAWN"]
-    
-    logger.info(f"Searching ClinicalTrials.gov: '{keyword}' (statuses: {include_statuses})")
-    
-    # Build query parameters
-    # API documentation: https://clinicaltrials.gov/data-api/api#searchStudies
-    params = {
-        "query.term": keyword,
-        "filter.overallStatus": ",".join(include_statuses),
-        "pageSize": min(max_results, 1000),  # API limit
-        "format": "json",
-        "fields": (
-            "NCTId,BriefTitle,OfficialTitle,Acronym,OverallStatus,BriefSummary,HasResults,"
-            "Condition,InterventionName,"
-            "PrimaryOutcomeMeasure,SecondaryOutcomeMeasure,OtherOutcomeMeasure,"
-            "Phase,EnrollmentCount,StudyType,"
-            "StartDate,PrimaryCompletionDate,CompletionDate,"
-            "StudyFirstPostDate,ResultsFirstPostDate,LastUpdatePostDate,"
-            "LeadSponsorName,LeadSponsorClass,CollaboratorName,"
-            "Sex,MinimumAge,MaximumAge,"
-            "WhyStopped,SecondaryId,LargeDocLabel"
-        )
-    }
-    
-    for attempt in range(retries):
-        try:
-            response = requests.get(
-                CLINICALTRIALS_API_BASE,
-                params=params,
-                timeout=DEFAULT_TIMEOUT,
-                headers={"User-Agent": "Bio-Short-Seller/1.0"}
-            )
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            # Parse results
-            studies = data.get("studies", [])
-            total_count = data.get("totalCount", 0)
-            
-            logger.success(f"Found {len(studies)} failed trials (total matches: {total_count})")
-            
-            parsed_trials = []
-            for study in studies:
-                trial_data = _parse_clinical_trial(study)
-                if trial_data:
-                    parsed_trials.append(trial_data)
-            
-            return parsed_trials
-            
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"ClinicalTrials.gov request attempt {attempt + 1}/{retries} failed: {e}")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)  # Exponential backoff
-            else:
-                logger.error(f"ClinicalTrials.gov search failed after {retries} attempts")
-                raise
-        except Exception as e:
-            logger.error(f"Unexpected error in search_failed_trials: {e}")
-            raise
-    
-    return []
+
+    return search_trials(
+        keyword=keyword,
+        max_results=max_results,
+        include_statuses=include_statuses,
+        retries=retries,
+    )
 
 
 def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
@@ -265,6 +312,28 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
 
         study_type = design_module.get("studyType", "Not specified")
 
+        design_info = design_module.get("designInfo", {}) if isinstance(design_module.get("designInfo", {}), dict) else {}
+        allocation = design_info.get("allocation") or design_module.get("allocation")
+        intervention_model = (
+            design_info.get("interventionModelDescription")
+            or design_module.get("interventionModelDescription")
+            or design_info.get("interventionModel")
+            or design_module.get("interventionModel")
+        )
+        primary_purpose = design_info.get("primaryPurpose") or design_module.get("primaryPurpose")
+        observational_model = design_info.get("observationalModel") or design_module.get("observationalModel")
+        time_perspective = design_info.get("timePerspective") or design_module.get("timePerspective")
+
+        study_design_parts = [
+            f"Study Type: {study_type}" if study_type and study_type != "Not specified" else None,
+            f"Allocation: {allocation}" if allocation else None,
+            f"Intervention Model: {intervention_model}" if intervention_model else None,
+            f"Primary Purpose: {primary_purpose}" if primary_purpose else None,
+            f"Observational Model: {observational_model}" if observational_model else None,
+            f"Time Perspective: {time_perspective}" if time_perspective else None,
+        ]
+        study_design = "; ".join([x for x in study_design_parts if x]) or study_type
+
         # ── Dates ─────────────────────────────────────────────────────────────
         start_date = status_module.get("startDateStruct", {}).get("date", "Unknown")
         primary_completion_date = status_module.get("primaryCompletionDateStruct", {}).get("date", "Unknown")
@@ -272,6 +341,8 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
         first_posted = status_module.get("studyFirstPostDateStruct", {}).get("date", "Unknown")
         results_first_posted = status_module.get("resultsFirstPostDateStruct", {}).get("date", "N/A")
         last_update_posted = status_module.get("lastUpdatePostDateStruct", {}).get("date", "Unknown")
+        results_url = f"https://clinicaltrials.gov/study/{nct_id}/results"
+        study_results = "Results available" if has_results.lower() == "true" else "No posted results"
 
         # ── Study Documents ────────────────────────────────────────────────────
         large_doc_module = document_section.get("largeDocumentModule", {})
@@ -283,18 +354,23 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
 
         return {
             # Core identification
+            "nct_number": nct_id,
             "nct_id": nct_id,
             "title": title,
             "official_title": official_title,
+            "study_url": url,
             "url": url,
             "acronym": acronym,
             "other_ids": other_ids,
             # Status
+            "study_status": status,
             "status": status,
             "why_stopped": why_stopped,
             # Description & results
             "brief_summary": brief_summary,
             "has_results": has_results,
+            "study_results": study_results,
+            "results_url": results_url,
             # Conditions & interventions
             "conditions": conditions_str,
             "interventions": interventions_str,
@@ -310,9 +386,11 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
             "sex": sex,
             "age": age,
             # Design
+            "phases": phase,
             "phase": phase,
             "enrollment": enrollment,
             "study_type": study_type,
+            "study_design": study_design,
             # Dates
             "start_date": start_date,
             "primary_completion_date": primary_completion_date,

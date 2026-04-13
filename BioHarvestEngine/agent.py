@@ -1,30 +1,33 @@
 """
-BioHarvest Agent - Biomedical Evidence Harvester for Bio-Short-Seller
+BioHarvest Agent - Multi-source Biomedical Data Harvester
 
-This agent searches PubMed, EuroPMC, and ClinicalTrials.gov for "dark data":
-- Failed clinical trials (terminated, suspended, withdrawn)
-- Adverse event reports
-- Toxicity signals in published literature
-- Negative efficacy data
+This agent collects objective biomedical data from multiple official/public
+sources and normalizes them into a stable payload for downstream reporting.
 
-Core workflow:
-1. Parse user intent (drug/therapy/company to investigate)
-2. Generate specific search queries using Gemini LLM
-3. Execute parallel searches on EuroPMC (PRIMARY for PDF access) + PubMed + ClinicalTrials.gov
-4. Download PDFs directly from EuroPMC (no scraping needed)
-5. Return structured evidence with local PDF paths
+Sources in this pipeline:
+- ClinicalTrials.gov API v2
+- NCBI E-utilities
+- Europe PMC
+- PubMed
+- openFDA
 """
 
 import json
-import os
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor
 
 from src.llms import create_bioharvest_client
-from src.tools import search_pubmed, fetch_details, search_failed_trials, EuroPMCClient
+from src.tools import (
+    search_pubmed,
+    fetch_details,
+    search_trials,
+    EuroPMCClient,
+    collect_multi_source_data,
+    project_source_payloads_for_frontend,
+    normalize_drug_class,
+    extract_normalized_targets,
+)
 from src.tools.pdf_downloader import download_pdf_from_url
-from src.tools.clinical_trials_results_client import get_trial_results_as_fallback  # P1: Second Shovel
 from loguru import logger
 from src.utils.stream_validator import StreamValidator
 
@@ -33,10 +36,8 @@ class BioHarvestAgent:
     """
     Biomedical Evidence Harvester Agent
     
-    Transforms high-level investigative queries into structured evidence candidates
-    by sweeping scientific databases for negative signals.
-    
-    Now uses EuroPMC as PRIMARY source for direct PDF access.
+    Transforms high-level queries into standardized, source-grounded evidence
+    without subjective risk conclusions.
     """
     
     def __init__(self):
@@ -51,44 +52,47 @@ class BioHarvestAgent:
         logger.info("BioHarvest Agent initialized with Gemini LLM + EuroPMC Client")
         
         # Tools are imported as functions (no initialization needed)
-        # - search_pubmed, fetch_details: PubMed literature search (FALLBACK)
-        # - search_failed_trials: ClinicalTrials.gov failure detector
     
     def run(self, user_query: str, max_results_per_source: int = 20) -> Dict[str, Any]:
         """
         Execute biomedical evidence harvesting workflow.
         
         Args:
-            user_query: High-level investigative query 
-                       (e.g., "pembrolizumab toxicity", "Theranos failures", "CAR-T adverse events")
+            user_query: High-level biomedical query
             max_results_per_source: Maximum results to retrieve from each source
         
         Returns:
             Dictionary with structure:
             {
-                'results': [  # List of evidence candidates
+                'results': [
                     {
                         'title': str,        # Article/trial title
                         'source': str,       # 'PubMed' or 'ClinicalTrials.gov'
                         'snippet': str,      # Abstract excerpt or why_stopped reason
                         'link': str,         # Full URL to original source
-                        'status': str,       # For trials: TERMINATED/SUSPENDED/WITHDRAWN, for articles: 'Published'
+                        'status': str,
                         'date': str,         # Publication/completion date
-                        'metadata': dict     # Additional fields (authors, journal, phase, etc.)
+                        'metadata': dict
                     },
                     ...
                 ],
-                'stats': {  # Summary statistics
+                'stats': {
                     'total': int,
                     'pubmed': int,
-                    'trials': int
-                }
+                    'trials': int,
+                    'pdfs_downloaded': int,
+                    'ncbi_records': int,
+                    'openfda_records': int
+                },
+                'data_layers': {...},
+                'source_payloads': {...}
             }
         
         Workflow:
-            Step A: Intent Parsing → Generate specific search queries using Gemini
-            Step B: Execution → Parallel searches on PubMed + ClinicalTrials.gov
-            Step C: Aggregation → Structure results into evidence candidates
+            Step A: Query parsing and source query generation
+            Step B: Source execution (EuroPMC/PubMed/ClinicalTrials)
+            Step C: Multi-source enrichment (NCBI/openFDA)
+            Step D: Normalization to report-oriented data layers
         
         Example:
             >>> agent = BioHarvestAgent()
@@ -131,7 +135,7 @@ class BioHarvestAgent:
                     max_results_per_source
                 )
             
-            # Search ClinicalTrials.gov for failed trials
+            # Search ClinicalTrials.gov (all major statuses, not only failed)
             trial_results = self._execute_trials_searches(
                 search_queries.get("clinicaltrials", []),
                 max_results_per_source
@@ -140,30 +144,65 @@ class BioHarvestAgent:
             # Combine results
             pubmed_results = europmc_papers + pubmed_articles
             
-            # ===== STEP C: Aggregation =====
-            logger.info("\n[Step C] Aggregating evidence candidates...")
+            # ===== STEP C: Multi-source enrichment =====
+            logger.info("\n[Step C] Enriching with NCBI/openFDA/EuropePMC unified collector...")
+            source_payloads = collect_multi_source_data(
+                query=user_query,
+                max_results_per_source=max_results_per_source,
+            )
+
+            # ===== STEP D: Aggregation =====
+            logger.info("\n[Step D] Aggregating evidence candidates...")
             evidence_candidates = self._aggregate_results(pubmed_results, trial_results)
             
-            # ===== STEP D: PDF Download (NEW) =====
-            logger.info("\n[Step D] Downloading full-text PDFs from PMC...")
+            # ===== STEP E: PDF Download =====
+            logger.info("\n[Step E] Downloading full-text PDFs from PMC...")
             downloaded_count = self._download_pdfs(evidence_candidates)
+
+            # ===== STEP F: Build data layers =====
+            data_layers = self._build_data_layers(
+                query=user_query,
+                evidence_candidates=evidence_candidates,
+                source_payloads=source_payloads,
+            )
+
+            # ===== STEP G: Build frontend projection from explicit source whitelists =====
+            frontend_payload = project_source_payloads_for_frontend(
+                source_payloads=source_payloads,
+                max_items=max_results_per_source,
+            )
             
             logger.info(f"\n{'='*60}")
             logger.success(f"✅ Harvested {len(evidence_candidates)} evidence candidates")
             logger.info(f"   - PubMed articles: {len(pubmed_results)}")
-            logger.info(f"   - Failed trials: {len(trial_results)}")
+            logger.info(f"   - Clinical trials: {len(trial_results)}")
             logger.info(f"   - PDFs downloaded: {downloaded_count}")
             logger.info(f"{'='*60}\n")
             
-            # Return structured result matching supervisor expectations
+            ncbi_records = sum((source_payloads.get("ncbi", {}).get(db, {}) or {}).get("count", 0)
+                               for db in ["pubmed", "gene", "protein", "clinvar", "gds"])
+            openfda_counts = source_payloads.get("openfda", {}).get("counts", {})
+            openfda_records = (
+                int(openfda_counts.get("label", 0) or 0)
+                + int(openfda_counts.get("event", 0) or 0)
+                + int(openfda_counts.get("drugsfda", 0) or 0)
+            )
+
+            # Return structured result matching supervisor expectations.
+            # Important: risk-related fields are intentionally not transmitted.
             return {
                 "results": evidence_candidates,
                 "stats": {
                     "total": len(evidence_candidates),
                     "pubmed": len(pubmed_results),
                     "trials": len(trial_results),
-                    "pdfs_downloaded": downloaded_count
-                }
+                    "pdfs_downloaded": downloaded_count,
+                    "ncbi_records": ncbi_records,
+                    "openfda_records": openfda_records,
+                },
+                "data_layers": data_layers,
+                "source_payloads": source_payloads,
+                "frontend_payload": frontend_payload,
             }
             
         except Exception as e:
@@ -191,7 +230,7 @@ class BioHarvestAgent:
 USER QUERY: "{user_query}"
 🔥 CORE TERMS TO PRESERVE: "{core_terms}" (MUST appear in at least 2 queries!)
 
-Generate 3 specific search queries for each database to find NEGATIVE signals (failures, toxicity, adverse events, terminations):
+Generate 3 specific search queries for each database to maximize objective evidence coverage:
 
 1. **PubMed queries**: 
    - CRITICAL: Keep queries SIMPLE and CONCISE (2-4 keywords max)
@@ -201,12 +240,12 @@ Generate 3 specific search queries for each database to find NEGATIVE signals (f
    - Focus on core concepts only
    - ✅ GOOD: "CRISPR adverse events", "CRISPR toxicity", "CRISPR off-target"
    - ❌ BAD: "CRISPR off-target adverse events clinical trials toxicity genotoxicity"
-   - Include ONE risk term per query: "toxicity", "adverse events", "failure", "off-target"
+    - Include trial, efficacy, biomarker, and mechanism evidence terms
 
 2. **ClinicalTrials.gov queries**: 
    - Use drug names, company names, or therapy types
    - MUST include core term "{core_terms}"
-   - Keep queries concise (the API will filter for failed trials automatically)
+    - Keep queries concise and entity-focused
    - Example: "pembrolizumab", "CRISPR", "CAR-T therapy"
 
 Return your response in this EXACT JSON format:
@@ -249,9 +288,9 @@ Only respond with valid JSON, no additional text."""
             # Fallback: simple keyword-based queries
             return {
                 "pubmed": [
-                    f"{user_query} toxicity",
-                    f"{user_query} adverse events",
-                    f"{user_query} failure"
+                    f"{user_query} clinical trial",
+                    f"{user_query} mechanism biomarker",
+                    f"{user_query} efficacy safety"
                 ],
                 "clinicaltrials": [user_query, user_query, user_query]
             }
@@ -277,11 +316,11 @@ Only respond with valid JSON, no additional text."""
         all_trials = []
         for query in queries:
             try:
-                trials = search_failed_trials(query, max_results=max_results)
+                trials = search_trials(query, max_results=max_results, include_statuses=None)
                 all_trials.extend(trials)
             except Exception as e:
                 logger.warning(f"ClinicalTrials search failed for '{query}': {e}")
-        return all_trials
+        return self._deduplicate_by_key(all_trials, 'nct_id')
     
     def _execute_searches(
         self, 
@@ -313,7 +352,7 @@ Only respond with valid JSON, no additional text."""
             # Submit ClinicalTrials searches
             for query in search_queries.get("clinicaltrials", []):
                 future = executor.submit(
-                    search_failed_trials, 
+                    search_trials,
                     query, 
                     max_results=max_results
                 )
@@ -362,7 +401,7 @@ Only respond with valid JSON, no additional text."""
     def _aggregate_results(
         self, 
         pubmed_articles: List[Dict], 
-        failed_trials: List[Dict]
+        trials: List[Dict]
     ) -> List[Dict[str, str]]:
         """
         Convert raw API results into standardized evidence candidate format.
@@ -371,7 +410,7 @@ Only respond with valid JSON, no additional text."""
         
         Args:
             pubmed_articles: List of article dicts from EuroPMC or fetch_details()
-            failed_trials: List of trial dicts from search_failed_trials()
+            trials: List of trial dicts from ClinicalTrials.gov
         
         Returns:
             Unified list of evidence candidates
@@ -401,25 +440,31 @@ Only respond with valid JSON, no additional text."""
                 }
             })
         
-        # Process failed clinical trials
-        for trial in failed_trials:
+        # Process clinical trials
+        for trial in trials:
             nct_id = trial.get('nct_id')
 
             evidence_candidates.append({
                 'title': trial.get('title', 'No title'),
                 'source': 'ClinicalTrials.gov',
-                'snippet': trial.get('why_stopped', 'Reason not provided'),
+                'snippet': trial.get('brief_summary', 'Summary not provided'),
                 'link': trial.get('url', ''),
                 'status': trial.get('status', 'UNKNOWN'),
                 'date': trial.get('completion_date', 'Unknown'),
                 # ── Top-level fields for direct template access ──────────────
+                'nct_number': trial.get('nct_number', nct_id),
                 'nct_id': nct_id,
+                'study_url': trial.get('study_url', trial.get('url', '')),
                 'url': trial.get('url', ''),
                 'acronym': trial.get('acronym', 'N/A'),
-                'study_status': trial.get('status', 'N/A'),
+                'study_status': trial.get('study_status', trial.get('status', 'N/A')),
                 'brief_summary': trial.get('brief_summary', 'N/A'),
                 'has_results': trial.get('has_results', 'False'),
+                'study_results': trial.get('study_results', 'No posted results'),
+                'results_url': trial.get('results_url', ''),
+                'phases': trial.get('phases', trial.get('phase', 'N/A')),
                 'phase': trial.get('phase', 'N/A'),
+                'study_design': trial.get('study_design', 'N/A'),
                 'why_stopped': trial.get('why_stopped', 'N/A'),
                 'interventions': trial.get('interventions', 'N/A'),
                 'conditions': trial.get('conditions', 'N/A'),
@@ -443,13 +488,19 @@ Only respond with valid JSON, no additional text."""
                 'study_documents': trial.get('study_documents', 'None'),
                 # ── Structured metadata dict (for programmatic access) ────────
                 'metadata': {
+                    'nct_number': trial.get('nct_number', nct_id),
                     'nct_id': nct_id,
+                    'study_url': trial.get('study_url', trial.get('url', '')),
                     'url': trial.get('url', ''),
                     'acronym': trial.get('acronym', 'N/A'),
-                    'study_status': trial.get('status', 'N/A'),
+                    'study_status': trial.get('study_status', trial.get('status', 'N/A')),
                     'brief_summary': trial.get('brief_summary', 'N/A'),
                     'has_results': trial.get('has_results', 'False'),
+                    'study_results': trial.get('study_results', 'No posted results'),
+                    'results_url': trial.get('results_url', ''),
+                    'phases': trial.get('phases', trial.get('phase', 'N/A')),
                     'phase': trial.get('phase'),
+                    'study_design': trial.get('study_design', 'N/A'),
                     'why_stopped': trial.get('why_stopped', 'N/A'),
                     'interventions': trial.get('interventions'),
                     'conditions': trial.get('conditions'),
@@ -474,20 +525,224 @@ Only respond with valid JSON, no additional text."""
                 }
             })
             
-            # 🚨 P1: For failed trials, try to get detailed results from ClinicalTrials.gov
-            if nct_id and nct_id.startswith('NCT'):
-                try:
-                    logger.info(f"🔍 Fetching detailed results for failed trial {nct_id}...")
-                    ct_results = get_trial_results_as_fallback(nct_id)
-                    if ct_results and ct_results.get('has_results'):
-                        # Add to the last candidate we just appended
-                        evidence_candidates[-1]['ct_structured_results'] = ct_results
-                        evidence_candidates[-1]['data_source'] = 'ClinicalTrials.gov_API'
-                        logger.success(f"✅ Retrieved detailed adverse event data for {nct_id}")
-                except Exception as e:
-                    logger.debug(f"Could not fetch detailed results for {nct_id}: {e}")
-        
+            # Structured results are collected in source_payloads to avoid heavy per-item calls here.
+
         return evidence_candidates
+
+    def _build_data_layers(
+        self,
+        query: str,
+        evidence_candidates: List[Dict[str, Any]],
+        source_payloads: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Build report-oriented objective layers.
+
+        Note:
+        - This function organizes data for downstream report synthesis.
+        - It does not output subjective investment/risk conclusions.
+        """
+        trials = source_payloads.get("clinicaltrials", {}).get("studies", [])
+        pubmed_articles = source_payloads.get("pubmed", {}).get("articles", [])
+        openfda_payload = source_payloads.get("openfda", {}) or {}
+        label_results = (openfda_payload.get("label", {}) or {}).get("results", []) or []
+        event_results = (openfda_payload.get("event", {}) or {}).get("results", []) or []
+        drugsfda_results = (openfda_payload.get("drugsfda", {}) or {}).get("results", []) or []
+
+        target_counts: Dict[str, int] = {}
+        drug_class_counts: Dict[str, int] = {}
+        phase_counts: Dict[str, int] = {}
+        status_counts: Dict[str, int] = {}
+        sponsor_counts: Dict[str, int] = {}
+
+        required_trial_fields = [
+            "nct_id",
+            "title",
+            "url",
+            "acronym",
+            "status",
+            "brief_summary",
+            "has_results",
+            "study_results",
+            "conditions",
+            "interventions",
+            "primary_outcome_measures",
+            "secondary_outcome_measures",
+            "other_outcome_measures",
+            "phase",
+            "enrollment",
+            "funder_type",
+            "study_type",
+            "study_design",
+            "other_ids",
+            "start_date",
+            "primary_completion_date",
+            "completion_date",
+            "first_posted",
+            "results_first_posted",
+            "last_update_posted",
+            "study_documents",
+            "sponsor",
+            "collaborators",
+            "sex",
+            "age",
+        ]
+
+        def _is_present(value: Any) -> bool:
+            return value not in (None, "", "N/A", "Unknown", "Not specified", "None", [], {})
+
+        trial_field_coverage = {
+            field: sum(1 for t in trials if _is_present(t.get(field)))
+            for field in required_trial_fields
+        }
+
+        for trial in trials:
+            trial_target_text = " ; ".join(
+                [
+                    str(trial.get("target", "")),
+                    str(trial.get("targets", "")),
+                    str(trial.get("interventions", "")),
+                ]
+            )
+            for target in extract_normalized_targets(trial_target_text):
+                target_counts[target] = target_counts.get(target, 0) + 1
+
+            trial_class = normalize_drug_class(
+                raw_text=" ".join(
+                    [
+                        str(trial.get("interventions", "")),
+                        str(trial.get("title", "")),
+                        str(trial.get("brief_summary", "")),
+                    ]
+                ),
+                explicit_label=trial.get("drug_class") or trial.get("modality") or trial.get("platform"),
+            )
+            drug_class_counts[trial_class] = drug_class_counts.get(trial_class, 0) + 1
+
+            phase = str(trial.get("phase", "Not specified"))
+            phase_counts[phase] = phase_counts.get(phase, 0) + 1
+            status = str(trial.get("status", "UNKNOWN"))
+            status_counts[status] = status_counts.get(status, 0) + 1
+            sponsor = str(trial.get("sponsor", "Unknown"))
+            sponsor_counts[sponsor] = sponsor_counts.get(sponsor, 0) + 1
+
+        for item in evidence_candidates:
+            if not isinstance(item, dict):
+                continue
+
+            metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+
+            target_text = " ; ".join(
+                [
+                    str(item.get("target", "")),
+                    str(item.get("targets", "")),
+                    str(item.get("target_description", "")),
+                    str(metadata.get("target", "")),
+                    str(metadata.get("target_description", "")),
+                    str(item.get("interventions", "")),
+                    str(metadata.get("interventions", "")),
+                ]
+            )
+            for target in extract_normalized_targets(target_text):
+                target_counts[target] = target_counts.get(target, 0) + 1
+
+            cls = normalize_drug_class(
+                raw_text=" ".join(
+                    [
+                        str(item.get("interventions", "")),
+                        str(metadata.get("interventions", "")),
+                        str(item.get("title", "")),
+                        str(item.get("snippet", "")),
+                        str(item.get("mechanism", "")),
+                        str(metadata.get("mechanism", "")),
+                    ]
+                ),
+                explicit_label=item.get("drug_class") or metadata.get("drug_class") or item.get("modality") or metadata.get("modality"),
+            )
+            drug_class_counts[cls] = drug_class_counts.get(cls, 0) + 1
+
+        return {
+            "disease_layer": {
+                "query_anchor": query,
+                "conditions_from_trials": list({t.get("conditions", "") for t in trials if t.get("conditions")}),
+            },
+            "biology_layer": {
+                "ncbi_gene_hits": (source_payloads.get("ncbi", {}).get("gene", {}) or {}).get("count", 0),
+                "ncbi_protein_hits": (source_payloads.get("ncbi", {}).get("protein", {}) or {}).get("count", 0),
+                "ncbi_clinvar_hits": (source_payloads.get("ncbi", {}).get("clinvar", {}) or {}).get("count", 0),
+                "ncbi_gds_hits": (source_payloads.get("ncbi", {}).get("gds", {}) or {}).get("count", 0),
+            },
+            "target_layer": {
+                "target_proxy_distribution": target_counts,
+            },
+            "drug_layer": {
+                "openfda_counts": openfda_payload.get("counts", {}),
+                "class_distribution": dict(sorted(drug_class_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "openfda_label_snapshot": [
+                    {
+                        "generic_name": ((r.get("openfda", {}) or {}).get("generic_name") or [None])[0],
+                        "brand_name": ((r.get("openfda", {}) or {}).get("brand_name") or [None])[0],
+                        "manufacturer_name": ((r.get("openfda", {}) or {}).get("manufacturer_name") or [None])[0],
+                        "application_number": ((r.get("openfda", {}) or {}).get("application_number") or [None])[0],
+                        "effective_time": r.get("effective_time"),
+                    }
+                    for r in label_results[:20]
+                ],
+                "openfda_event_snapshot": [
+                    {
+                        "safetyreportid": r.get("safetyreportid"),
+                        "receivedate": r.get("receivedate"),
+                        "serious": r.get("serious"),
+                        "seriousnessdeath": r.get("seriousnessdeath"),
+                        "reaction_terms": [
+                            x.get("reactionmeddrapt")
+                            for x in ((r.get("patient", {}) or {}).get("reaction") or [])[:10]
+                            if isinstance(x, dict) and x.get("reactionmeddrapt")
+                        ],
+                    }
+                    for r in event_results[:20]
+                ],
+                "sample_drugsfda_records": drugsfda_results[:10],
+            },
+            "pipeline_layer": {
+                "phase_distribution": phase_counts,
+                "status_distribution": status_counts,
+            },
+            "company_layer": {
+                "sponsor_distribution": sponsor_counts,
+            },
+            "regulatory_layer": {
+                "openfda_approval_records": len(drugsfda_results),
+                "openfda_approval_snapshot": [
+                    {
+                        "application_number": r.get("application_number"),
+                        "sponsor_name": r.get("sponsor_name"),
+                        "brand_name": ((r.get("products", []) or [{}])[0] or {}).get("brand_name"),
+                        "marketing_status": ((r.get("products", []) or [{}])[0] or {}).get("marketing_status"),
+                        "dosage_form": ((r.get("products", []) or [{}])[0] or {}).get("dosage_form"),
+                        "submission_status": ((r.get("submissions", []) or [{}])[0] or {}).get("submission_status"),
+                        "submission_status_date": ((r.get("submissions", []) or [{}])[0] or {}).get("submission_status_date"),
+                    }
+                    for r in drugsfda_results[:20]
+                ],
+            },
+            "trial_registry_layer": {
+                "required_field_coverage": trial_field_coverage,
+                "sample_studies": [
+                    {field: t.get(field) for field in required_trial_fields}
+                    for t in trials[:20]
+                ],
+            },
+            "landscape_layer": {
+                "total_evidence_candidates": len(evidence_candidates),
+                "trial_count": len(trials),
+                "pubmed_article_count": len(pubmed_articles),
+                "europe_pmc_count": len((source_payloads.get("europe_pmc", {}) or {}).get("papers", []) or []),
+            },
+            "insight_inputs": {
+                "note": "Objective evidence inputs only. Subjective recommendations are intentionally excluded.",
+            },
+        }
     
     def _download_pdfs(self, evidence_candidates: List[Dict[str, Any]]) -> int:
         """
@@ -545,34 +800,11 @@ Only respond with valid JSON, no additional text."""
                     candidate['local_path'] = None
                     logger.debug(f"❌ Download failed: {pdf_url}")
                     
-                    # 🚨 P1: Second Shovel - Try ClinicalTrials.gov if NCT ID exists
-                    nct_id = metadata.get('nct_id')
-                    if nct_id and nct_id.startswith('NCT'):
-                        logger.info(f"🔄 PDF failed, activating ClinicalTrials.gov fallback for {nct_id}...")
-                        ct_results = get_trial_results_as_fallback(nct_id)
-                        if ct_results and ct_results.get('has_results'):
-                            candidate['ct_structured_results'] = ct_results
-                            candidate['data_source'] = 'ClinicalTrials.gov_API'
-                            logger.success(f"✅ Retrieved structured results from ClinicalTrials.gov")
-                        else:
-                            logger.warning(f"⚠️ No structured results available for {nct_id}")
-                    
+                    # No trial fallback here. Trial results are handled in unified source payloads.
+
             except Exception as e:
                 logger.warning(f"PDF download error for {pdf_url}: {e}")
                 candidate['local_path'] = None
-                
-                # 🚨 P1: Second Shovel - Try ClinicalTrials.gov even on exception
-                nct_id = metadata.get('nct_id')
-                if nct_id and nct_id.startswith('NCT'):
-                    try:
-                        logger.info(f"🔄 Exception occurred, trying ClinicalTrials.gov fallback for {nct_id}...")
-                        ct_results = get_trial_results_as_fallback(nct_id)
-                        if ct_results and ct_results.get('has_results'):
-                            candidate['ct_structured_results'] = ct_results
-                            candidate['data_source'] = 'ClinicalTrials.gov_API'
-                            logger.success(f"✅ Retrieved structured results from ClinicalTrials.gov")
-                    except Exception as ct_error:
-                        logger.warning(f"ClinicalTrials.gov fallback also failed: {ct_error}")
         
         return downloaded_count
 

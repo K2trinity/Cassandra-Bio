@@ -22,12 +22,23 @@ Workflow:
 import os
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 from loguru import logger
 
 from langgraph.graph import StateGraph, START, END
 
 from src.graph.state import AgentState
+from src.graph.contracts import (
+    CONTRACT_VERSION,
+    validate_bioharvest_output,
+    validate_writer_input,
+    strip_risk_fields,
+)
+from src.tools.biomedical_normalization import (
+    normalize_drug_class,
+    normalize_target_term,
+    extract_normalized_targets,
+)
 from config import settings
 from BioHarvestEngine.agent import BioHarvestAgent
 from ForensicEngine.agent import ForensicAuditorAgent
@@ -45,6 +56,252 @@ except ImportError:
 
 
 # ========== Node Implementations ==========
+
+
+def _top_ranked_pairs(counter: Dict[str, Any], limit: int = 8) -> List[Dict[str, Any]]:
+    """Return top-N {name, count} pairs sorted by count desc."""
+    if not isinstance(counter, dict):
+        return []
+
+    ranked = []
+    for key, value in counter.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            continue
+        ranked.append((name, count))
+
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    return [{"name": name, "count": count} for name, count in ranked[:limit]]
+
+
+def _add_terms(target: set, raw_value: Any) -> None:
+    """Parse a scalar/list field into normalized biomedical terms."""
+    if raw_value is None:
+        return
+
+    if isinstance(raw_value, list):
+        for item in raw_value:
+            _add_terms(target, item)
+        return
+
+    if isinstance(raw_value, dict):
+        for _, value in raw_value.items():
+            _add_terms(target, value)
+        return
+
+    text = str(raw_value).strip()
+    if not text:
+        return
+
+    # Common separators in harvested biomedical entities.
+    for part in text.replace(";", ",").replace("|", ",").split(","):
+        token = part.strip()
+        if token and len(token) > 1:
+            target.add(token)
+
+
+def _infer_drug_class_from_text(raw_text: Any) -> str:
+    """Conservative heuristic for modality/class labels from intervention text."""
+    return normalize_drug_class(raw_text)
+
+
+def _build_biomedical_profile(state: AgentState) -> Dict[str, Any]:
+    """Build disease-oriented summary fields for API/frontend consumption."""
+    harvested_data = state.get("harvested_data", []) or []
+    data_layers = state.get("harvest_data_layers", {}) or {}
+    source_payloads = state.get("harvest_source_payloads", {}) or {}
+
+    disease_layer = data_layers.get("disease_layer", {}) or {}
+    target_layer = data_layers.get("target_layer", {}) or {}
+    pipeline_layer = data_layers.get("pipeline_layer", {}) or {}
+    company_layer = data_layers.get("company_layer", {}) or {}
+
+    disease_terms = set()
+    _add_terms(disease_terms, disease_layer.get("conditions_from_trials", []))
+    for item in harvested_data:
+        if not isinstance(item, dict):
+            continue
+        _add_terms(disease_terms, item.get("conditions"))
+        _add_terms(disease_terms, item.get("condition"))
+        _add_terms(disease_terms, (item.get("metadata") or {}).get("conditions"))
+
+    drug_terms = set()
+    _add_terms(drug_terms, state.get("project_name"))
+
+    openfda_payload = source_payloads.get("openfda", {}) or {}
+    label_results = (openfda_payload.get("label", {}) or {}).get("results", []) or []
+    for rec in label_results:
+        if not isinstance(rec, dict):
+            continue
+        openfda = rec.get("openfda", {}) or {}
+        _add_terms(drug_terms, openfda.get("generic_name"))
+        _add_terms(drug_terms, openfda.get("brand_name"))
+
+    drugsfda_results = (openfda_payload.get("drugsfda", {}) or {}).get("results", []) or []
+    for rec in drugsfda_results:
+        if not isinstance(rec, dict):
+            continue
+        openfda = rec.get("openfda", {}) or {}
+        _add_terms(drug_terms, openfda.get("generic_name"))
+        _add_terms(drug_terms, openfda.get("brand_name"))
+        products = rec.get("products", []) or []
+        for product in products if isinstance(products, list) else []:
+            if isinstance(product, dict):
+                _add_terms(drug_terms, product.get("brand_name"))
+
+    for item in harvested_data:
+        if not isinstance(item, dict):
+            continue
+        _add_terms(drug_terms, item.get("interventions"))
+        _add_terms(drug_terms, (item.get("metadata") or {}).get("interventions"))
+
+    trial_records = sum(
+        1
+        for item in harvested_data
+        if isinstance(item, dict)
+        and (
+            item.get("source") == "ClinicalTrials.gov"
+            or bool(item.get("nct_id"))
+            or bool((item.get("metadata") or {}).get("nct_id"))
+        )
+    )
+
+    normalized_target_counter: Dict[str, int] = {}
+    raw_target_counter = target_layer.get("target_proxy_distribution", {})
+    if isinstance(raw_target_counter, dict):
+        for raw_name, raw_count in raw_target_counter.items():
+            canonical = normalize_target_term(raw_name)
+            if not canonical:
+                continue
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                continue
+            normalized_target_counter[canonical] = normalized_target_counter.get(canonical, 0) + count
+
+    for item in harvested_data:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        target_text = " ; ".join(
+            [
+                str(item.get("target", "")),
+                str(item.get("targets", "")),
+                str(item.get("target_description", "")),
+                str(metadata.get("target", "")),
+                str(metadata.get("target_description", "")),
+                str(item.get("mechanism", "")),
+                str(metadata.get("mechanism", "")),
+                str(item.get("interventions", "")),
+                str(metadata.get("interventions", "")),
+            ]
+        )
+        for target in extract_normalized_targets(target_text):
+            normalized_target_counter[target] = normalized_target_counter.get(target, 0) + 1
+
+    publication_records = sum(
+        1
+        for item in harvested_data
+        if isinstance(item, dict)
+        and item.get("source") in {"PubMed", "EuroPMC"}
+    )
+
+    drug_class_counter: Dict[str, int] = {}
+    drug_catalog: List[Dict[str, Any]] = []
+
+    trial_field_names = [
+        "nct_id",
+        "phase",
+        "status",
+        "enrollment",
+        "study_design",
+        "primary_outcome_measures",
+        "secondary_outcome_measures",
+        "sponsor",
+    ]
+    trial_field_coverage = {name: 0 for name in trial_field_names}
+
+    for item in harvested_data:
+        if not isinstance(item, dict):
+            continue
+
+        metadata = item.get("metadata", {}) if isinstance(item.get("metadata"), dict) else {}
+        asset_name = (
+            item.get("interventions")
+            or metadata.get("interventions")
+            or item.get("title")
+            or "Unknown"
+        )
+        drug_class = normalize_drug_class(
+            raw_text=" ".join(
+                [
+                    str(asset_name),
+                    str(item.get("mechanism") or metadata.get("mechanism") or ""),
+                ]
+            ),
+            explicit_label=item.get("drug_class") or metadata.get("drug_class") or item.get("modality") or metadata.get("modality"),
+        )
+        drug_class_counter[drug_class] = drug_class_counter.get(drug_class, 0) + 1
+
+        target_terms = extract_normalized_targets(
+            " ; ".join(
+                [
+                    str(item.get("target") or ""),
+                    str(item.get("targets") or ""),
+                    str(item.get("target_description") or ""),
+                    str(metadata.get("target") or ""),
+                    str(metadata.get("target_description") or ""),
+                    str(item.get("mechanism") or metadata.get("mechanism") or ""),
+                ]
+            )
+        )
+        normalized_target = ", ".join(target_terms[:3]) if target_terms else "Insufficient data"
+
+        if len(drug_catalog) < 30:
+            drug_catalog.append(
+                {
+                    "asset_name": str(asset_name)[:120],
+                    "drug_class": drug_class,
+                    "target": normalized_target[:120],
+                    "sponsor": str(item.get("sponsor") or metadata.get("sponsor") or "Insufficient data")[:80],
+                    "phase": str(item.get("phase") or metadata.get("phase") or item.get("phases") or metadata.get("phases") or "Insufficient data")[:40],
+                    "status": str(item.get("status") or item.get("study_status") or metadata.get("status") or "Insufficient data")[:40],
+                    "reference": str(item.get("nct_id") or metadata.get("nct_id") or item.get("pmid") or metadata.get("pmid") or "N/A")[:40],
+                }
+            )
+
+        for field in trial_field_names:
+            value = item.get(field)
+            if value in (None, ""):
+                value = metadata.get(field)
+            if value not in (None, ""):
+                trial_field_coverage[field] += 1
+
+    return {
+        "analysis_focus": "disease-oriented",
+        "disease_areas": sorted(disease_terms)[:12],
+        "drug_baselines": sorted(drug_terms)[:12],
+        "target_signals": _top_ranked_pairs(normalized_target_counter, limit=10),
+        "company_entities": _top_ranked_pairs(company_layer.get("sponsor_distribution", {}), limit=10),
+        "drug_class_distribution": _top_ranked_pairs(drug_class_counter, limit=10),
+        "drug_catalog": drug_catalog,
+        "clinical_data": {
+            "trial_records": trial_records,
+            "phase_distribution": pipeline_layer.get("phase_distribution", {}),
+            "status_distribution": pipeline_layer.get("status_distribution", {}),
+            "trial_field_coverage": trial_field_coverage,
+        },
+        "evidence_stats": {
+            "publication_records": publication_records,
+            "text_evidence_records": len(state.get("text_evidence", []) or []),
+            "forensic_records": len(state.get("forensic_evidence", []) or []),
+            "total_harvested_records": len(harvested_data),
+        },
+    }
 
 def harvester_node(state: AgentState) -> Dict[str, Any]:
     """
@@ -73,6 +330,13 @@ def harvester_node(state: AgentState) -> Dict[str, Any]:
             user_query=state["user_query"],
             max_results_per_source=20
         )
+
+        # Validate harvester output contract for cross-engine consistency.
+        is_valid_harvest, harvest_errors = validate_bioharvest_output(results)
+        if not is_valid_harvest:
+            logger.warning("⚠️ BioHarvest output contract validation failed")
+            for err in harvest_errors[:8]:
+                logger.warning(f"   - {err}")
         
         # Extract LOCAL PDF paths from downloaded papers
         # BioHarvestEngine now includes 'local_path' field after downloading PMC PDFs
@@ -141,6 +405,10 @@ def harvester_node(state: AgentState) -> Dict[str, Any]:
         
         return {
             "harvested_data": results.get("results", []),
+            "harvest_data_layers": results.get("data_layers", {}),
+            "harvest_source_payloads": results.get("source_payloads", {}),
+            "harvest_frontend_payload": results.get("frontend_payload", {}),
+            "dataflow_contract_version": CONTRACT_VERSION,
             "pdf_paths": pdf_paths,  # Now contains local file paths, not URLs
             "pdf_files": pdf_paths,  # 🔥 STEP 3: Store as pdf_files for global tracking
             "status": "harvest_complete"
@@ -292,7 +560,17 @@ def miner_node(state: AgentState) -> Dict[str, Any]:
                             }
                         else:
                             risk_dict = dict(risk) if isinstance(risk, dict) else {}
-                            risk_dict["filename"] = filename  # 🔥 ADD: Filename tracking
+                            # Normalize schema differences from EvidenceEngine dict mode.
+                            # Expected downstream keys: risk_level/risk_type/quote/source/page_estimate/explanation.
+                            risk_dict = {
+                                "source": risk_dict.get("source") or risk_dict.get("page_reference") or "Unknown",
+                                "page_estimate": risk_dict.get("page_estimate") or risk_dict.get("page_reference") or "Unknown",
+                                "quote": risk_dict.get("quote") or risk_dict.get("description") or "",
+                                "risk_level": (risk_dict.get("risk_level") or risk_dict.get("severity") or "LOW").upper(),
+                                "risk_type": risk_dict.get("risk_type") or risk_dict.get("signal_type") or "UNKNOWN",
+                                "explanation": risk_dict.get("explanation") or risk_dict.get("description") or "",
+                                "filename": filename,
+                            }
                         
                         evidence_dicts.append(risk_dict)
                     
@@ -478,7 +756,7 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
     
     Returns:
         Updated state with:
-            - forensic_evidence: List of ImageAuditResult dicts
+            - forensic_evidence: List of figure evidence dictionaries
             - forensic_failed_files: List of files that failed forensic audit
     """
     logger.info("\n" + "="*80)
@@ -514,27 +792,27 @@ def auditor_node(state: AgentState) -> Dict[str, Any]:
             
             try:
                 if os.path.exists(pdf_path):
-                    # 固定输出目录：使 serve_temp_image() 路由能找到图片
-                    _forensic_out = os.path.join("downloads", "temp")
-                    os.makedirs(_forensic_out, exist_ok=True)
-                    audit_results = agent.audit_paper(pdf_path, output_dir=_forensic_out)
-                    
-                    # Convert ImageAuditResult dataclasses to dicts
-                    audit_dicts = [
-                        {
-                            "image_id": r.image_id,
-                            "image_path": r.image_path,
-                            "page_num": r.page_num,
-                            "status": r.status,
-                            "tampering_risk_score": r.tampering_risk_score,
-                            "findings": r.findings,
-                            "raw_analysis": r.raw_analysis
-                        }
-                        for r in audit_results
-                    ]
-                    
-                    all_audit_results.extend(audit_dicts)
-                    logger.success(f"✅ Audited {len(audit_dicts)} images from PDF {i}")
+                    audit_results = agent.audit_paper(pdf_path)
+
+                    # Normalize forensic output to keep compatibility with writer expectations.
+                    normalized_results = []
+                    for item in audit_results:
+                        if not isinstance(item, dict):
+                            continue
+                        normalized_results.append({
+                            "pdf_name": item.get("pdf_name", os.path.basename(pdf_path)),
+                            "figure_id": item.get("figure_id", "Unknown"),
+                            "caption": item.get("caption", ""),
+                            "image_url": item.get("image_url", ""),
+                            # Backward-compatible aliases expected by legacy writer snippets.
+                            "image_id": item.get("figure_id", "Unknown"),
+                            "findings": item.get("caption", ""),
+                            "status": item.get("status", "UNASSESSED"),
+                            "tampering_risk_score": item.get("tampering_risk_score"),
+                        })
+
+                    all_audit_results.extend(normalized_results)
+                    logger.success(f"✅ Extracted {len(normalized_results)} figures from PDF {i}")
                 else:
                     # 🚨 PHASE 2 FIX: Track missing files
                     logger.error(f"❌ PDF not found locally: {pdf_path}")
@@ -578,14 +856,14 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
     build knowledge graphs or perform additional data structuring.
     
     🚨 PHASE 2: Anti-Silent-Failure Logic
-    Calculates risk_override based on failed files to prevent
+    Calculates assessment_override based on failed files to prevent
     "toxic positivity" in reports when PDFs fail to process.
     
     Args:
         state: Current workflow state with text_evidence and forensic_evidence
     
     Returns:
-        Updated state with validated data and risk_override
+        Updated state with validated data and assessment_override
     """
     logger.info("\n" + "="*80)
     logger.info("🧩 NODE 3: GRAPH BUILDER (Data Aggregation)")
@@ -626,21 +904,21 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"   - Total Unique Failures: {total_failed}")
         
         # 🚨 PHASE 2: Implement Anti-Silent-Failure Logic
-        risk_override = None
+        assessment_override = None
         analysis_status = "COMPLETE"
         
         if total_files == 0:
             logger.warning("⚠️ No PDFs were processed")
-            risk_override = "UNKNOWN (NO DATA)"
+            assessment_override = "UNKNOWN (NO DATA)"
             analysis_status = "NO_DATA"
         elif total_failed == total_files:
             logger.error("❌ CRITICAL: All PDFs failed to process!")
-            risk_override = "UNKNOWN (CRITICAL DATA FAILURE)"
+            assessment_override = "UNKNOWN (CRITICAL DATA FAILURE)"
             analysis_status = "CRITICAL_FAILURE"
         elif total_failed > 0:
             failure_rate = (total_failed / total_files) * 100
             logger.warning(f"⚠️ PARTIAL SUCCESS: {total_failed}/{total_files} files failed ({failure_rate:.0f}%)")
-            risk_override = f"UNCERTAIN (INCOMPLETE DATA - {failure_rate:.0f}% failed)"
+            assessment_override = f"UNCERTAIN (INCOMPLETE DATA - {failure_rate:.0f}% failed)"
             analysis_status = "PARTIAL_SUCCESS"
         else:
             logger.success("✅ All PDFs processed successfully")
@@ -662,14 +940,14 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
         
         logger.success("✅ Data aggregation complete - ready for report generation")
         logger.info(f"   Analysis Status: {analysis_status}")
-        if risk_override:
-            logger.warning(f"   Risk Override: {risk_override}")
+        if assessment_override:
+            logger.warning(f"   Assessment Override: {assessment_override}")
         
         return {
             "project_name": project_name,
             "status": "graph_complete",
             "analysis_status": analysis_status,  # 🚨 NEW: Track analysis completeness
-            "risk_override": risk_override,  # 🚨 NEW: Override risk assessment if data missing
+            "assessment_override": assessment_override,
             "total_failed_files": total_failed,  # 🚨 NEW: Total failure count
             "all_failed_files": all_failed_files  # 🚨 NEW: Combined failure list
         }
@@ -679,7 +957,7 @@ def graph_builder_node(state: AgentState) -> Dict[str, Any]:
         return {
             "errors": [f"GraphBuilder: {str(e)}"],
             "status": "graph_failed",
-            "risk_override": "UNKNOWN (SYSTEM ERROR)"
+            "assessment_override": "UNKNOWN (SYSTEM ERROR)"
         }
 
 
@@ -706,12 +984,6 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
     try:
         agent = create_report_agent()
         
-        # Prepare data for report writer
-        harvest_data = {
-            "query": state["user_query"],
-            "results": state.get("harvested_data", [])
-        }
-        
         forensic_data = state.get("forensic_evidence", [])
         evidence_data = state.get("text_evidence", [])
         
@@ -729,7 +1001,6 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
             total_pdfs_global = state.get("total_files", 0)
         
         total_failed = state.get("total_failed_files", 0)
-        risk_override = state.get("risk_override")
         analysis_status = state.get("analysis_status", "UNKNOWN")
         failed_files_list = state.get("all_failed_files", [])
         
@@ -737,27 +1008,44 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
         logger.info(f"   - Analysis Status: {analysis_status}")
         logger.info(f"   - Total Files (GLOBAL): {total_pdfs_global}")  # 🔥 Clarify it's global
         logger.info(f"   - Failed Files: {total_failed}")
-        if risk_override:
-            logger.warning(f"   - Risk Override: {risk_override}")
         if failed_files_list:
             logger.warning(f"   - Failed: {', '.join(failed_files_list)}")
+
+        # Strictly remove any risk-related structured fields before writer handoff.
+        sanitized_harvest_data = strip_risk_fields({
+            "query": state["user_query"],
+            "results": state.get("harvested_data", []),
+            "data_layers": state.get("harvest_data_layers", {}),
+            "source_payloads": state.get("harvest_source_payloads", {}),
+            "frontend_payload": state.get("harvest_frontend_payload", {}),
+        })
+        sanitized_forensic_data = strip_risk_fields(forensic_data)
+        sanitized_evidence_data = strip_risk_fields(evidence_data)
         
         # 📊 STEP 3: Update Writer Payload with Global Stats
         payload = {
             "user_query": state["user_query"],
-            "harvest_data": harvest_data,
-            "forensic_data": forensic_data,
-            "evidence_data": evidence_data,
+            "harvest_data": sanitized_harvest_data,
+            "forensic_data": sanitized_forensic_data,
+            "evidence_data": sanitized_evidence_data,
             "project_name": state.get("project_name"),
             "output_dir": "final_reports",
             # 🚨 PHASE 2: Pass failure metadata
             "compiled_evidence_text": compiled_evidence_text,
             "failed_count": total_failed,
             "total_files": total_pdfs_global,  # 🔥 Dynamic Global Count (not batch size)
-            "risk_override": risk_override,
             "analysis_status": analysis_status,
-            "failed_files": failed_files_list
+            "assessment_override": state.get("assessment_override"),
+            "failed_files": failed_files_list,
+            "contract_version": CONTRACT_VERSION,
         }
+
+        is_valid_writer, writer_errors = validate_writer_input(payload)
+        if not is_valid_writer:
+            logger.error("❌ Writer input contract validation failed")
+            for err in writer_errors[:10]:
+                logger.error(f"   - {err}")
+            raise ValueError("Writer input contract validation failed")
         
         print(f"\n🔥 DEBUG: Final Payload to Writer:")
         print(f"🔥 DEBUG: - evidence_context length: {len(compiled_evidence_text)}")
@@ -781,8 +1069,11 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
             report_output = agent.write_report(**payload)
         
         logger.success(f"✅ Report generated successfully")
-        logger.info(f"   Recommendation: {report_output.recommendation}")
-        logger.info(f"   Risk Score: {report_output.risk_score:.1f}/10")
+        biomedical_profile = _build_biomedical_profile(state)
+        logger.info("   Analysis Focus: disease-oriented biomedical profiling")
+        logger.info(f"   Disease Areas: {len(biomedical_profile.get('disease_areas', []))}")
+        logger.info(f"   Drug Baselines: {len(biomedical_profile.get('drug_baselines', []))}")
+        logger.info(f"   Target Signals: {len(biomedical_profile.get('target_signals', []))}")
         
         # PHASE 3.1 FIX: Return markdown content AND file path for frontend injection
         return {
@@ -791,8 +1082,17 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
             "final_report_html_path": report_output.html_path,
             "final_report_pdf_path": report_output.pdf_path,
             "final_report_markdown": report_output.markdown_content,
-            "recommendation": report_output.recommendation,
-            "risk_score": report_output.risk_score,
+            "biomedical_profile": biomedical_profile,
+            "analysis_focus": biomedical_profile.get("analysis_focus", "disease-oriented"),
+            "disease_areas": biomedical_profile.get("disease_areas", []),
+            "drug_baselines": biomedical_profile.get("drug_baselines", []),
+            "drug_class_distribution": biomedical_profile.get("drug_class_distribution", []),
+            "drug_catalog": biomedical_profile.get("drug_catalog", []),
+            "target_signals": biomedical_profile.get("target_signals", []),
+            "company_entities": biomedical_profile.get("company_entities", []),
+            "clinical_data": biomedical_profile.get("clinical_data", {}),
+            "evidence_stats": biomedical_profile.get("evidence_stats", {}),
+            "dataflow_contract_version": state.get("dataflow_contract_version", CONTRACT_VERSION),
             "status": "complete"
         }
         
@@ -939,10 +1239,15 @@ def run_bio_short_seller(
         "user_query": user_query,
         "pdf_paths": pdf_paths or [],
         "harvested_data": [],
+        "harvest_data_layers": {},
+        "harvest_source_payloads": {},
+        "harvest_frontend_payload": {},
+        "dataflow_contract_version": CONTRACT_VERSION,
         "text_evidence": [],
         "forensic_evidence": [],
         "final_report": None,
         "project_name": None,
+        "assessment_override": None,
         "status": "initialized",
         "errors": []
     }
@@ -1016,10 +1321,15 @@ def stream_bio_short_seller(
         "user_query": user_query,
         "pdf_paths": pdf_paths or [],
         "harvested_data": [],
+        "harvest_data_layers": {},
+        "harvest_source_payloads": {},
+        "harvest_frontend_payload": {},
+        "dataflow_contract_version": CONTRACT_VERSION,
         "text_evidence": [],
         "forensic_evidence": [],
         "final_report": None,
         "project_name": None,
+        "assessment_override": None,
         "status": "initialized",
         "errors": [],
     }

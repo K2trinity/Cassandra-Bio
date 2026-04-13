@@ -38,7 +38,7 @@ class AgentState(TypedDict):
         - failed_files: Files that failed during evidence mining
         - forensic_failed_files: Files that failed during forensic audit
         - total_files: Total PDFs attempted for analysis
-        - risk_override: Forced risk level when data is incomplete
+        - assessment_override: Forced assessment label when data is incomplete
         - analysis_status: Overall analysis completeness status
     
     Attributes:
@@ -60,13 +60,23 @@ class AgentState(TypedDict):
         total_failed_files: Total count of unique failed files
         
         # 🚨 PHASE 2: Honest reporting metadata
-        risk_override: Forced risk assessment when data is incomplete/missing
+        assessment_override: Forced assessment label when data is incomplete/missing
         analysis_status: COMPLETE | PARTIAL_SUCCESS | CRITICAL_FAILURE | NO_DATA
         
         # Optional metadata
         project_name: Drug/therapy name (auto-extracted or provided)
         status: Current workflow status (for tracking)
         errors: Any errors encountered during execution
+
+        # Disease-oriented synthesis payload
+        analysis_focus: Fixed analysis orientation marker
+        biomedical_profile: Aggregated disease/drug/target/company/clinical summary
+        disease_areas: Normalized disease/condition list
+        drug_baselines: Normalized baseline drug/intervention list
+        target_signals: Ranked target distribution summary
+        company_entities: Ranked sponsor/company summary
+        clinical_data: Clinical trial aggregate payload
+        evidence_stats: Evidence volume summary
         
     Note:
         - Lists that may be updated by parallel nodes use Annotated with operator.add
@@ -76,6 +86,10 @@ class AgentState(TypedDict):
     user_query: str  # Single value, last-write-wins
     pdf_paths: Annotated[List[str], operator.add]  # Can be accumulated
     harvested_data: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Can be accumulated
+    harvest_data_layers: Optional[Dict[str, Any]]  # Last-write-wins
+    harvest_source_payloads: Optional[Dict[str, Any]]  # Last-write-wins
+    harvest_frontend_payload: Optional[Dict[str, Any]]  # Last-write-wins
+    dataflow_contract_version: Optional[str]  # Last-write-wins
     text_evidence: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Parallel miner can add
     forensic_evidence: Annotated[List[Dict[str, Any]], add_or_replace_list]  # Parallel auditor can add
     final_report: Optional[str]  # Last-write-wins (markdown content)
@@ -93,14 +107,21 @@ class AgentState(TypedDict):
     total_failed_files: Optional[int]  # Last-write-wins
     
     # 🚨 PHASE 2: Honest reporting metadata (anti-silent-failure)
-    risk_override: Optional[str]  # Last-write-wins (e.g., "UNKNOWN (DATA MISSING)")
+    assessment_override: Optional[str]  # Last-write-wins (e.g., "UNKNOWN (DATA MISSING)")
+    risk_override: Optional[str]  # Deprecated alias for backward compatibility
     analysis_status: Optional[str]  # Last-write-wins (e.g., "PARTIAL_SUCCESS")
     
     # Metadata
     project_name: Optional[str]  # Last-write-wins
     status: Optional[str]  # Last-write-wins
-    recommendation: Optional[str]  # Last-write-wins (from report writer)
-    risk_score: Optional[float]  # Last-write-wins (from report writer)
+    analysis_focus: Optional[str]  # Last-write-wins
+    biomedical_profile: Optional[Dict[str, Any]]  # Last-write-wins
+    disease_areas: Optional[List[str]]  # Last-write-wins
+    drug_baselines: Optional[List[str]]  # Last-write-wins
+    target_signals: Optional[List[Dict[str, Any]]]  # Last-write-wins
+    company_entities: Optional[List[Dict[str, Any]]]  # Last-write-wins
+    clinical_data: Optional[Dict[str, Any]]  # Last-write-wins
+    evidence_stats: Optional[Dict[str, Any]]  # Last-write-wins
     
     # Accumulated errors from all nodes (allows parallel accumulation)
     errors: Annotated[List[str], operator.add]
