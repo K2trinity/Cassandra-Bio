@@ -1779,6 +1779,67 @@
             alert('No recent report found. Please run an analysis first.');
         }
     }
+
+    function topNames(entries, limit = 4) {
+        if (!Array.isArray(entries)) return [];
+        return entries
+            .map((item) => (item && typeof item === 'object' ? item.name : item))
+            .filter((name) => typeof name === 'string' && name.trim().length > 0)
+            .slice(0, limit);
+    }
+
+    function buildBiomedicalSummaryHtml(summary, executiveSummary, analysisFocus, profile, restored = false) {
+        if (!executiveSummary || executiveSummary.length <= 50) {
+            return '<div class="text-gray-400 text-center p-4">Report summary unavailable</div>';
+        }
+
+        const safeProfile = profile || {};
+        const focusLabel = (analysisFocus || safeProfile.analysis_focus || 'disease-oriented analysis').toUpperCase();
+        const diseaseAreas = Array.isArray(safeProfile.disease_areas) ? safeProfile.disease_areas : [];
+        const drugBaselines = Array.isArray(safeProfile.drug_baselines) ? safeProfile.drug_baselines : [];
+        const topTargets = topNames(safeProfile.target_signals, 3).join(', ') || 'N/A';
+        const topCompanies = topNames(safeProfile.company_entities, 3).join(', ') || 'N/A';
+        const clinicalData = safeProfile.clinical_data || {};
+        const evidenceStats = safeProfile.evidence_stats || {};
+        const trialRecords = Number(clinicalData.trial_records || summary.trial_records || 0);
+        const publicationRecords = Number(evidenceStats.publication_records || summary.publication_records || 0);
+        const subtitle = restored ? '// Biomedical Assessment (Restored)' : '// Biomedical Assessment';
+
+        return `
+            <div class="bg-cyan-950/30 border-cyan-800/50 rounded-xl p-6 border-2 mb-4 font-mono">
+                <div class="flex items-start gap-4">
+                    <div class="flex-shrink-0 mt-1">
+                        <svg class="w-8 h-8 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <div class="flex-1">
+                        <div class="flex items-center gap-3 mb-3">
+                            <span class="text-cyan-300 font-bold text-lg tracking-wider">[${focusLabel}]</span>
+                            <span class="text-gray-500 text-sm">${subtitle}</span>
+                        </div>
+                        <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
+                        <div class="mt-4 text-xs text-slate-400 space-y-1">
+                            <div>Diseases: ${diseaseAreas.slice(0, 4).join(', ') || 'N/A'}</div>
+                            <div>Drug Baselines: ${drugBaselines.slice(0, 4).join(', ') || 'N/A'}</div>
+                            <div>Top Targets: ${topTargets}</div>
+                            <div>Top Companies: ${topCompanies}</div>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
+                            <div class="flex gap-4 text-gray-500 flex-wrap">
+                                <span>Records: ${summary.harvested_items || 0}</span>
+                                <span>Text Evidence: ${summary.text_evidence || 0}</span>
+                                <span>Forensics: ${summary.forensic_evidence || 0}</span>
+                                <span>Clinical Trials: ${trialRecords}</span>
+                                <span>Publications: ${publicationRecords}</span>
+                            </div>
+                            <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
     
     // Function to restore report from localStorage
     function restoreReportFromStorage(reportData) {
@@ -1787,52 +1848,10 @@
         
         const summary = reportData.summary || {};
         const executiveSummary = reportData.executive_summary || '';
+        const analysisFocus = reportData.analysis_focus || 'disease-oriented';
+        const biomedicalProfile = reportData.biomedical_profile || {};
         
-        // Rebuild the summary HTML (same logic as socket handler)
-        let summaryHTML = '';
-        
-        if (executiveSummary && executiveSummary.length > 50) {
-            const riskLevel = executiveSummary.toLowerCase().includes('high risk') ? 'HIGH RISK' :
-                             executiveSummary.toLowerCase().includes('medium risk') ? 'MEDIUM RISK' :
-                             executiveSummary.toLowerCase().includes('avoid') ? 'CAUTION' : 'ANALYSIS';
-            
-            const riskColor = riskLevel === 'HIGH RISK' ? 'text-red-400' :
-                             riskLevel === 'MEDIUM RISK' ? 'text-yellow-400' :
-                             riskLevel === 'CAUTION' ? 'text-orange-400' : 'text-emerald-400';
-            
-            const riskBg = riskLevel === 'HIGH RISK' ? 'bg-red-950/40 border-red-800/50' :
-                          riskLevel === 'MEDIUM RISK' ? 'bg-yellow-950/40 border-yellow-800/50' :
-                          riskLevel === 'CAUTION' ? 'bg-orange-950/40 border-orange-800/50' : 'bg-emerald-950/40 border-emerald-800/50';
-            
-            summaryHTML = `
-                <div class="${riskBg} rounded-xl p-6 border-2 mb-4 font-mono">
-                    <div class="flex items-start gap-4">
-                        <div class="flex-shrink-0 mt-1">
-                            <svg class="w-8 h-8 ${riskColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                        </div>
-                        <div class="flex-1">
-                            <div class="flex items-center gap-3 mb-3">
-                                <span class="${riskColor} font-bold text-lg tracking-wider">[${riskLevel} DETECTED]</span>
-                                <span class="text-gray-500 text-sm">// Strategic Assessment (Restored)</span>
-                            </div>
-                            <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
-                            <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
-                                <div class="flex gap-4 text-gray-500">
-                                    <span>📊 ${summary.harvested_items || 0} sources</span>
-                                    <span>🔍 ${summary.text_evidence || 0} evidence</span>
-                                    <span>🖼️ ${summary.forensic_evidence || 0} forensics</span>
-                                </div>
-                                <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else {
-            summaryHTML = '<div class="text-gray-400 text-center p-4">Report summary unavailable</div>';
-        }
+        const summaryHTML = buildBiomedicalSummaryHtml(summary, executiveSummary, analysisFocus, biomedicalProfile, true);
         
         document.getElementById('completionMessage').innerHTML = summaryHTML;
         
@@ -2313,6 +2332,7 @@
                     if (ev.type === 'log')   addLog(ev.payload.level, ev.payload.message, ev.payload.image_path);
                     if (ev.type === 'step')  updateStep(ev.payload.step, ev.payload.status, ev.payload.percentage);
                     if (ev.type === 'progress') updateProgressBar(ev.payload.percentage, ev.payload.message);
+                    if (ev.type === 'analysis_paused') openHitlModal(ev.payload.text_evidence || [], ev.payload.forensic_evidence || [], ev.payload || {});
                     if (ev.type === 'analysis_complete') handleAnalysisComplete(ev.payload);
                     if (ev.type === 'analysis_error')    handleAnalysisError(ev.payload);
                 });
@@ -2346,7 +2366,7 @@
     }
 
     // === HITL Modal Handlers ===
-    let _currentHitlData = { text: [], forensic: [] };
+    let _currentHitlData = { taskId: null, schemaVersion: 'legacy', text: [], forensic: [] };
     
     function escapeHtml(unsafe) {
         if (!unsafe) return '';
@@ -2358,9 +2378,74 @@
              .replace(/'/g, "&#039;");
     }
 
-    function openHitlModal(textEvidence, forensicEvidence) {
-        _currentHitlData.text = JSON.parse(JSON.stringify(textEvidence || []));
-        _currentHitlData.forensic = JSON.parse(JSON.stringify(forensicEvidence || []));
+    function normalizeHitlSeverity(raw, fallback = 'medium') {
+        if (raw === undefined || raw === null) return fallback;
+        const text = String(raw).trim().toLowerCase();
+        if (!text) return fallback;
+        if (['critical', 'crit', 'severe', 'fatal'].includes(text)) return 'critical';
+        if (['high', 'major'].includes(text)) return 'high';
+        if (['medium', 'moderate', 'med'].includes(text)) return 'medium';
+        if (['low', 'minor'].includes(text)) return 'low';
+        const n = Number(text);
+        if (!Number.isNaN(n)) {
+            const score = n > 1 ? (n / 100) : n;
+            if (score >= 0.85) return 'critical';
+            if (score >= 0.65) return 'high';
+            if (score >= 0.35) return 'medium';
+            return 'low';
+        }
+        return fallback;
+    }
+
+    function normalizeHitlTextItem(item, idx) {
+        const src = (item && typeof item === 'object') ? item : { claim: String(item || '') };
+        const riskCategory = src.risk_category || src.risk_type || src.signal_type || src.type || 'Unknown Risk';
+        const claim = src.claim || src.quote || src.description || src.explanation || src.finding || src.findings || src.title || '';
+        const sourceFile = src.source_file || src.filename || src.file || src.source || src.pmid || src.nct_id || '';
+        const page = src.page || src.page_estimate || src.page_reference || '';
+        return {
+            id: src.id || `text-${idx + 1}`,
+            risk_category: String(riskCategory),
+            risk_type: String(src.risk_type || riskCategory),
+            claim: String(claim),
+            quote: String(src.quote || claim),
+            explanation: String(src.explanation || src.description || ''),
+            source_file: String(sourceFile),
+            source: String(src.source || sourceFile),
+            page: String(page || ''),
+            page_estimate: String(src.page_estimate || page || ''),
+            filename: String(src.filename || sourceFile),
+            severity: normalizeHitlSeverity(src.severity || src.risk_level || src.level)
+        };
+    }
+
+    function normalizeHitlForensicItem(item, idx) {
+        const src = (item && typeof item === 'object') ? item : { finding: String(item || '') };
+        const figId = src.fig_id || src.figure_id || src.image_id || src.id || `figure-${idx + 1}`;
+        const finding = src.finding || src.findings || src.caption || src.explanation || src.analysis || '';
+        const imagePath = src.image_path || src.image_url || src.image || '';
+        return {
+            id: src.id || `forensic-${idx + 1}`,
+            fig_id: String(figId),
+            figure_id: String(src.figure_id || figId),
+            image_id: String(src.image_id || figId),
+            finding: String(finding),
+            findings: String(src.findings || finding),
+            caption: String(src.caption || finding),
+            severity: normalizeHitlSeverity(src.severity || src.risk_level || src.level || src.tampering_risk_score),
+            status: String(src.status || 'UNASSESSED'),
+            image_path: String(imagePath),
+            image_url: String(src.image_url || imagePath),
+            source_file: String(src.source_file || src.pdf_name || src.filename || src.file || ''),
+            pdf_name: String(src.pdf_name || src.source_file || '')
+        };
+    }
+
+    function openHitlModal(textEvidence, forensicEvidence, meta = {}) {
+        _currentHitlData.taskId = meta.task_id || _currentHitlData.taskId || null;
+        _currentHitlData.schemaVersion = meta.schema_version || _currentHitlData.schemaVersion || 'legacy';
+        _currentHitlData.text = (Array.isArray(textEvidence) ? textEvidence : []).map((item, idx) => normalizeHitlTextItem(item, idx));
+        _currentHitlData.forensic = (Array.isArray(forensicEvidence) ? forensicEvidence : []).map((item, idx) => normalizeHitlForensicItem(item, idx));
 
         const hitlModal = document.getElementById('hitlModal');
         const textContainer = document.getElementById('hitlTextEvidence');
@@ -2376,6 +2461,9 @@
                 <div class="flex-1 min-w-0">
                     <p class="text-sm text-slate-200 font-medium mb-1">${escapeHtml(item.risk_category || 'Unknown Risk')}</p>
                     <p class="text-xs text-slate-400 leading-snug">${escapeHtml(item.claim || '')}</p>
+                    <p class="text-[11px] text-slate-500 mt-1">
+                        ${escapeHtml(item.source_file || item.source || '')}${item.page ? ` · p.${escapeHtml(item.page)}` : ''}
+                    </p>
                     <select class="mt-2 text-xs bg-slate-700 border-none rounded text-slate-300 py-1 hitl-severity" data-idx="${idx}" data-type="text">
                         <option value="low" ${item.severity === 'low' ? 'selected' : ''}>Low Severity</option>
                         <option value="medium" ${item.severity === 'medium' ? 'selected' : ''}>Medium Severity</option>
@@ -2393,6 +2481,7 @@
                 <div class="flex-1 min-w-0">
                     <p class="text-sm text-slate-200 font-medium mb-1">Figure: ${escapeHtml(item.fig_id || 'Unknown')}</p>
                     <p class="text-xs text-slate-400 leading-snug">${escapeHtml(item.finding || '')}</p>
+                    <p class="text-[11px] text-slate-500 mt-1">${escapeHtml(item.image_path || item.image_url || item.source_file || '')}</p>
                     <select class="mt-2 text-xs bg-slate-700 border-none rounded text-slate-300 py-1 hitl-severity" data-idx="${idx}" data-type="forensic">
                         <option value="low" ${item.severity === 'low' ? 'selected' : ''}>Low Severity</option>
                         <option value="medium" ${item.severity === 'medium' ? 'selected' : ''}>Medium Severity</option>
@@ -2439,13 +2528,17 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    task_id: _currentHitlData.taskId,
+                    schema_version: _currentHitlData.schemaVersion,
+                    decision: 'approve_selected',
                     text_evidence: approvedText,
                     forensic_evidence: approvedForensic
                 })
             });
             const data = await resp.json();
-            if (data.status === 'ok') {
+            if (data.status === 'ok' || data.status === 'success') {
                 document.getElementById('hitlModal').classList.add('hidden');
+                updateProgressBar(92, 'HITL approved. Resuming report generation...', true);
                 addLog('info', '✅ Expert review submitted. Resuming workflow...');
             } else {
                 alert('Failed to resume: ' + (data.message || 'Unknown error'));
@@ -2473,6 +2566,8 @@
             executive_summary: data.executive_summary || '',
             full_report_markdown: data.full_report_markdown || '',
             summary: data.summary || {},
+            analysis_focus: data.analysis_focus || 'disease-oriented',
+            biomedical_profile: data.biomedical_profile || {},
             report_path: data.report_path,
             html_report_path: data.html_report_path,
         };
@@ -2484,42 +2579,12 @@
 
         const summary = data.summary || {};
         const executiveSummary = data.executive_summary || '';
-        let summaryHTML = '';
-
-        if (executiveSummary && executiveSummary.length > 50) {
-            const riskLevel = executiveSummary.toLowerCase().includes('high risk') ? 'HIGH RISK' :
-                             executiveSummary.toLowerCase().includes('medium risk') ? 'MEDIUM RISK' :
-                             executiveSummary.toLowerCase().includes('avoid') ? 'CAUTION' : 'ANALYSIS';
-            const riskColor = { 'HIGH RISK': 'text-red-400', 'MEDIUM RISK': 'text-yellow-400', 'CAUTION': 'text-orange-400', 'ANALYSIS': 'text-emerald-400' }[riskLevel];
-            const riskBg    = { 'HIGH RISK': 'bg-red-950/40 border-red-800/50', 'MEDIUM RISK': 'bg-yellow-950/40 border-yellow-800/50', 'CAUTION': 'bg-orange-950/40 border-orange-800/50', 'ANALYSIS': 'bg-emerald-950/40 border-emerald-800/50' }[riskLevel];
-            summaryHTML = `
-                <div class="${riskBg} rounded-xl p-6 border-2 mb-4 font-mono">
-                    <div class="flex items-start gap-4">
-                        <div class="flex-shrink-0 mt-1">
-                            <svg class="w-8 h-8 ${riskColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                        </div>
-                        <div class="flex-1">
-                            <div class="flex items-center gap-3 mb-3">
-                                <span class="${riskColor} font-bold text-lg tracking-wider">[${riskLevel} DETECTED]</span>
-                                <span class="text-gray-500 text-sm">// Strategic Assessment</span>
-                            </div>
-                            <div class="text-gray-300 leading-relaxed whitespace-pre-wrap">${executiveSummary}</div>
-                            <div class="mt-4 pt-4 border-t border-slate-700/50 flex items-center justify-between text-sm">
-                                <div class="flex gap-4 text-gray-500">
-                                    <span>📊 ${summary.harvested_items || 0} sources</span>
-                                    <span>🔍 ${summary.text_evidence || 0} evidence</span>
-                                    <span>🖼️ ${summary.forensic_evidence || 0} forensics</span>
-                                </div>
-                                <button onclick="document.getElementById('downloadBtn').click()" class="text-emerald-400 hover:text-emerald-300 font-semibold">Read Full Report →</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-        } else {
-            summaryHTML = `<div class="text-gray-400 text-center p-4">Report summary unavailable — see full report below</div>`;
-        }
+        const summaryHTML = buildBiomedicalSummaryHtml(
+            summary,
+            executiveSummary,
+            data.analysis_focus || 'disease-oriented',
+            data.biomedical_profile || {}
+        );
 
         const msgEl = document.getElementById('completionMessage');
         if (msgEl) msgEl.innerHTML = summaryHTML;
@@ -2689,7 +2754,7 @@
         // Human in the Loop (HITL) Logic
         socket.on('analysis_paused', (data) => {
             _lastEventId = Math.max(_lastEventId, data.id || 0);
-            openHitlModal(data.text_evidence || [], data.forensic_evidence || []);
+            openHitlModal(data.text_evidence || [], data.forensic_evidence || [], data || {});
             addLog('warning', `⏸️ Workflow waiting for human review.`);
         });
 
