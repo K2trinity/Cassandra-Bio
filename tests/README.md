@@ -25,6 +25,18 @@
 
 ## 运行测试
 
+## 目录边界说明
+
+`tests/` 仅保留正式测试集（可重复、可自动化回归）。
+
+一次性验证脚本与环境依赖较重的检查已迁移到 `scripts/dev_checks/`，例如：
+
+- `scripts/dev_checks/check_source_to_report_chain.py`
+- `scripts/dev_checks/check_harvest_dataflow.py`
+- `scripts/dev_checks/check_figure_injection_to_pdf.py`
+
+这些脚本产生的输出落在 `scripts/dev_checks/_outputs/`，且已加入 git 忽略策略。
+
 ### 使用pytest（推荐）
 
 ```bash
