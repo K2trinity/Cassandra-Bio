@@ -310,6 +310,9 @@ wordcloud_temp/
 # 测试输出
 test_output/
 test_results/
+tests/_test_outputs/
+tests/output/
+scripts/dev_checks/_outputs/
 
 # 备份文件
 *.bak
