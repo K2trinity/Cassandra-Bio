@@ -50,6 +50,40 @@ def _():
     assert WorkflowService is not None
 
 
+@test("Import all six node functions")
+def _():
+    from src.graph.nodes import (
+        harvester_node,
+        extension_handoff_node,
+        evidence_synthesizer_node,
+        clinical_analyzer_node,
+        quality_assessor_node,
+        writer_node,
+    )
+    assert all([
+        harvester_node,
+        extension_handoff_node,
+        evidence_synthesizer_node,
+        clinical_analyzer_node,
+        quality_assessor_node,
+        writer_node,
+    ])
+
+
+@test("Import all three extension engines")
+def _():
+    from src.engines.evidence_synthesizer import EvidenceSynthesizerAgent
+    from src.engines.clinical_analyzer import ClinicalAnalyzerAgent
+    from src.engines.quality_assessor import QualityAssessorAgent
+    assert all([EvidenceSynthesizerAgent, ClinicalAnalyzerAgent, QualityAssessorAgent])
+
+
+@test("Extension output contract validator exists")
+def _():
+    from src.graph.contracts import validate_extension_output
+    assert callable(validate_extension_output)
+
+
 print("\n[2] Contract Schema")
 
 
