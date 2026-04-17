@@ -127,7 +127,7 @@ def _parse_trial_row(row: Dict[str, Any]) -> tuple[Optional[TrialRecord], Option
     if intervention:
         asset_name = intervention.split(",")[0].strip()
         if asset_name:
-            combined_text = f"{intervention} {title} {row.get('summary', '')}"
+            combined_text = f"{intervention} {title} {_safe_str(row.get('summary', ''))}"
             targets = _extract_targets_from_text(combined_text)
             try:
                 from src.tools.biomedical_normalization import normalize_drug_class
@@ -164,6 +164,7 @@ def _parse_pubmed_row(row: Dict[str, Any]) -> Optional[LiteratureRecord]:
 
 
 def _detect_disease_name(query: str, rows: List[Dict[str, Any]]) -> str:
+    query = query or ""  # guard against None
     for keyword, name in [
         ("alzheimer", "Alzheimer's Disease"),
         ("parkinson", "Parkinson's Disease"),
@@ -181,13 +182,15 @@ def aggregate_survey_data(rows: List[Dict[str, Any]], query: str) -> DiseaseSurv
     trials: List[TrialRecord] = []
     assets_map: Dict[str, DrugAsset] = {}
     seen_nct: set = set()
+    seen_pmid: set = set()  # guard against duplicate PubMed records
 
     for row in rows:
         source = _safe_str(row.get("source", "")).lower()
         if "pubmed" in source or row.get("pmid"):
             rec = _parse_pubmed_row(row)
-            if rec:
+            if rec and rec.pmid not in seen_pmid:
                 literature.append(rec)
+                seen_pmid.add(rec.pmid)
         if "clinicaltrial" in source or row.get("nct_id"):
             trial, asset = _parse_trial_row(row)
             if trial and trial.nct_id not in seen_nct:
@@ -259,9 +262,11 @@ def group_by_sponsor(assets: List[DrugAsset]) -> Dict[str, SponsorProfile]:
 def compute_publication_trend(
     literature: List[LiteratureRecord], window: int = 5
 ) -> Dict[int, int]:
+    current_year = datetime.now(timezone.utc).year
+    cutoff = current_year - window
     counts: Dict[int, int] = defaultdict(int)
     for rec in literature:
-        if rec.year is not None:
+        if rec.year is not None and rec.year >= cutoff:
             counts[rec.year] += 1
     return dict(counts)
 
@@ -289,8 +294,7 @@ def compute_cns_benchmark(
                     target_top_journal[canonical] += 1
 
     entries: List[CNSBenchmarkEntry] = []
-    all_targets_set = set(targets) | set(target_pubs.keys())
-    for t in all_targets_set:
+    for t in targets:
         pub_count = target_pubs.get(t, 0)
         top_count = target_top_journal.get(t, 0)
         if pub_count >= 10:
