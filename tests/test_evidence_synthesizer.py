@@ -104,6 +104,41 @@ def test_synthesize_empty_input():
     assert result["conflicts"] == []
 
 
+def test_evidence_synthesizer_node_writes_slot_a():
+    from src.graph.nodes.evidence_synthesizer_node import evidence_synthesizer_node
+
+    state = {
+        "harvested_data": [
+            {
+                "title": "Meta-analysis of drug X",
+                "summary": "OS was 14.2 months.",
+                "source": "PubMed",
+                "pmid": "111",
+                "metadata": {},
+            },
+        ],
+        "harvest_data_layers": {},
+        "extension_payloads": {"slot_a": {}, "slot_b": {}, "slot_c": {}},
+    }
+    result = evidence_synthesizer_node(state)
+    assert result["status"] == "evidence_synthesis_complete"
+    slot_a = result["extension_payloads"]["slot_a"]
+    assert "evidence_synthesis" in slot_a
+    assert "evidence_layers" in slot_a["evidence_synthesis"]
+
+
+def test_evidence_synthesizer_node_handles_empty_data():
+    from src.graph.nodes.evidence_synthesizer_node import evidence_synthesizer_node
+
+    state = {
+        "harvested_data": [],
+        "harvest_data_layers": {},
+        "extension_payloads": {"slot_a": {}, "slot_b": {}, "slot_c": {}},
+    }
+    result = evidence_synthesizer_node(state)
+    assert result["status"] == "evidence_synthesis_complete"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
