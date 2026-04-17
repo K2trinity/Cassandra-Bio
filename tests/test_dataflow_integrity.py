@@ -135,20 +135,23 @@ def _():
 print("\n[3] Source-level Guardrails")
 
 
-@test("Workflow keeps connected harvest-handoff-writer chain")
+@test("Workflow has 6-node linear topology")
 def _():
     source = Path("src/graph/workflow.py").read_text(encoding="utf-8")
     assert 'workflow.add_node("harvester"' in source
     assert 'workflow.add_node("extension_handoff"' in source
+    assert 'workflow.add_node("evidence_synthesizer"' in source
+    assert 'workflow.add_node("clinical_analyzer"' in source
+    assert 'workflow.add_node("quality_assessor"' in source
     assert 'workflow.add_node("writer"' in source
     assert 'workflow.add_edge(START, "harvester")' in source
     assert 'workflow.add_edge("harvester", "extension_handoff")' in source
-    assert 'workflow.add_edge("extension_handoff", "writer")' in source
+    assert 'workflow.add_edge("extension_handoff", "evidence_synthesizer")' in source
+    assert 'workflow.add_edge("evidence_synthesizer", "clinical_analyzer")' in source
+    assert 'workflow.add_edge("clinical_analyzer", "quality_assessor")' in source
+    assert 'workflow.add_edge("quality_assessor", "writer")' in source
     assert 'workflow.add_edge("writer", END)' in source
-    assert 'workflow.add_edge("harvester", END)' not in source
-    assert 'workflow.add_node("analyzer"' not in source
-    assert 'workflow.add_node("figure_extractor"' not in source
-    assert 'workflow.add_node("graph_builder"' not in source
+    assert 'workflow.add_edge("extension_handoff", "writer")' not in source
 
 
 @test("Supervisor has no EvidenceEngine/ForensicEngine imports")
