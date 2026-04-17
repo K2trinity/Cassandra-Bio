@@ -1,2193 +1,473 @@
-"""
-Report Writer Agent - Bio-Short-Seller Biomedical Due Diligence Analyst
+"""Report Writer Agent - harvest-first report generator.
 
-This agent synthesizes evidence from BioHarvestEngine, ForensicEngine, and EvidenceEngine
-into a comprehensive biomedical due diligence report.
-
-Core capabilities:
-- Data synthesis using Gemini's long-context capabilities
-- Evidence aggregation and risk scoring
-- Structured report generation (Markdown/HTML/PDF)
-- Investment recommendation generation
-
-Workflow:
-1. Aggregate data from three data-gathering engines
-2. Synthesize evidence into narrative sections using Gemini
-3. Calculate risk scores and recommendations
-4. Render final report using src/report_core/
+This module generates a structured markdown report from harvested records and
+compiled context text. It intentionally keeps the interface simple and avoids
+legacy multi-engine semantic fields.
 """
 
-import os
+from __future__ import annotations
+
+import importlib
 import json
 import re
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
-from loguru import logger
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from src.llms import create_report_client
-from src.agents.json_validator import JSONValidator, JSONInspector, SegmentedJSONGenerator
+
+
+PDF_INLINE_IMAGE_STRIP_THRESHOLD = 1_000_000
+
+
+def _resolve_logger():
+    try:
+        return importlib.import_module("loguru").logger
+    except Exception:  # pragma: no cover - optional dependency fallback
+        import logging
+
+        return logging.getLogger(__name__)
+
+
+logger = _resolve_logger()
 
 
 def sanitize_filename(filename: str, max_length: int = 50) -> str:
-    r"""
-    清理文件名，移除非法字符并限制长度。
-    
-    Args:
-        filename: 原始文件名
-        max_length: 最大文件名长度（不含扩展名）
-    
-    Returns:
-        清理后的安全文件名
-    
-    移除的非法字符:
-        Windows: \ / : * ? " < > |
-        Unix: /
-        控制字符: \x00-\x1f
-    """
-    # 移除或替换非法字符
+    """Normalize file name for cross-platform saving."""
     illegal_chars = r'[\\/:*?"<>|\x00-\x1f]'
-    cleaned = re.sub(illegal_chars, '_', filename)
-    
-    # 替换空格为下划线
-    cleaned = cleaned.replace(' ', '_')
-    
-    # 移除前导/尾随下划线、空格和点
-    cleaned = cleaned.strip('_. ')
-    
-    # 压缩连续的下划线
-    cleaned = re.sub(r'_+', '_', cleaned)
-    
-    # 如果为空，使用默认名称
+    cleaned = re.sub(illegal_chars, "_", filename or "")
+    cleaned = cleaned.replace(" ", "_").strip("_. ")
+    cleaned = re.sub(r"_+", "_", cleaned)
+
     if not cleaned:
-        cleaned = 'report'
-    
-    # 限制长度
+        cleaned = "report"
     if len(cleaned) > max_length:
-        cleaned = cleaned[:max_length].rstrip('_. ')
-    
+        cleaned = cleaned[:max_length].rstrip("_. ")
     return cleaned
+
+
+def _safe_text(value: Any, max_len: int = 5000) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_len:
+        return text[:max_len]
+    return text
 
 
 @dataclass
 class ReportData:
-    """
-    Aggregated data for report generation.
-    
-    Attributes:
-        user_query: Original user query
-        project_name: Drug/therapy name
-        harvest_results: Data from BioHarvestEngine (PubMed + ClinicalTrials)
-        forensic_results: Data from ForensicEngine (image audit)
-        evidence_results: Data from EvidenceEngine (dark data mining)
-        metadata: Additional report metadata
-    """
+    """Normalized report input payload."""
+
     user_query: str
     project_name: str
-    harvest_results: Dict[str, Any]
-    forensic_results: List[Dict[str, Any]]
-    evidence_results: List[Dict[str, Any]]
-    metadata: Dict[str, Any] = None
+    harvest_payload: Dict[str, Any]
+    context_text: str
+    metadata: Dict[str, Any]
 
 
 @dataclass
 class ReportOutput:
-    """
-    Generated report output.
-    
-    Attributes:
-        markdown_content: Rendered markdown report
-        markdown_path: Path to saved markdown file
-        html_path: Path to generated HTML (if rendered)
-        pdf_path: Path to generated PDF (if rendered)
-        recommendation: Final investment recommendation
-        confidence_score: Confidence in recommendation (0-10)
-        risk_score: Aggregated risk score (0-10)
-    """
+    """Generated report output."""
+
     markdown_content: str
     markdown_path: Optional[str] = None
     html_path: Optional[str] = None
     pdf_path: Optional[str] = None
-    recommendation: str = "AVOID"
-    confidence_score: float = 0.0
-    risk_score: float = 0.0
+    analysis_position: str = "INCONCLUSIVE"
+    data_confidence: float = 0.0
+    signal_severity_score: float = 0.0
+
+    @property
+    def recommendation(self) -> str:
+        """Backward-compatible alias for legacy callers."""
+        return self.analysis_position
+
+    @property
+    def confidence_score(self) -> float:
+        """Backward-compatible alias for legacy callers."""
+        return self.data_confidence
+
+    @property
+    def risk_score(self) -> float:
+        """Backward-compatible alias for legacy callers."""
+        return self.signal_severity_score
 
 
 class ReportWriterAgent:
-    """
-    Biomedical Due Diligence Analyst
-    
-    Synthesizes evidence from multiple engines into investment-grade reports.
-    
-    支持两种生成模式：
-    1. write_report() - 传统单次生成（快速但可能超token）
-    2. write_report_segmented() - 分阶段生成（推荐，借鉴BettaFish）
-    """
-    
+    """Harvest-only report writer."""
+
     def __init__(self):
-        """Initialize Report Writer with Gemini client."""
-        
-        # Initialize LLM client
-        self.llm = create_report_client()
-        logger.info("Report Writer Agent initialized with Gemini client")
-        
-        # 🔥 NEW: Initialize report engine components
+        self.llm = None
         try:
-            from src.report_engine.nodes import create_chapter_generation_node, create_word_budget_node
-            from src.report_engine.core import ChapterStorage, DocumentComposer
-            
-            self.chapter_generator = create_chapter_generation_node(self.llm)
-            self.word_budget_node = create_word_budget_node(total_target_words=5000)
-            self.composer = DocumentComposer()
-            self._segmented_mode_available = True
-            logger.info("✅ Segmented report generation mode enabled")
-        except ImportError as e:
-            logger.warning(f"⚠️ Segmented mode not available: {e}")
-            self._segmented_mode_available = False
-        
-        # Load template
-        self.template_path = Path(__file__).parent.parent / "templates" / "biomedical_report.md"
-        if not self.template_path.exists():
-            logger.warning(f"Template not found: {self.template_path}")
-            self.template = None
-        else:
-            self.template = self.template_path.read_text(encoding='utf-8')
-            logger.success(f"Loaded template: {self.template_path}")
-        
-        # AUDIT FIX: Load system prompt from external file for maintainability
+            self.llm = create_report_client()
+            logger.info("Report Writer initialized with report client")
+        except Exception as exc:
+            logger.warning(f"Report client initialization failed, using deterministic mode: {exc}")
+
         prompt_path = Path(__file__).parent.parent / "prompts" / "report_writer" / "system.txt"
         if prompt_path.exists():
-            self.synthesis_system_prompt = prompt_path.read_text(encoding='utf-8')
-            logger.debug("Loaded report writer system prompt from file")
+            self.synthesis_system_prompt = prompt_path.read_text(encoding="utf-8")
         else:
-            logger.warning(f"Prompt file not found: {prompt_path}, using fallback")
-            self.synthesis_system_prompt = """You are a Senior Biotech Investment Analyst specializing in forensic due diligence.
+            self.synthesis_system_prompt = (
+                "You are a biomedical analyst. Produce objective, source-linked summaries "
+                "from supplied harvested records and context text."
+            )
 
-Your role is to synthesize disparate data points—failed clinical trials, buried negative results in supplementary materials, and suspicious scientific images—into a cohesive, actionable investment report.
+    @staticmethod
+    def _strip_excessive_inline_images(
+        html_content: str,
+        threshold: int = PDF_INLINE_IMAGE_STRIP_THRESHOLD,
+    ) -> str:
+        """Strip only very large data URI images before PDF rendering."""
+        pattern = rf'src="data:image/[^"]{{{int(threshold)},}}"'
+        return re.sub(pattern, 'src="" alt="[See HTML version for images]"', html_content)
 
-**Core Principles:**
-1. **Ruthless Objectivity:** Do not sugarcoat findings. If the data suggests fraud or incompetence, say so explicitly.
-2. **Evidence-Based:** Every claim must be backed by specific evidence (quote, trial ID, figure number).
-3. **Follow the Money:** Always ask "Why would they hide this?" and "What are the financial incentives?"
-4. **Pattern Recognition:** Look for recurring red flags across different data sources (e.g., same issue in trials AND supplementary materials).
-5. **Investment Impact:** Translate scientific findings into financial risk (e.g., "This p-value suggests the drug doesn't work, meaning $X billion market cap is at risk").
+    def run(self, report_type: str, rows: List[Dict[str, Any]], query: str = "") -> Dict[str, Any]:
+        """Route a report request by type. Currently supports 'disease_survey'."""
+        if report_type == "disease_survey":
+            # Lazy imports to avoid circular dependency via report_engine/__init__.py
+            from src.engines.report_engine.disease_survey.aggregator import aggregate_survey_data
+            from src.engines.report_engine.disease_survey.composer import compose_disease_survey_report
+            state = aggregate_survey_data(rows, query)
+            return compose_disease_survey_report(state)
+        raise ValueError(f"Unknown report_type: {report_type!r}")
 
-**CRITICAL CITATION RULES (MANDATORY - AUDIT REQUIREMENT):**
-- **Every factual claim MUST be followed by a source citation in brackets**
-- **For PubMed articles:** Use format `[Source: PMC1234567]` or `[Source: PMID:1234567]`
-- **For clinical trials:** Use format `[Trial: NCT01234567]`
-- **For forensic findings:** Use format `[Figure X, Page Y]` or `[Image: figure_003.png]`
-- **If no source is available, DO NOT make the claim** - state "Insufficient data" instead
-- **NEVER use general biomedical knowledge** - only reference data explicitly provided in the evidence summary below
-- **If you're uncertain about a source, err on the side of "Unknown" rather than guessing**
-
-**PROHIBITED (Will cause report rejection):**
-- ❌ "Studies suggest..." (vague, no specific source)
-- ❌ "Pembrolizumab typically causes..." (generic knowledge, not from evidence)
-- ❌ "Research shows..." (no citation)
-- ✅ CORRECT: "NCT03456789 reported 8/30 subjects with Grade 3+ cardiac events (p=0.14) [Trial: NCT03456789]"
-- ✅ CORRECT: "Table S3 shows statistically insignificant efficacy (p=0.47) [Source: PMC7654321, Supplementary Materials]"
-
-**Analytical Framework:**
-- **Clinical Failures:** Terminated trials are harbingers of disaster. Analyze why_stopped fields for euphemisms.
-- **Dark Data:** "Data not shown" = "Data that contradicts our narrative". Insignificant p-values buried in appendices are smoking guns.
-- **Image Forensics:** Western blot splicing suggests desperation. If they're faking figures, what else are they faking?
-
-**Writing Style:**
-- Direct, clinical, unforgiving
-- Use financial analyst language ("thesis risk", "downside scenario", "de-risking catalyst")
-- Quantify everything (percentages, counts, scores)
-- No academic hedging—this is investment analysis, not peer review
-
-**Output Requirements:**
-- Return well-structured JSON with synthesized narrative text
-- Each section should be 200-500 words
-- Include specific evidence citations (see CRITICAL CITATION RULES above)
-- Provide quantitative risk scores (0-10 scale)
-- Generate actionable recommendations
-"""
-    
     def write_report(
         self,
         user_query: str,
         harvest_data: Optional[Dict[str, Any]] = None,
-        forensic_data: Optional[List[Dict[str, Any]]] = None,
-        evidence_data: Optional[List[Dict[str, Any]]] = None,
         project_name: Optional[str] = None,
         output_dir: str = "reports",
-        # 🚨 PHASE 2: New parameters for honest reporting
-        compiled_evidence_text: str = "",
+        compiled_context_text: str = "",
         failed_count: int = 0,
         total_files: int = 0,
+        assessment_override: Optional[str] = None,
         risk_override: Optional[str] = None,
         analysis_status: str = "UNKNOWN",
-        failed_files: Optional[List[str]] = None
+        failed_files: Optional[List[str]] = None,
+        contract_version: Optional[str] = None,
+        **extra_payload: Any,
     ) -> ReportOutput:
-        """Generate biomedical due diligence report.
-        
-        🔥 CRITICAL: Includes Fail-Fast validation to prevent hallucination.
-        """
-        
-        # 🔥 FAIL-FAST VALIDATION 1: Check minimum evidence threshold
-        MIN_EVIDENCE_CHARS = 500
-        if len(compiled_evidence_text) < MIN_EVIDENCE_CHARS:
-            error_msg = f"CRITICAL: Insufficient evidence data ({len(compiled_evidence_text)} chars < {MIN_EVIDENCE_CHARS} required)"
-            logger.error(f"❌ {error_msg}")
-            return ReportOutput(
-                markdown_content=f"# Report Generation Blocked\n\n## Error\n\n{error_msg}\n\nCannot generate meaningful analysis without sufficient data. Please check:\n- PDF extraction succeeded?\n- Evidence mining completed?\n- Network/API issues?",
-                markdown_path=None,
-                recommendation="SYSTEM ERROR - NO DATA",
-                risk_score=0.0,
-                confidence_score=0.0
-            )
-        
-        # 🔥 FAIL-FAST VALIDATION 2: Check query relevance
-        core_keywords = [w.lower() for w in user_query.split()[:3] if len(w) > 3]
-        if core_keywords:
-            keywords_found = [kw for kw in core_keywords if kw in compiled_evidence_text.lower()]
-            if not keywords_found:
-                error_msg = f"CRITICAL: Query relevance failure - core keywords '{', '.join(core_keywords)}' not found in evidence"
-                logger.error(f"❌ {error_msg}")
-                logger.error(f"❌ This indicates complete query drift or wrong documents retrieved")
-                return ReportOutput(
-                    markdown_content=f"# Report Generation Blocked\n\n## Relevance Error\n\n{error_msg}\n\nThe retrieved evidence does not appear to be relevant to your query: '{user_query}'\n\nPossible causes:\n- Search query drift (LLM generated irrelevant queries)\n- Wrong PDFs downloaded\n- Database returned unrelated results\n\nPlease retry with a more specific query.",
-                    markdown_path=None,
-                    recommendation="SYSTEM ERROR - IRRELEVANT DATA",
-                    risk_score=0.0,
-                    confidence_score=0.0
-                )
-        
-        logger.success(f"✅ Validation passed: {len(compiled_evidence_text)} chars, keywords {keywords_found} found")
-        """
-        Generate comprehensive biomedical due diligence report.
-        
-        🚨 PHASE 2: Now accepts failure metadata to enforce honest reporting
-        when PDFs fail to process.
-        
-        Args:
-            user_query: Original user query (e.g., "Analyze CAR-T therapy X")
-            harvest_data: Results from BioHarvestEngine (papers + trials)
-            forensic_data: Results from ForensicEngine (image audit)
-            evidence_data: Results from EvidenceEngine (dark data)
-            project_name: Drug/therapy name (auto-extracted if None)
-            output_dir: Directory for saving reports
-            
-            # 🚨 PHASE 2: Honest reporting parameters
-            compiled_evidence_text: Aggregated text content of evidence
-            failed_count: Number of PDFs that failed to process
-            total_files: Total number of PDFs attempted
-            risk_override: Forced risk level when data is incomplete
-            analysis_status: COMPLETE | PARTIAL_SUCCESS | CRITICAL_FAILURE
-            failed_files: List of failed filenames
-        
-        Returns:
-            ReportOutput object with markdown content and paths
-        
-        Workflow:
-            Step A: Data aggregation and validation
-            Step B: Gemini-powered evidence synthesis (with failure awareness)
-            Step C: Risk scoring and recommendation generation
-            Step D: Template rendering (Markdown)
-            Step E: Optional HTML/PDF conversion
-        
-        Example:
-            >>> agent = ReportWriterAgent()
-            >>> report = agent.write_report(
-            ...     user_query="Analyze drug X safety",
-            ...     harvest_data=bioharvest_results,
-            ...     forensic_data=forensic_results,
-            ...     evidence_data=evidence_results,
-            ...     failed_count=2,  # 🚨 PHASE 2
-            ...     total_files=5,   # 🚨 PHASE 2
-            ...     risk_override="UNCERTAIN (40% data missing)"  # 🚨 PHASE 2
-            ... )
-            >>> print(f"Recommendation: {report.recommendation}")
-            >>> print(f"Risk Score: {report.risk_score}/10")
-        """
-        logger.info(f"\n{'='*60}")
-        logger.info(f"📊 Report Generation: {user_query}")
-        logger.info(f"{'='*60}")
-        
-        # 🚨 PHASE 2: Log failure context
-        if failed_count > 0:
-            logger.warning(f"⚠️ HONEST REPORTING MODE: {failed_count}/{total_files} files failed")
-            logger.warning(f"   Analysis Status: {analysis_status}")
-            if risk_override:
-                logger.warning(f"   Risk Override: {risk_override}")
-        
-        try:
-            # ===== STEP A: Data Aggregation =====
-            logger.info("\n[Step A] Aggregating data from engines...")
-            
-            report_data = self._aggregate_data(
-                user_query=user_query,
-                harvest_data=harvest_data or {},
-                forensic_data=forensic_data or [],
-                evidence_data=evidence_data or [],
-                project_name=project_name
-            )
-            
-            logger.success(
-                f"Aggregated: {len(report_data.harvest_results.get('results', []))} papers/trials, "
-                f"{len(report_data.forensic_results)} images, "
-                f"{len(report_data.evidence_results)} evidence items"
-            )
-            
-            # ===== STEP A.5: 🧮 ENHANCED SCORING LOGIC (Multi-dimensional) =====
-            # 🔥 NEW: Multi-factor confidence calculation
-            # Factor 1: Success rate (files with data vs total files)
-            # Factor 2: Content quality (avg chars per valid source)
-            # Factor 3: Risk signal presence (data completeness)
-            
-            sources = compiled_evidence_text.split("=== EVIDENCE SOURCE") if compiled_evidence_text else []
-            valid_sources = 0
-            total_content_chars = 0
-            sources_with_risks = 0
-            
-            for source in sources:
-                source_text = source.strip()
-                if len(source_text) < 100:
-                    continue
-                
-                # 🔥 STRICT VALIDATION: Check for error indicators
-                if "[CRITICAL WARNING: CONTENT MISSING]" in source_text:
-                    continue
-                if "Error:" in source_text[:200]:  # Check first 200 chars for errors
-                    continue
-                
-                # Extract summary section
-                summary_match = re.search(r'\*\*SUMMARY\*\*:\s*(.+?)(?=\n>|\n=|$)', source_text, re.DOTALL)
-                if summary_match:
-                    summary = summary_match.group(1).strip()
-                    if len(summary) > 300:  # Minimum 300 chars for valid summary
-                        valid_sources += 1
-                        total_content_chars += len(summary)
-                        
-                        # Check if source has risk findings
-                        if '"risk_type"' in source_text or '"risk_level"' in source_text:
-                            sources_with_risks += 1
-            
-            # 🔥 Multi-dimensional scoring
-            if total_files > 0:
-                # Factor 1: Success rate (0-1)
-                success_rate = valid_sources / total_files
-                
-                # Factor 2: Content quality (0-1)
-                avg_content = total_content_chars / valid_sources if valid_sources > 0 else 0
-                content_quality = min(avg_content / 3000, 1.0)  # 3000 chars = full score
-                
-                # Factor 3: Risk presence (0-1)
-                risk_presence = sources_with_risks / valid_sources if valid_sources > 0 else 0
-                
-                # Combined score (weighted average)
-                confidence_score = round((success_rate * 0.5 + content_quality * 0.3 + risk_presence * 0.2) * 10, 1)
-            else:
-                # 🔥 FIX: Initialize all variables when total_files = 0
-                confidence_score = 0.0
-                success_rate = 0.0
-                avg_content = 0
-                content_quality = 0.0
-            
-            logger.info(f"🧮 MULTI-DIMENSIONAL CONFIDENCE: {confidence_score}/10")
-            logger.info(f"   Valid Sources: {valid_sources}/{total_files} ({success_rate*100:.1f}%)")
-            logger.info(f"   Avg Content: {avg_content:.0f} chars (Quality: {content_quality*100:.0f}%)")
-            logger.info(f"   Sources w/ Risks: {sources_with_risks}/{valid_sources if valid_sources > 0 else 1}")
-            # ----------------------------------------------
-            
-            # ===== STEP B: Evidence Synthesis =====
-            logger.info("\n[Step B] Synthesizing evidence with Gemini...")
-            # 🚨 PHASE 2: Pass failure context to synthesis
-            # 🧠 STEP 3 FIX: Pass content-based confidence score to prevent AI hallucination
-            synthesized_sections = self._synthesize_evidence(
-                report_data,
-                compiled_evidence_text=compiled_evidence_text,
+        """Generate report from harvested payload and context text."""
+        del extra_payload
+
+        effective_assessment_override = assessment_override if assessment_override is not None else risk_override
+        failed_files = failed_files or []
+
+        payload = harvest_data if isinstance(harvest_data, dict) else {}
+        rows = self._extract_harvest_rows(payload)
+        resolved_project_name = _safe_text(project_name or user_query or "Unknown", 120)
+        context_text = _safe_text(compiled_context_text, 240000) or self._compose_context_text(user_query, rows)
+
+        signal_score = self._compute_signal_severity(context_text)
+        data_confidence = self._compute_data_confidence(
+            context_len=len(context_text),
+            row_count=len(rows),
+            failed_count=failed_count,
+            total_files=total_files,
+        )
+
+        analysis_position = (
+            _safe_text(effective_assessment_override, 80)
+            if effective_assessment_override
+            else self._derive_analysis_position(
+                signal_score=signal_score,
+                data_confidence=data_confidence,
+                analysis_status=analysis_status,
                 failed_count=failed_count,
                 total_files=total_files,
-                risk_override=risk_override,
-                analysis_status=analysis_status,
-                failed_files=failed_files or [],
-                confidence_score=confidence_score,  # 🔥 INJECT CONTENT-BASED SCORE
-                valid_sources=valid_sources  # 🔥 STEP 3: Pass valid source count
             )
-            
-            logger.success(f"Synthesized {len(synthesized_sections)} report sections")
-            
-            # ===== STEP C: Risk Scoring =====
-            logger.info("\n[Step C] Calculating risk scores...")
-            # 🚨 PHASE 2: Pass risk_override to scoring
-            risk_analysis = self._calculate_risk_scores(
-                report_data,
-                synthesized_sections,
-                risk_override=risk_override,
-                failed_count=failed_count,
-                total_files=total_files
-            )
-            
-            logger.success(
-                f"Risk Score: {risk_analysis['total_risk_score']:.1f}/10 | "
-                f"Recommendation: {risk_analysis['recommendation']}"
-            )
-            
-            # ===== STEP D: Template Rendering =====
-            logger.info("\n[Step D] Rendering markdown report...")
-            markdown_content = self._render_markdown(
-                report_data,
-                synthesized_sections,
-                risk_analysis
-            )
-            
-            # ===== STEP E: Save Report =====
-            logger.info("\n[Step E] Saving report...")
-            output_path = Path(output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            # Generate filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # 🔥 FIX: Sanitize filename to remove illegal characters (e.g., quotes, slashes)
-            raw_name = (project_name or "report").replace(" ", "_").lower()
-            project_slug = sanitize_filename(raw_name)
-            markdown_file = output_path / f"{project_slug}_{timestamp}.md"
-            pdf_file = output_path / f"{project_slug}_{timestamp}.pdf"
-            
-            # Save Markdown
-            markdown_file.write_text(markdown_content, encoding='utf-8')
-            logger.success(f"Markdown saved: {markdown_file}")
-            
-            # ===== STEP F: Convert to PDF =====
-            logger.info("\n[Step F] Converting to PDF...")
-            pdf_path = self._convert_markdown_to_pdf(
-                markdown_content,
-                pdf_file,
-                project_name or "Biomedical Due Diligence Report"
-            )
-            
-            if pdf_path:
-                logger.success(f"PDF saved: {pdf_path}")
-            else:
-                logger.warning("PDF conversion failed, Markdown-only output available")
-            
-            # Create output object
-            report_output = ReportOutput(
-                markdown_content=markdown_content,
-                markdown_path=str(markdown_file),  # PHASE 3.1 FIX: Add markdown path
-                html_path=str(pdf_file) if pdf_path else None,  # Store PDF path in html_path for now
-                pdf_path=str(pdf_path) if pdf_path else None,
-                recommendation=risk_analysis['recommendation'],
-                confidence_score=risk_analysis['confidence_score'],
-                risk_score=risk_analysis['total_risk_score']
-            )
-            
-            logger.info(f"\n{'='*60}")
-            logger.success(f"✅ Report Generation Complete")
-            logger.info(f"   Recommendation: {report_output.recommendation}")
-            logger.info(f"   Confidence: {report_output.confidence_score:.1f}/10")
-            logger.info(f"   Risk Score: {report_output.risk_score:.1f}/10")
-            logger.info(f"   Output: {markdown_file}")
-            logger.info(f"{'='*60}\n")
-            
-            return report_output
-            
-        except Exception as e:
-            logger.error(f"Report generation failed: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
+        )
+
+        report_data = ReportData(
+            user_query=_safe_text(user_query, 500),
+            project_name=resolved_project_name,
+            harvest_payload=payload,
+            context_text=context_text,
+            metadata={
+                "analysis_status": analysis_status,
+                "failed_count": int(failed_count or 0),
+                "total_files": int(total_files or 0),
+                "failed_files": [str(x) for x in failed_files],
+                "contract_version": contract_version or "unknown",
+            },
+        )
+
+        markdown_content = self._render_markdown(
+            report_data=report_data,
+            rows=rows,
+            analysis_position=analysis_position,
+            data_confidence=data_confidence,
+            signal_score=signal_score,
+        )
+
+        markdown_path = self._save_markdown(
+            markdown_content=markdown_content,
+            output_dir=output_dir,
+            project_name=resolved_project_name,
+        )
+
+        logger.info(
+            "Report generated: "
+            f"position={analysis_position}, confidence={data_confidence:.1f}, signal={signal_score:.1f}, "
+            f"rows={len(rows)}"
+        )
+
+        return ReportOutput(
+            markdown_content=markdown_content,
+            markdown_path=markdown_path,
+            analysis_position=analysis_position,
+            data_confidence=data_confidence,
+            signal_severity_score=signal_score,
+        )
+
     def write_report_segmented(
         self,
         user_query: str,
         harvest_data: Optional[Dict[str, Any]] = None,
-        forensic_data: Optional[List[Dict[str, Any]]] = None,
-        evidence_data: Optional[List[Dict[str, Any]]] = None,
         project_name: Optional[str] = None,
         output_dir: str = "reports",
-        compiled_evidence_text: str = "",
+        compiled_context_text: str = "",
         failed_count: int = 0,
         total_files: int = 0,
+        assessment_override: Optional[str] = None,
         risk_override: Optional[str] = None,
         analysis_status: str = "UNKNOWN",
         failed_files: Optional[List[str]] = None,
-        use_segmented: bool = True
+        contract_version: Optional[str] = None,
+        **extra_payload: Any,
     ) -> ReportOutput:
-        """
-        生成报告 - 分阶段模式（推荐）
-        
-        借鉴BettaFish的分阶段生成机制：
-        1. 定义章节结构
-        2. 分配字数预算
-        3. 逐章节生成（章节级重试）
-        4. 组装完整报告
-        
-        Args:
-            (同write_report参数)
-            use_segmented: 是否使用分阶段生成（True推荐）
-        
-        Returns:
-            ReportOutput对象
-        """
-        # 如果不使用分阶段模式或不可用，回退到传统模式
-        if not use_segmented or not self._segmented_mode_available:
-            logger.info("Using traditional single-pass generation...")
-            return self.write_report(
-                user_query=user_query,
-                harvest_data=harvest_data,
-                forensic_data=forensic_data,
-                evidence_data=evidence_data,
-                project_name=project_name,
-                output_dir=output_dir,
-                compiled_evidence_text=compiled_evidence_text,
-                failed_count=failed_count,
-                total_files=total_files,
-                risk_override=risk_override,
-                analysis_status=analysis_status,
-                failed_files=failed_files
-            )
-        
-        logger.info(f"\n{'='*60}")
-        logger.info(f"📝 SEGMENTED Report Generation: {user_query}")
-        logger.info(f"   Mode: Chapter-by-Chapter with Retry")
-        logger.info(f"{'='*60}")
-        
-        try:
-            # ===== 阶段1: 定义章节结构 =====
-            logger.info("\n[Phase 1] Defining chapter structure...")
-            
-            sections = [
-                {
-                    "slug": "drug_profile",
-                    "title": "Drug Profile & Developer Overview",
-                    "outline": (
-                        "Provide a structured overview of the drug/therapy under investigation. "
-                        "MUST include: (1) Drug/compound name, (2) Developer / sponsor company name "
-                        "(the pharmaceutical or biotech company responsible for developing this drug), "
-                        "(3) Mechanism of action, (4) Molecular target, "
-                        "(5) Current development stage (Phase I/II/III, Approved, etc.), "
-                        "(6) Therapeutic indication and patient population, "
-                        "(7) Market context and key competitors. "
-                        "The developer company name is MANDATORY and must appear in the opening paragraph."
-                    ),
-                    "order": 1
-                },
-                {
-                    "slug": "executive_summary",
-                    "title": "Executive Summary",
-                    "outline": "High-level overview of findings, key risks, and recommendation",
-                    "order": 2
-                },
-                {
-                    "slug": "scientific_rationale",
-                    "title": "Scientific Rationale",
-                    "outline": "Mechanism of action, therapeutic potential, and scientific basis",
-                    "order": 3
-                },
-                {
-                    "slug": "dark_data_synthesis",
-                    "title": "Dark Data Analysis",
-                    "outline": "Buried negative results, statistical issues, and hidden concerns",
-                    "order": 4
-                },
-                {
-                    "slug": "forensic_findings",
-                    "title": "Forensic Audit Results",
-                    "outline": "Image manipulation findings and data integrity concerns",
-                    "order": 5
-                },
-                {
-                    "slug": "risk_scoring",
-                    "title": "Risk Assessment",
-                    "outline": "Quantitative risk scoring and investment implications",
-                    "order": 6
-                },
-                {
-                    "slug": "final_recommendation",
-                    "title": "Investment Recommendation",
-                    "outline": "Final verdict and actionable recommendations",
-                    "order": 7
-                }
-            ]
-            
-            logger.success(f"Defined {len(sections)} chapters")
-            
-            # ===== 阶段2: 分配字数预算 =====
-            logger.info("\n[Phase 2] Allocating word budgets...")
-            
-            evidence_metrics = {
-                "evidence_count": len(evidence_data or []),
-                "forensic_count": len(forensic_data or []),
-                "risk_signals": sum(1 for e in (evidence_data or []) if e.get("risk_level") in ["HIGH", "CRITICAL"])
-            }
-            
-            word_allocations = self.word_budget_node.allocate_budgets(sections)
-            word_allocations = self.word_budget_node.adjust_budget_based_on_content(
-                word_allocations,
-                evidence_metrics
-            )
-            
-            logger.success("Word budgets allocated")
-            
-            # ===== 阶段3: 构建生成上下文 =====
-            logger.info("\n[Phase 3] Building generation context...")
-            
-            # 准备forensic摘要
-            forensic_summary = self._prepare_forensic_summary(forensic_data or [])
-            
-            generation_context = {
-                "query": user_query,
-                "compiled_evidence_text": compiled_evidence_text,
-                "forensic_summary": forensic_summary,
-                "failed_count": failed_count,
-                "total_files": total_files,
-                "risk_override": risk_override,
-                "analysis_status": analysis_status,
-                "failed_files": failed_files or [],
-                # 强制要求：每章节的生成必须明确提到药物开发公司
-                "require_sponsor_company": True,
-                "sponsor_company_instruction": (
-                    "MANDATORY: Every section that discusses clinical trials, safety data, "
-                    "regulatory submissions, or scientific findings MUST explicitly name the "
-                    "developer/sponsor company (the pharmaceutical or biotech company that "
-                    "developed or is developing this drug). Do NOT omit the company name."
-                )
-            }
-            
-            logger.success("Context prepared")
-            
-            # ===== 阶段4: 逐章节生成 =====
-            logger.info(f"\n[Phase 4] Generating {len(sections)} chapters...")
-            
-            # 初始化存储
-            from src.report_engine.core import ChapterStorage
-            storage = ChapterStorage(Path(output_dir) / "temp")
-            
-            chapters = []
-            
-            for section in sections:
-                logger.info(f"\n--- Generating: {section['title']} ---")
-                
-                target_words = word_allocations[section["slug"]]["target_words"]
-                
-                success, chapter, errors = self.chapter_generator.generate(
-                    section_title=section["title"],
-                    section_outline=section["outline"],
-                    generation_context=generation_context,
-                    target_words=target_words,
-                    max_attempts=3
-                )
-                
-                if success and chapter:
-                    chapter.order = section["order"]
-                    chapters.append(chapter)
-                    storage.save_chapter(chapter)
-                    logger.success(f"✅ {section['title']}: {chapter.word_count()} words")
-                else:
-                    logger.error(f"❌ Failed to generate {section['title']}: {errors}")
-                    # 创建fallback章节
-                    from src.report_engine.ir.schema import Chapter, ChapterBlock, BlockType
-                    fallback_chapter = Chapter(
-                        id=section["slug"],
-                        title=section["title"],
-                        slug=section["slug"],
-                        order=section["order"],
-                        blocks=[
-                            ChapterBlock(
-                                type=BlockType.PARAGRAPH,
-                                content=f"[Content generation failed: {'; '.join(errors[:2])}]"
-                            )
-                        ]
-                    )
-                    chapters.append(fallback_chapter)
-            
-            logger.success(f"✅ Generated {len(chapters)} chapters")
-            
-            # ===== 阶段5: 组装文档 =====
-            logger.info("\n[Phase 5] Composing final document...")
-            
-            document = self.composer.build_document(
-                chapters=chapters,
-                title=f"Biomedical Due Diligence: {project_name or user_query}",
-                query=user_query,
-                subtitle="Investment Risk Analysis",
-                metadata={
-                    "analysis_status": analysis_status,
-                    "failed_files": failed_count,
-                    "total_files": total_files
-                }
-            )
-            
-            # ===== 阶段6: 渲染输出 =====
-            logger.info("\n[Phase 6] Rendering output...")
-
-            # ── 6a: 自动注入图表/表格/文献图片 ──
-            try:
-                from src.report_engine.utils.chart_injector import ChartInjector
-                injector = ChartInjector()
-
-                # 收集 evidence 数据用于图表生成
-                chart_evidence = {
-                    "harvested_data": harvest_data if isinstance(harvest_data, list) else (harvest_data or {}).get("harvested_data", []),
-                    "text_evidence": evidence_data if isinstance(evidence_data, list) else [],
-                    "risk_flags": (harvest_data or {}).get("risk_flags", []) if isinstance(harvest_data, dict) else [],
-                    "pmc_articles": (harvest_data or {}).get("pmc_articles", []) if isinstance(harvest_data, dict) else [],
-                }
-                chart_forensic = {
-                    "forensic_evidence": forensic_data if isinstance(forensic_data, list) else [],
-                }
-
-                # 收集已提取的文献图片
-                extracted_figs = []
-                downloads_dir = Path("downloads")
-                if downloads_dir.exists():
-                    for img_file in downloads_dir.rglob("*.png"):
-                        if img_file.stat().st_size > 20_000:  # >20KB = likely a real figure
-                            extracted_figs.append({
-                                "path": str(img_file),
-                                "caption": img_file.stem.replace("_", " "),
-                                "source": img_file.parent.name,
-                            })
-
-                document = injector.enrich(
-                    document,
-                    evidence_data=chart_evidence,
-                    forensic_data=chart_forensic,
-                    extracted_figures=extracted_figs[:6],
-                )
-                logger.success("✅ Chart/table/figure injection complete")
-            except Exception as inj_err:
-                logger.warning(f"Chart injection skipped: {inj_err}")
-            
-            # 生成Markdown
-            markdown_content = self.composer.render_markdown(document)
-            
-            # 保存文件
-            output_path = Path(output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # 🔥 FIX: Sanitize filename to remove illegal characters (e.g., quotes, slashes)
-            raw_name = (project_name or "report").replace(" ", "_").lower()
-            project_slug = sanitize_filename(raw_name)
-            markdown_file = output_path / f"{project_slug}_{timestamp}_segmented.md"
-            
-            markdown_file.write_text(markdown_content, encoding='utf-8')
-            logger.success(f"Markdown saved: {markdown_file}")
-            
-            # 保存IR JSON
-            ir_file = output_path / f"{project_slug}_{timestamp}_ir.json"
-            self.composer.save_document(document, ir_file, format="json")
-
-            # ── 生成 HTML + PDF（从 IR 文档完整渲染，包含图表） ──
-            html_path_str = None
-            pdf_path_str = None
-            try:
-                import gc
-                import re as _re
-                from src.report_engine.renderers import HTMLRenderer, PDFRenderer
-
-                html_renderer = HTMLRenderer()
-                html_content = html_renderer.render(document, standalone=True)
-                html_file = output_path / f"{project_slug}_{timestamp}_segmented.html"
-                html_file.write_text(html_content, encoding="utf-8")
-                html_path_str = str(html_file)
-                logger.success(f"✅ HTML report: {html_file.name}")
-
-                # PDF: 直接从已生成的 HTML 渲染，避免重复生成 HTML 导致内存溢出
-                pdf_renderer = PDFRenderer()
-                pdf_file = output_path / f"{project_slug}_{timestamp}_segmented.pdf"
-                try:
-                    # 移除超大 base64 图片以节省 PDF 渲染内存
-                    html_for_pdf = _re.sub(
-                        r'src="data:image/[^"]{1000,}"',
-                        'src="" alt="[See HTML version for images]"',
-                        html_content
-                    )
-                    del html_content
-                    gc.collect()
-                    
-                    html_for_pdf = pdf_renderer._inject_pdf_font_css(html_for_pdf)
-                    html_for_pdf = pdf_renderer._inject_pdf_enhanced_css(html_for_pdf)
-                    try:
-                        html_for_pdf = pdf_renderer.chart_preprocessor.preprocess(html_for_pdf)
-                    except Exception:
-                        pass
-                    html_for_pdf = pdf_renderer.layout_optimizer.optimize(html_for_pdf)
-                    pdf_bytes = pdf_renderer._html_to_pdf_bytes(html_for_pdf)
-                    del html_for_pdf
-                    gc.collect()
-                    
-                    pdf_file.write_bytes(pdf_bytes)
-                    pdf_path_str = str(pdf_file)
-                    del pdf_bytes
-                    gc.collect()
-                    logger.success(f"✅ PDF report: {pdf_file.name}")
-                except MemoryError:
-                    logger.warning("⚠️ PDF rendering hit MemoryError, skipping PDF")
-                except Exception as pdf_err:
-                    logger.warning(f"PDF rendering failed: {pdf_err}")
-            except Exception as render_err:
-                logger.warning(f"HTML/PDF rendering skipped: {render_err}")
-            
-            # 生成风险评分（简化版）
-            total_words = document.total_word_count()
-            confidence_score = 7.0 if total_words > 3000 else 5.0
-            risk_score = 6.0  # 默认中等风险
-            recommendation = "AVOID" if risk_score > 7 else "PROCEED_WITH_CAUTION"
-            
-            # 创建输出对象
-            report_output = ReportOutput(
-                markdown_content=markdown_content,
-                markdown_path=str(markdown_file),
-                html_path=html_path_str,
-                pdf_path=pdf_path_str,
-                recommendation=recommendation,
-                confidence_score=confidence_score,
-                risk_score=risk_score
-            )
-            
-            logger.info(f"\n{'='*60}")
-            logger.success(f"✅ Segmented Report Generation Complete")
-            logger.info(f"   Chapters: {len(chapters)}")
-            logger.info(f"   Total Words: {total_words}")
-            logger.info(f"   Recommendation: {recommendation}")
-            logger.info(f"   Output: {markdown_file}")
-            logger.info(f"{'='*60}\n")
-            
-            # 清理临时文件
-            import shutil
-            temp_dir = Path(output_dir) / "temp"
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-            
-            return report_output
-            
-        except Exception as e:
-            logger.error(f"Segmented report generation failed: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            # 回退到传统模式
-            logger.warning("Falling back to traditional generation...")
-            return self.write_report(
-                user_query=user_query,
-                harvest_data=harvest_data,
-                forensic_data=forensic_data,
-                evidence_data=evidence_data,
-                project_name=project_name,
-                output_dir=output_dir,
-                compiled_evidence_text=compiled_evidence_text,
-                failed_count=failed_count,
-                total_files=total_files,
-                risk_override=risk_override,
-                analysis_status=analysis_status,
-                failed_files=failed_files
-            )
-    
-    def _prepare_forensic_summary(self, forensic_data: List[Dict[str, Any]]) -> str:
-        """准备forensic数据摘要"""
-        if not forensic_data:
-            return "No forensic audit data available."
-        
-        summary_parts = []
-        suspicious_count = sum(1 for f in forensic_data if f.get("status") in ["SUSPICIOUS", "HIGH_RISK"])
-        
-        summary_parts.append(f"Forensic Audit Summary: {len(forensic_data)} images analyzed, {suspicious_count} suspicious")
-        summary_parts.append("\nKey Findings:")
-        
-        for idx, finding in enumerate(forensic_data[:5], 1):  # Top 5
-            risk_score = finding.get('tampering_risk_score', 0)
-            risk_str = f"{risk_score:.2f}" if risk_score is not None else "N/A"
-            
-            summary_parts.append(
-                f"\n{idx}. {finding.get('image_id', 'Unknown')}: {finding.get('status', 'Unknown')} "
-                f"(Risk: {risk_str})"
-            )
-            
-            # 🔥 FIX: findings is a STRING, not a list!
-            findings_text = finding.get('findings', '')
-            if findings_text and isinstance(findings_text, str):
-                # Clean and truncate to first 200 chars
-                clean_findings = findings_text.strip()[:200]
-                if clean_findings:
-                    summary_parts.append(f"   - {clean_findings}")
-            elif isinstance(findings_text, list):
-                # Handle legacy list format if present
-                for f in findings_text[:2]:
-                    if f and isinstance(f, str):
-                        summary_parts.append(f"   - {f[:200]}")
-        
-        return "".join(summary_parts)
-    
-    def _aggregate_data(
-        self,
-        user_query: str,
-        harvest_data: Dict[str, Any],
-        forensic_data: List[Dict[str, Any]],
-        evidence_data: List[Dict[str, Any]],
-        project_name: Optional[str]
-    ) -> ReportData:
-        """
-        Aggregate data from all engines into unified structure.
-        
-        Args:
-            user_query: User's original query
-            harvest_data: BioHarvestEngine results
-            forensic_data: ForensicEngine results
-            evidence_data: EvidenceEngine results
-            project_name: Optional project name
-        
-        Returns:
-            ReportData object
-        """
-        # Auto-extract project name if not provided
-        if not project_name:
-            project_name = user_query.split()[0] if user_query else "Unknown"
-        
-        return ReportData(
+        """Compatibility path routed to single-pass generator."""
+        return self.write_report(
             user_query=user_query,
+            harvest_data=harvest_data,
             project_name=project_name,
-            harvest_results=harvest_data,
-            forensic_results=forensic_data,
-            evidence_results=evidence_data,
-            metadata={
-                'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'analyst': 'Bio-Short-Seller AI'
-            }
+            output_dir=output_dir,
+            compiled_context_text=compiled_context_text,
+            failed_count=failed_count,
+            total_files=total_files,
+            assessment_override=assessment_override,
+            risk_override=risk_override,
+            analysis_status=analysis_status,
+            failed_files=failed_files,
+            contract_version=contract_version,
+            **extra_payload,
         )
-    
-    def _synthesize_evidence(
-        self, 
-        report_data: ReportData,
-        # 🚨 PHASE 2: Add failure awareness parameters
-        compiled_evidence_text: str = "",
-        failed_count: int = 0,
-        total_files: int = 0,
-        risk_override: Optional[str] = None,
-        analysis_status: str = "COMPLETE",
-        failed_files: List[str] = None,
-        confidence_score: float = 0.0,  # 🧠 STEP 3: Content-based confidence score
-        valid_sources: int = 0  # 🔥 STEP 3: Number of files with valid content
-    ) -> Dict[str, str]:
-        """
-        Use Gemini to synthesize evidence into narrative sections.
-        
-        🚨 PHASE 2: Enforces honest reporting when data is incomplete.
-        🧠 STEP 3 FIX: confidence_score is now content-quality-based, not just file counts.
-        
-        Args:
-            report_data: Aggregated report data
-            compiled_evidence_text: Actual text content of evidence
-            failed_count: Number of files that failed processing
-            total_files: Total files attempted
-            risk_override: Forced risk level when data incomplete
-            analysis_status: COMPLETE | PARTIAL_SUCCESS | CRITICAL_FAILURE
-            failed_files: List of failed filenames
-            confidence_score: CALCULATED confidence score (0-10) - DO NOT LET LLM OVERRIDE
-            valid_sources: Number of files with actual extracted content (STEP 3)
-        
-        Returns:
-            Dictionary mapping section names to synthesized text
-        """
-        # Prepare evidence summary for LLM
-        evidence_summary = self._prepare_evidence_summary(report_data)
-        
-        # 🚨 PHASE 2: Build mandatory failure disclosure
-        failure_disclosure = ""
-        if failed_count > 0:
-            failure_rate = (failed_count / total_files * 100) if total_files > 0 else 0
-            failure_disclosure = f"""
-⚠️ **CRITICAL DATA INTEGRITY NOTICE:**
-- **Analysis Status:** {analysis_status}
-- **Files Processed:** {total_files - failed_count}/{total_files} succeeded
-- **Files Failed:** {failed_count} ({failure_rate:.0f}% failure rate)
-- **Failed Files:** {', '.join(failed_files or ['Unknown'])}
-- **Data Completeness:** {'CRITICAL FAILURE' if failed_count == total_files else 'PARTIAL'}
 
-🚨 **MANDATORY REPORTING REQUIREMENT:**
-You MUST acknowledge this data failure in your Executive Summary with:
-- A bold warning at the top: "⚠️ **WARNING: INCOMPLETE ANALYSIS**"
-- Explicit statement: "{failed_count} out of {total_files} PDFs failed to process"
-- Clear disclaimer: "Risk assessment may be INACCURATE due to missing data"
-- If risk_override is provided, YOU MUST use it as the Risk Level instead of calculating your own
+    def _extract_harvest_rows(self, harvest_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        rows = harvest_data.get("results")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        return []
 
-**PROHIBITED:**
-- DO NOT invent data for missing files
-- DO NOT claim "Low Risk" when data is missing
-- DO NOT ignore this failure in your analysis
-- If evidence_text is empty/minimal, state "Data Extraction Failed" explicitly
-"""
-        
-        # 🧠 STEP 3 FIX: Inject Content-Based Confidence Score into System Prompt
-        confidence_instruction = f"""
-
-🧠 **CONFIDENCE SCORE MANDATE (STEP 3 FIX):**
-- **CALCULATED CONFIDENCE:** {confidence_score}/10 (Based on {valid_sources}/{total_files} files with valid content)
-- **SCORING METHOD:** Content Quality, not just file counts
-  - Files with real summaries and risks = Valid
-  - Files with "[CRITICAL WARNING: CONTENT MISSING]" = Invalid
-- **CRITICAL INSTRUCTION:** You MUST use exactly "{confidence_score}/10" as the Confidence Score in the Executive Summary.
-- **STRICTLY PROHIBITED:** DO NOT recalculate, adjust, or hallucinate this number. This is MATHEMATICAL, not subjective.
-- **Example Usage in Report:** "Confidence Score: {confidence_score}/10"
-"""
-        
-        # 💉 STEP 2 FIX: Inject compiled evidence text AFTER statistical summary
-        evidence_log_section = ""
-        if compiled_evidence_text:
-            evidence_log_section = f"""
-
-<EVIDENCE_LOG>
-### 📝 RAW EVIDENCE EXTRACTED FROM PDFs:
-{compiled_evidence_text}
-</EVIDENCE_LOG>
-
-🔍 **CRITICAL INSTRUCTION:**
-Use the specific findings, quotes, and analyses from the <EVIDENCE_LOG> above to populate:
-- "Red Flags Identified" section
-- "Dark Data" section  
-- Risk assessments
-DO NOT use "[Data not available]" if evidence exists in the log above.
-If <EVIDENCE_LOG> is empty, explicitly state "PDF extraction failed - no evidence available".
-"""
-        else:
-            evidence_log_section = """
-
-<EVIDENCE_LOG>
-⚠️ **NO EVIDENCE TEXT AVAILABLE** - PDF extraction may have failed.
-</EVIDENCE_LOG>
-
-🚨 You MUST report this as "CRITICAL DATA GAP" in the Dark Data section.
-"""
-        
-        synthesis_prompt = f"""Analyze the following biomedical due diligence data and synthesize it into structured report sections.
-
-**USER QUERY:** {report_data.user_query}
-
-{failure_disclosure}
-
-{confidence_instruction}
-
-**EVIDENCE SUMMARY (Statistical Overview):**
-{evidence_summary}
-
-{evidence_log_section}
-
-**REQUIRED SECTIONS:**
-
-Generate JSON output with these sections:
-
-**A. Project Metadata:**
-1. **compound_name**: Extract drug/therapy name from user query or evidence
-2. **moa_description**: Mechanism of Action description
-3. **target_description**: Molecular target description
-4. **development_stage**: Current development stage (Phase I/II/III, Preclinical, etc.)
-5. **sponsor_company**: Company/sponsor name
-6. **market_context**: Market size, competition, commercial potential
-
-**B. Analysis Sections:**
-7. **executive_summary**: 3-5 paragraph overview with Go/No-Go recommendation
-   🚨 IF failed_count > 0: START with bold warning about incomplete analysis
-   🧮 MUST include: "Confidence Score: {confidence_score}/10" (DO NOT modify this number)
-8. **red_flags_list**: Bullet list of top 5-10 critical red flags
-9. **decision_factors**: Key factors for investment decision
-10. **scientific_rationale**: Analysis of the drug's mechanism and biological plausibility
-11. **clinical_trial_analysis**: Detailed analysis of failed/terminated trials.
-   For EACH trial discussed, you MUST include:
-   - NCT Number (e.g., NCT01234567) as a citation [Trial: NCTxxxxxxx]
-   - Study Title
-   - Study URL: https://clinicaltrials.gov/study/NCTxxxxxxx
-   - Acronym (if available)
-   - Study Status (TERMINATED / SUSPENDED / WITHDRAWN)
-   - Primary Outcome Measures
-   - Sponsor / Developer company name
-   Failure to cite NCT Numbers will cause report rejection.
-12. **dark_data_synthesis**: Analysis of buried negative results from supplementary materials
-    🚨 IF no evidence text available: State "Data extraction failed - unable to analyze"
-13. **forensic_findings**: Assessment of suspicious images and their implications
-14. **risk_cascade_narrative**: How individual red flags compound into systemic risk
-15. **failure_timeline**: Timeline visualization of red flags (markdown format)
-16. **bull_case**: Best-case scenario (be skeptical)
-17. **bear_case**: Most likely scenario based on evidence
-18. **black_swan_case**: Worst-case catastrophic scenario
-19. **analyst_verdict**: Your final professional opinion
-    🚨 IF risk_override provided: Use it as final risk level
-
-**CRITICAL OUTPUT INSTRUCTIONS:**
-- You MUST output valid JSON with ALL 19 fields
-- Use double quotes for strings (not single quotes)
-- Escape special characters properly (\\" for quotes, \\n for newlines)
-- Do NOT truncate strings mid-sentence
-- If unsure, use "[Insufficient data]" rather than malformed JSON
-
-**OUTPUT FORMAT:**
-Return ONLY the JSON object below (no markdown fences, no explanations):
-{{
-  "compound_name": "...",
-  "moa_description": "...",
-  "target_description": "...",
-  "development_stage": "...",
-  "sponsor_company": "...",
-  "market_context": "...",
-  "executive_summary": "...",
-  "red_flags_list": "...",
-  "decision_factors": "...",
-  "scientific_rationale": "...",
-  "clinical_trial_analysis": "...",
-  "dark_data_synthesis": "...",
-  "forensic_findings": "...",
-  "risk_cascade_narrative": "...",
-  "failure_timeline": "...",
-  "bull_case": "...",
-  "bear_case": "...",
-  "black_swan_case": "...",
-  "analyst_verdict": "..."
-}}
-
-Be specific, cite evidence, and quantify risk wherever possible.
-🚨 CRITICAL: Obey the MANDATORY REPORTING REQUIREMENT and CONFIDENCE SCORE MANDATE above.
-"""
-        
-        # 🔥 NEW: Define JSON Schema for structured output (prevents format errors)
-        response_schema = {
-            "type": "object",
-            "properties": {
-                "compound_name": {"type": "string"},
-                "moa_description": {"type": "string"},
-                "target_description": {"type": "string"},
-                "development_stage": {"type": "string"},
-                "sponsor_company": {"type": "string"},
-                "market_context": {"type": "string"},
-                "executive_summary": {"type": "string"},
-                "red_flags_list": {"type": "string"},
-                "decision_factors": {"type": "string"},
-                "scientific_rationale": {"type": "string"},
-                "clinical_trial_analysis": {"type": "string"},
-                "dark_data_synthesis": {"type": "string"},
-                "forensic_findings": {"type": "string"},
-                "risk_cascade_narrative": {"type": "string"},
-                "failure_timeline": {"type": "string"},
-                "bull_case": {"type": "string"},
-                "bear_case": {"type": "string"},
-                "black_swan_case": {"type": "string"},
-                "analyst_verdict": {"type": "string"}
-            },
-            "required": [
-                "compound_name", "moa_description", "target_description",
-                "development_stage", "sponsor_company", "market_context",
-                "executive_summary", "red_flags_list", "decision_factors",
-                "scientific_rationale", "clinical_trial_analysis",
-                "dark_data_synthesis", "forensic_findings",
-                "risk_cascade_narrative", "failure_timeline",
-                "bull_case", "bear_case", "black_swan_case", "analyst_verdict"
-            ]
-        }
-        
-        # 🔥 NEW: Adjust output length based on model capability
-        # Lower-tier models get shorter max_tokens to avoid truncation
-        current_model = self.llm.model_name.lower()
-        if 'flash' in current_model:
-            # Flash models: Shorter output to prevent truncation
-            max_tokens = 6000
-            logger.info(f"📉 Using flash model - limiting output to {max_tokens} tokens")
-        elif '1.5' in current_model:
-            # Gemini 1.5: Moderate output
-            max_tokens = 8000
-            logger.info(f"📊 Using 1.5 model - limiting output to {max_tokens} tokens")
-        else:
-            # Pro/2.5+ models: Full output
-            max_tokens = 8192
-        
-        try:
-            # 🔥 NEW: Use segmented generation strategy
-            logger.info("🔄 Using segmented JSON generation strategy...")
-            
-            all_segments = {}
-            segment_quality_reports = []
-            
-            # Generate JSON segment by segment
-            for segment_key, segment_info in SegmentedJSONGenerator.REPORT_SEGMENTS.items():
-                logger.info(f"📝 Generating segment: {segment_key} ({segment_info['description']})")
-                
-                # Build prompt for this segment
-                segment_prompt = SegmentedJSONGenerator.get_segment_prompt(
-                    segment_key=segment_key,
-                    base_prompt=synthesis_prompt,
-                    evidence_summary=evidence_summary
+    def _compose_context_text(self, user_query: str, rows: List[Dict[str, Any]]) -> str:
+        parts = [f"QUERY: {_safe_text(user_query, 1000)}"]
+        for idx, row in enumerate(rows, 1):
+            title = _safe_text(row.get("title"), 500)
+            summary = _safe_text(row.get("summary") or row.get("abstract"), 3000)
+            source = _safe_text(row.get("source"), 100)
+            pmid = _safe_text(row.get("pmid"), 80)
+            nct_id = _safe_text(row.get("nct_id"), 80)
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            metadata_excerpt = json.dumps(metadata, ensure_ascii=True)[:1200]
+            parts.append(
+                "\n".join(
+                    [
+                        f"=== HARVEST RECORD {idx} ===",
+                        f"SOURCE: {source}",
+                        f"PMID: {pmid}",
+                        f"NCT_ID: {nct_id}",
+                        f"TITLE: {title}",
+                        f"SUMMARY: {summary}",
+                        f"METADATA: {metadata_excerpt}",
+                    ]
                 )
-                
-                # Invoke LLM to generate this segment
-                try:
-                    response = self.llm.generate_content(
-                        prompt=segment_prompt,
-                        system_instruction=self.synthesis_system_prompt,
-                        response_mime_type="application/json",
-                        max_output_tokens=segment_info['max_tokens']
-                    )
-                    
-                    # 🔥 CRITICAL FIX: Check for None response before validation
-                    if response is None:
-                        logger.error(f"❌ Gemini returned None for segment {segment_key}")
-                        fallback_data = {field: f"[Error: Gemini API returned no data for {segment_key}]" for field in segment_info['fields']}
-                        all_segments[segment_key] = fallback_data
-                        continue  # Skip to next segment
-                    
-                    # 🔥 CRITICAL FIX: Check for empty response
-                    if not response or not response.strip():
-                        logger.error(f"❌ Gemini returned empty response for segment {segment_key}")
-                        fallback_data = {field: f"[Error: Empty response from Gemini for {segment_key}]" for field in segment_info['fields']}
-                        all_segments[segment_key] = fallback_data
-                        continue
-                    
-                    # 验证和修复JSON
-                    is_valid, segment_data, errors = JSONValidator.validate_and_repair(
-                        json_text=response,
-                        expected_fields=segment_info['fields']
-                    )
-                    
-                    # 🔥 DEBUG: 如果验证失败，记录原始响应前200字符
-                    if not is_valid:
-                        logger.debug(f"❌ Segment {segment_key} raw response (first 200 chars): {response[:200]}")
-                    
-                    if is_valid and segment_data:
-                        # 质量检查
-                        quality_report = JSONInspector.inspect_quality(
-                            data=segment_data,
-                            section_name=segment_key
-                        )
-                        segment_quality_reports.append(quality_report)
-                        
-                        # 如果质量太差，尝试重新生成一次
-                        if quality_report['quality_score'] < 4.0:
-                            logger.warning(f"⚠️ Segment {segment_key} quality too low, regenerating...")
-                            
-                            # 在prompt中加入质量要求
-                            enhanced_prompt = segment_prompt + f"""
+            )
+            if len("\n\n".join(parts)) > 120000:
+                break
+        return "\n\n".join(parts)[:120000]
 
-⚠️ QUALITY IMPROVEMENT REQUIRED:
-Previous generation had issues: {', '.join(quality_report['issues'][:3])}
+    def _compute_signal_severity(self, context_text: str) -> float:
+        if not context_text:
+            return 0.0
 
-MANDATORY IMPROVEMENTS:
-1. Each field must contain at least 100 words of substantial analysis
-2. Use specific evidence and citations [Source: PMC/PMID] or [Trial: NCT]
-3. NO placeholder text like "[Data not available]" - if data missing, explain WHY
-4. Provide quantitative assessments where possible
-5. Write complete, well-formed sentences
-
-Generate high-quality content NOW.
-"""
-                            
-                            response_retry = self.llm.generate_content(
-                                prompt=enhanced_prompt,
-                                system_instruction=self.synthesis_system_prompt,
-                                response_mime_type="application/json",
-                                max_output_tokens=segment_info['max_tokens'] + 1000  # 给更多空间
-                            )
-                            
-                            # 🔥 CRITICAL FIX: Check for None in retry response
-                            if response_retry is None or not response_retry.strip():
-                                logger.warning(f"⚠️ Retry returned None/empty for segment {segment_key}, keeping original")
-                            else:
-                                is_valid_retry, segment_data_retry, _ = JSONValidator.validate_and_repair(
-                                    json_text=response_retry,
-                                    expected_fields=segment_info['fields']
-                                )
-                                
-                                if is_valid_retry and segment_data_retry:
-                                    quality_report_retry = JSONInspector.inspect_quality(
-                                        data=segment_data_retry,
-                                        section_name=segment_key
-                                    )
-                                    
-                                    # 使用质量更好的版本
-                                    if quality_report_retry['quality_score'] > quality_report['quality_score']:
-                                        segment_data = segment_data_retry
-                                        quality_report = quality_report_retry
-                                        logger.success(f"✅ Regeneration improved quality: {quality_report_retry['quality_score']:.1f}/10")
-                                    else:
-                                        logger.warning("⚠️ Regeneration didn't improve quality, keeping original")
-                                else:
-                                    logger.warning(f"⚠️ Retry validation failed for segment {segment_key}, keeping original")
-                        
-                        all_segments[segment_key] = segment_data
-                        logger.success(f"✅ Segment {segment_key} generated (quality: {quality_report['quality_score']:.1f}/10)")
-                    
-                    else:
-                        logger.error(f"❌ Segment {segment_key} validation failed: {errors}")
-                        # 使用fallback数据
-                        fallback_data = {field: f"[Generation failed for {segment_key}]" for field in segment_info['fields']}
-                        all_segments[segment_key] = fallback_data
-                
-                except Exception as segment_error:
-                    logger.error(f"❌ Segment {segment_key} generation failed: {segment_error}")
-                    fallback_data = {field: f"[Error: {str(segment_error)[:100]}]" for field in segment_info['fields']}
-                    all_segments[segment_key] = fallback_data
-            
-            # 合并所有段落
-            synthesized = SegmentedJSONGenerator.merge_segments(all_segments)
-            
-            # 整体质量报告
-            overall_quality = sum(r['quality_score'] for r in segment_quality_reports) / len(segment_quality_reports) if segment_quality_reports else 0
-            logger.info(f"📊 Overall report quality: {overall_quality:.1f}/10")
-            
-            if overall_quality < 5.0:
-                logger.warning(f"⚠️ Report quality is low ({overall_quality:.1f}/10). Consider regeneration.")
-            
-            return synthesized
-            
-        except Exception as e:
-            logger.error(f"Evidence synthesis failed: {e}")
-            # Return fallback structure
-            return {
-                'executive_summary': 'Error generating summary.',
-                'scientific_rationale': 'Error analyzing rationale.',
-                'clinical_trial_analysis': 'Error analyzing trials.',
-                'dark_data_synthesis': 'Error synthesizing dark data.',
-                'forensic_findings': 'Error analyzing forensics.',
-                'risk_cascade_narrative': 'Error analyzing risk cascade.',
-                'bull_case': 'Insufficient data.',
-                'bear_case': 'Insufficient data.',
-                'black_swan_case': 'Insufficient data.',
-                'analyst_verdict': 'AVOID - Data quality issues.'
-            }
-    
-    def _prepare_evidence_summary(self, report_data: ReportData) -> str:
-        """
-        Prepare concise evidence summary for LLM context.
-        
-        Args:
-            report_data: Aggregated report data
-        
-        Returns:
-            Formatted evidence summary text
-        """
-        summary_lines = []
-        
-        # Harvest data summary
-        harvest_results = report_data.harvest_results.get('results', [])
-        summary_lines.append(f"**HARVEST DATA:** {len(harvest_results)} papers/trials")
-        
-        # Count failed trials
-        failed_trials = [
-            r for r in harvest_results 
-            if r.get('source') == 'ClinicalTrials.gov' 
-            and r.get('status') in ['TERMINATED', 'SUSPENDED', 'WITHDRAWN']
+        text = context_text.lower()
+        weighted_patterns = [
+            (r"serious adverse|severe adverse|fatal|death", 2.2),
+            (r"terminated|withdrawn|discontinued", 1.8),
+            (r"toxicity|safety concern|black box", 1.7),
+            (r"no significant|p\s*[>=]\s*0\.05", 1.2),
+            (r"failed|failure|did not meet", 1.3),
+            (r"insufficient|limited|uncertain", 0.8),
         ]
-        summary_lines.append(f"  - Failed trials: {len(failed_trials)}")
-        
-        for trial in failed_trials[:3]:  # Show top 3
-            nct = trial.get('nct_id') or trial.get('metadata', {}).get('nct_id', 'Unknown')
-            title = trial.get('title', 'Unknown')
-            sponsor = trial.get('sponsor') or trial.get('metadata', {}).get('sponsor', 'Unknown')
-            why_stopped = trial.get('why_stopped') or trial.get('metadata', {}).get('why_stopped', 'Unknown')
-            primary_outcomes = trial.get('primary_outcome_measures') or trial.get('metadata', {}).get('primary_outcome_measures', 'N/A')
-            status = trial.get('status', 'Unknown')
-            url = trial.get('url') or trial.get('link', '')
-            summary_lines.append(
-                f"    * [{nct}] {title}"
-            )
-            summary_lines.append(
-                f"      Status: {status} | Sponsor: {sponsor}"
-            )
-            summary_lines.append(
-                f"      Why Stopped: {why_stopped}"
-            )
-            summary_lines.append(
-                f"      Primary Outcomes: {primary_outcomes[:200]}"
-            )
-            if url:
-                summary_lines.append(f"      URL: {url}")
-        
-        # Evidence data summary
-        summary_lines.append(f"\n**DARK DATA:** {len(report_data.evidence_results)} risk signals")
-        
-        high_risk = [e for e in report_data.evidence_results if e.get('risk_level') == 'HIGH']
-        summary_lines.append(f"  - High risk signals: {len(high_risk)}")
-        
-        for item in high_risk[:3]:  # Show top 3
-            summary_lines.append(
-                f"    * {item.get('risk_type', 'Unknown')}: {item.get('quote', '')[:100]}..."
-            )
-        
-        # Forensic data summary
-        suspicious = [f for f in report_data.forensic_results if f.get('status') == 'suspicious']
-        summary_lines.append(f"\n**FORENSICS:** {len(suspicious)} suspicious images")
-        
-        for img in suspicious[:3]:  # Show top 3
-            summary_lines.append(
-                f"    * {img.get('image_id', 'Unknown')}: {', '.join(img.get('findings', []))}"
-            )
-        
-        return "\n".join(summary_lines)
-    
-    def _parse_synthesis_response(self, response: str) -> Dict[str, str]:
-        """
-        Parse LLM JSON response into dictionary.
-        使用新的JSONValidator进行验证和修复
-        
-        Args:
-            response: Raw LLM response
-        
-        Returns:
-            Dictionary of synthesized sections
-        """
-        required_fields = [
-            'compound_name', 'moa_description', 'target_description',
-            'development_stage', 'sponsor_company', 'market_context',
-            'executive_summary', 'red_flags_list', 'decision_factors',
-            'scientific_rationale', 'clinical_trial_analysis',
-            'dark_data_synthesis', 'forensic_findings',
-            'risk_cascade_narrative', 'failure_timeline',
-            'bull_case', 'bear_case', 'black_swan_case', 'analyst_verdict'
-        ]
-        
-        # 使用新的验证器
-        is_valid, data, errors = JSONValidator.validate_and_repair(
-            json_text=response,
-            expected_fields=required_fields
-        )
-        
-        if is_valid and data:
-            logger.success(f"✅ Parsed and validated synthesis JSON with {len(data)} sections")
-            
-            # 质量检查
-            quality_report = JSONInspector.inspect_quality(data, "Full Report")
-            logger.info(f"📊 Report quality: {quality_report['verdict']} ({quality_report['quality_score']:.1f}/10)")
-            
-            if quality_report['recommendations']:
-                for rec in quality_report['recommendations']:
-                    logger.warning(rec)
-            
-            return data
-        
-        else:
-            logger.error(f"❌ JSON validation failed with {len(errors)} errors")
-            for error in errors[:5]:  # 显示前5个错误
-                logger.error(f"  - {error}")
-            
-            # 保存失败的响应用于调试
-            try:
-                import os
-                os.makedirs('logs', exist_ok=True)
-                with open('logs/failed_synthesis_response.txt', 'w', encoding='utf-8') as f:
-                    f.write(f"=== VALIDATION ERRORS ===\n")
-                    for error in errors:
-                        f.write(f"{error}\n")
-                    f.write(f"\n=== FULL RESPONSE ===\n")
-                    f.write(response)
-                logger.info("💾 Failed response saved to logs/failed_synthesis_response.txt")
-            except:
-                pass
-            
-            # 返回错误结构
-            return {
-                'executive_summary': f'⚠️ **JSON VALIDATION ERROR**\n\nValidation failed with {len(errors)} errors. Check logs/failed_synthesis_response.txt for details.',
-                'scientific_rationale': '[Validation error - see logs]',
-                'clinical_trial_analysis': '[Validation error - see logs]',
-                'dark_data_synthesis': '[Validation error - see logs]',
-                'forensic_findings': '[Validation error - see logs]',
-                'risk_cascade_narrative': '[Validation error - see logs]',
-                'bull_case': 'Insufficient data.',
-                'bear_case': 'Insufficient data.',
-                'black_swan_case': 'Insufficient data.',
-                'analyst_verdict': 'AVOID - Data quality issues.'
-            }
-    
-    def _calculate_risk_scores(
+
+        score = 0.0
+        for pattern, weight in weighted_patterns:
+            count = len(re.findall(pattern, text))
+            score += min(count, 12) * weight
+
+        normalized = min(10.0, round(score / 6.0, 2))
+        return normalized
+
+    def _compute_data_confidence(
         self,
-        report_data: ReportData,
-        synthesized_sections: Dict[str, str],
-        # 🚨 PHASE 2: Add failure awareness
-        risk_override: Optional[str] = None,
-        failed_count: int = 0,
-        total_files: int = 0
-    ) -> Dict[str, Any]:
-        """
-        Calculate quantitative risk scores and generate recommendation.
-        
-        🚨 PHASE 2: Respects risk_override when data is incomplete.
-        
-        Args:
-            report_data: Aggregated report data
-            synthesized_sections: Synthesized narrative sections
-            risk_override: Forced risk level when data incomplete (PHASE 2)
-            failed_count: Number of failed files (PHASE 2)
-            total_files: Total files attempted (PHASE 2)
-        
-        Returns:
-            Dictionary with risk scores and recommendation
-        """
-        # Initialize scores
-        clinical_score = 0.0
-        dark_data_score = 0.0
-        forensic_score = 0.0
-        literature_score = 0.0
-        
-        # Clinical trial score (0-10, higher = more risk)
-        harvest_results = report_data.harvest_results.get('results', [])
-        failed_trials = [
-            r for r in harvest_results 
-            if r.get('source') == 'ClinicalTrials.gov' 
-            and r.get('status') in ['TERMINATED', 'SUSPENDED', 'WITHDRAWN']
-        ]
-        
-        if harvest_results:
-            failure_rate = len(failed_trials) / len(harvest_results)
-            clinical_score = min(10.0, failure_rate * 20)  # Scale to 0-10
-        
-        # Dark data score
-        high_risk_evidence = [
-            e for e in report_data.evidence_results 
-            if e.get('risk_level') == 'HIGH'
-        ]
-        dark_data_score = min(10.0, len(high_risk_evidence) * 2)
-        
-        # Forensic score
-        suspicious_images = [
-            f for f in report_data.forensic_results 
-            if f.get('status') == 'suspicious'
-        ]
-        forensic_score = min(10.0, len(suspicious_images) * 3)
-        
-        # Literature score (placeholder - could analyze sentiment)
-        literature_score = 5.0  # Neutral baseline
-        
-        # Weighted total
-        total_risk_score = (
-            clinical_score * 0.30 +
-            dark_data_score * 0.35 +
-            forensic_score * 0.20 +
-            literature_score * 0.15
-        )
-        
-        # 🚨 PHASE 2: Override recommendation if data is incomplete
-        if risk_override:
-            logger.warning(f"🚨 RISK OVERRIDE ACTIVE: {risk_override}")
-            recommendation = "INCONCLUSIVE - INCOMPLETE DATA"
-            confidence_score = 0.0  # Zero confidence when data is missing
-            
-            # Add disclaimer to explain the override
-            if failed_count == total_files:
-                recommendation = "CRITICAL FAILURE - NO ANALYSIS POSSIBLE"
-                confidence_score = 0.0
-            elif failed_count > 0:
-                failure_rate = (failed_count / total_files * 100) if total_files > 0 else 0
-                recommendation = f"PARTIAL ANALYSIS ONLY ({failure_rate:.0f}% data missing)"
-                confidence_score = max(0.0, 10.0 - (failure_rate / 10))  # Penalize confidence
+        context_len: int,
+        row_count: int,
+        failed_count: int,
+        total_files: int,
+    ) -> float:
+        if total_files > 0:
+            success_ratio = max(0.0, (total_files - max(0, failed_count)) / total_files)
         else:
-            # Normal recommendation logic
-            if total_risk_score >= 7.0:
-                recommendation = "STRONG AVOID"
-                confidence_score = 9.0
-            elif total_risk_score >= 5.0:
-                recommendation = "AVOID"
-                confidence_score = 7.5
-            elif total_risk_score >= 3.0:
-                recommendation = "PROCEED WITH EXTREME CAUTION"
-                confidence_score = 6.0
-            else:
-                recommendation = "PROCEED WITH CAUTION"
-                confidence_score = 5.0
-        
-        return {
-            'clinical_failure_score': clinical_score,
-            'dark_data_score': dark_data_score,
-            'forensic_score': forensic_score,
-            'literature_score': literature_score,
-            'total_risk_score': total_risk_score,
-            'recommendation': recommendation,
-            'confidence_score': confidence_score,
-            'clinical_weighted': clinical_score * 0.30,
-            'dark_data_weighted': dark_data_score * 0.35,
-            'forensic_weighted': forensic_score * 0.20,
-            'literature_weighted': literature_score * 0.15,
-            # 🚨 PHASE 2: Add failure metadata to risk analysis
-            'risk_override': risk_override,
-            'failed_count': failed_count,
-            'total_files': total_files,
-            'data_completeness': f"{total_files - failed_count}/{total_files}" if total_files > 0 else "N/A"
-        }
-    
+            success_ratio = 1.0
+
+        context_score = min(1.0, context_len / 6000.0)
+        row_score = min(1.0, row_count / 20.0)
+        confidence = (success_ratio * 0.5 + context_score * 0.3 + row_score * 0.2) * 10.0
+        return round(max(0.0, min(10.0, confidence)), 2)
+
+    def _derive_analysis_position(
+        self,
+        signal_score: float,
+        data_confidence: float,
+        analysis_status: str,
+        failed_count: int,
+        total_files: int,
+    ) -> str:
+        status_upper = (analysis_status or "").upper()
+        if "CRITICAL_FAILURE" in status_upper:
+            return "CRITICAL_FAILURE"
+        if total_files > 0 and failed_count >= total_files:
+            return "CRITICAL_FAILURE"
+        if signal_score >= 7.0:
+            return "SEVERE_NEGATIVE_SIGNAL"
+        if signal_score >= 5.0:
+            return "ELEVATED_NEGATIVE_SIGNAL"
+        if signal_score >= 3.0:
+            return "MIXED_SIGNAL"
+        if data_confidence < 3.0:
+            return "INCONCLUSIVE"
+        return "LIMITED_NEGATIVE_SIGNAL"
+
+    def _extract_signal_highlights(self, context_text: str, max_items: int = 8) -> List[str]:
+        if not context_text:
+            return []
+
+        lines = [ln.strip() for ln in context_text.splitlines() if ln.strip()]
+        picked: List[str] = []
+        trigger = re.compile(
+            r"adverse|toxicity|terminated|withdrawn|failed|insufficient|uncertain|no significant",
+            re.IGNORECASE,
+        )
+
+        for line in lines:
+            if trigger.search(line):
+                picked.append(_safe_text(line, 220))
+            if len(picked) >= max_items:
+                break
+        return picked
+
     def _render_markdown(
         self,
         report_data: ReportData,
-        synthesized_sections: Dict[str, str],
-        risk_analysis: Dict[str, Any]
+        rows: List[Dict[str, Any]],
+        analysis_position: str,
+        data_confidence: float,
+        signal_score: float,
     ) -> str:
-        """
-        Render final markdown report using template.
-        
-        Args:
-            report_data: Aggregated report data
-            synthesized_sections: Synthesized narrative sections
-            risk_analysis: Risk scores and recommendation
-        
-        Returns:
-            Rendered markdown content
-        """
-        # ⚖️ STEP 3 FIX: Determine final risk label with override priority
-        risk_override = risk_analysis.get('risk_override')
-        calculated_risk = 'HIGH' if risk_analysis['total_risk_score'] >= 7 else 'MEDIUM' if risk_analysis['total_risk_score'] >= 4 else 'LOW'
-        
-        # Priority: risk_override > calculated_risk
-        if risk_override:
-            # Extract clean label from override (e.g., "UNCERTAIN (...)" -> "UNCERTAIN")
-            final_risk_label = risk_override.split('(')[0].strip()
-            logger.info(f"⚖️ Risk Override Active: {risk_override} -> Header displays: {final_risk_label}")
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        status = report_data.metadata.get("analysis_status", "UNKNOWN")
+        failed_count = int(report_data.metadata.get("failed_count", 0) or 0)
+        total_files = int(report_data.metadata.get("total_files", 0) or 0)
+        failed_files = report_data.metadata.get("failed_files", []) or []
+        contract_version = report_data.metadata.get("contract_version", "unknown")
+
+        highlights = self._extract_signal_highlights(report_data.context_text)
+
+        lines: List[str] = []
+        lines.append(f"# {report_data.project_name} - Biomedical Review")
+        lines.append("")
+        lines.append("## Executive Summary")
+        lines.append(f"- Analysis Position: {analysis_position}")
+        lines.append(f"- Data Confidence: {data_confidence:.2f}/10")
+        lines.append(f"- Signal Severity Score: {signal_score:.2f}/10")
+        lines.append(f"- Harvest Records: {len(rows)}")
+        lines.append(f"- Processing Status: {status}")
+        lines.append("")
+
+        lines.append("## Run Metadata")
+        lines.append(f"- Query: {report_data.user_query}")
+        lines.append(f"- Generated At: {generated_at}")
+        lines.append(f"- Contract Version: {contract_version}")
+        if total_files > 0:
+            lines.append(f"- File Processing: {max(total_files - failed_count, 0)}/{total_files} successful")
+        if failed_files:
+            lines.append("- Failed Files:")
+            for item in failed_files[:20]:
+                lines.append(f"  - {item}")
+        lines.append("")
+
+        lines.append("## Key Signal Highlights")
+        if highlights:
+            for item in highlights:
+                lines.append(f"- {item}")
         else:
-            final_risk_label = calculated_risk
-            logger.debug(f"⚖️ Using calculated risk: {calculated_risk}")
-        
-        # Prepare template variables
-        harvest_results = report_data.harvest_results.get('results', [])
-        failed_trials = [
-            r for r in harvest_results 
-            if r.get('status') in ['TERMINATED', 'SUSPENDED', 'WITHDRAWN']
-        ]
-        high_risk_evidence = [
-            e for e in report_data.evidence_results 
-            if e.get('risk_level') == 'HIGH'
-        ]
-        suspicious_images = [
-            f for f in report_data.forensic_results 
-            if f.get('status') == 'suspicious'
-        ]
-        
-        # Calculate success rate
-        total_trials = len(harvest_results)
-        success_rate = ((total_trials - len(failed_trials)) / total_trials * 100) if total_trials > 0 else 0
-        
-        template_vars = {
-            # Header
-            'project_name': report_data.project_name,
-            'report_date': report_data.metadata.get('report_date', ''),
-            'user_query': report_data.user_query,
-            
-            # Executive Summary
-            'recommendation': risk_analysis['recommendation'],
-            'confidence_score': f"{risk_analysis['confidence_score']:.1f}",
-            'risk_level': final_risk_label,  # ⚖️ STEP 3 FIX: Use unified risk label
-            'executive_summary_text': synthesized_sections.get('executive_summary', ''),
-            'red_flags_list': synthesized_sections.get('red_flags_list', '[Data not available]'),
-            'decision_factors': synthesized_sections.get('decision_factors', '[Data not available]'),
-            
-            # Project Overview
-            'compound_name': synthesized_sections.get('compound_name', '[Data not available]'),
-            'moa_description': synthesized_sections.get('moa_description', '[Data not available]'),
-            'target_description': synthesized_sections.get('target_description', '[Data not available]'),
-            'development_stage': synthesized_sections.get('development_stage', '[Data not available]'),
-            'sponsor_company': synthesized_sections.get('sponsor_company', '[Data not available]'),
-            'market_context': synthesized_sections.get('market_context', '[Data not available]'),
-            
-            # Synthesized sections
-            'scientific_rationale': synthesized_sections.get('scientific_rationale', ''),
-            'risk_cascade_narrative': synthesized_sections.get('risk_cascade_narrative', ''),
-            'bull_case': synthesized_sections.get('bull_case', ''),
-            'bear_case': synthesized_sections.get('bear_case', ''),
-            'black_swan_case': synthesized_sections.get('black_swan_case', ''),
-            'analyst_verdict': synthesized_sections.get('analyst_verdict', ''),
-            'failure_timeline': synthesized_sections.get('failure_timeline', '[Data not available]'),
-            
-            # Risk scores
-            'clinical_failure_score': f"{risk_analysis['clinical_failure_score']:.1f}",
-            'dark_data_score': f"{risk_analysis['dark_data_score']:.1f}",
-            'forensic_score': f"{risk_analysis['forensic_score']:.1f}",
-            'literature_score': f"{risk_analysis['literature_score']:.1f}",
-            'total_risk_score': f"{risk_analysis['total_risk_score']:.1f}",
-            'clinical_weighted': f"{risk_analysis['clinical_weighted']:.2f}",
-            'dark_data_weighted': f"{risk_analysis['dark_data_weighted']:.2f}",
-            'forensic_weighted': f"{risk_analysis['forensic_weighted']:.2f}",
-            'literature_weighted': f"{risk_analysis['literature_weighted']:.2f}",
-            
-            # Data counts
-            'total_trials': total_trials,
-            'failed_trials_count': len(failed_trials),
-            'success_rate': f"{success_rate:.1f}",
-            'total_evidence_items': len(report_data.evidence_results),
-            'high_risk_count': len(high_risk_evidence),
-            'suspicious_images_count': len(suspicious_images),
-            'pdfs_analyzed_count': len(report_data.evidence_results),
-            'total_images_analyzed': len(report_data.forensic_results),
-            
-            # Statistical red flags (analyze evidence text)
-            'insignificant_pvalues_count': self._count_pattern(report_data.evidence_results, r'p\s*[>>=]\s*0\.0[5-9]'),
-            'data_not_shown_count': self._count_pattern(report_data.evidence_results, r'data not shown|not shown|supplementary'),
-            'dropout_mentions_count': self._count_pattern(report_data.evidence_results, r'dropout|withdrew|discontinued'),
-            
-            # Image forensics breakdown
-            'western_blot_count': self._count_image_type(report_data.forensic_results, 'western'),
-            'microscopy_count': self._count_image_type(report_data.forensic_results, 'microscopy'),
-            'chart_count': self._count_image_type(report_data.forensic_results, 'chart|graph'),
-        }
-        
-        # Simple template rendering (replace {{var}} with values)
-        if self.template:
-            rendered = self.template
-            for key, value in template_vars.items():
-                rendered = rendered.replace(f"{{{{{key}}}}}", str(value))
-            
-            # 🔥 STEP 4: Render dynamic sections with actual data
-            import re
-            rendered = self._render_dynamic_sections(
-                rendered, 
-                failed_trials, 
-                high_risk_evidence, 
-                report_data.evidence_results,
-                suspicious_images,
-                report_data.forensic_results
-            )
-            
-            # Remove unrendered handlebars sections
-            rendered = re.sub(r'\{\{#each.*?\}\}.*?\{\{/each\}\}', '', rendered, flags=re.DOTALL)
-            rendered = re.sub(r'\{\{#if.*?\}\}.*?\{\{/if\}\}', '', rendered, flags=re.DOTALL)
-            rendered = re.sub(r'\{\{.*?\}\}', '[Data not available]', rendered)
-            
-            return rendered
+            lines.append("- No explicit high-signal statements were detected in compiled context text.")
+        lines.append("")
+
+        lines.append("## Harvest Record Snapshot")
+        if rows:
+            for idx, row in enumerate(rows[:25], 1):
+                title = _safe_text(row.get("title"), 280) or "(untitled)"
+                source = _safe_text(row.get("source"), 80) or "(unknown source)"
+                year = _safe_text(row.get("year") or row.get("publication_year"), 10)
+                pmid = _safe_text(row.get("pmid"), 40)
+                nct_id = _safe_text(row.get("nct_id"), 40)
+                summary = _safe_text(row.get("summary") or row.get("abstract"), 420)
+                lines.append(f"### Record {idx}")
+                lines.append(f"- Title: {title}")
+                lines.append(f"- Source: {source}")
+                if year:
+                    lines.append(f"- Year: {year}")
+                if pmid:
+                    lines.append(f"- PMID: {pmid}")
+                if nct_id:
+                    lines.append(f"- NCT ID: {nct_id}")
+                if summary:
+                    lines.append(f"- Summary: {summary}")
+                lines.append("")
         else:
-            # Fallback: basic markdown without template
-            return self._generate_basic_markdown(report_data, synthesized_sections, risk_analysis)
-    
-    def _generate_basic_markdown(
-        self,
-        report_data: ReportData,
-        synthesized_sections: Dict[str, str],
-        risk_analysis: Dict[str, Any]
-    ) -> str:
-        """
-        Generate basic markdown report without template (fallback).
-        
-        Args:
-            report_data: Aggregated report data
-            synthesized_sections: Synthesized sections
-            risk_analysis: Risk analysis
-        
-        Returns:
-            Basic markdown content
-        """
-        # ⚖️ STEP 3 FIX: Apply same risk override logic in fallback
-        risk_override = risk_analysis.get('risk_override')
-        calculated_risk = 'HIGH' if risk_analysis['total_risk_score'] >= 7 else 'MEDIUM' if risk_analysis['total_risk_score'] >= 4 else 'LOW'
-        final_risk_label = risk_override.split('(')[0].strip() if risk_override else calculated_risk
-        
-        lines = [
-            f"# {report_data.project_name} - Biomedical Due Diligence Report",
-            "",
-            f"**Generated:** {report_data.metadata.get('report_date', '')}",
-            f"**Query:** {report_data.user_query}",
-            "",
-            "## Executive Summary",
-            "",
-            f"**Risk Level:** {final_risk_label}",  # ⚖️ STEP 3 FIX: Use unified label
-            f"**Recommendation:** {risk_analysis['recommendation']}",
-            f"**Risk Score:** {risk_analysis['total_risk_score']:.1f}/10",
-            "",
-            synthesized_sections.get('executive_summary', ''),
-            "",
-            "## Analysis",
-            "",
-            synthesized_sections.get('analyst_verdict', ''),
-            ""
-        ]
-        
-        return "\n".join(lines)
-    
-    def _convert_markdown_to_pdf(
-        self,
-        markdown_content: str,
-        output_path: Path,
-        title: str
-    ) -> Optional[str]:
-        """
-        Convert Markdown report to professional PDF.
-        
-        Args:
-            markdown_content: Markdown text to convert
-            output_path: Target PDF file path
-            title: Report title for PDF metadata
-        
-        Returns:
-            Path to generated PDF or None if conversion fails
-        """
+            lines.append("- No harvest records were provided.")
+            lines.append("")
+
+        lines.append("## Context Excerpt")
+        context_excerpt = _safe_text(report_data.context_text, 12000)
+        if context_excerpt:
+            lines.append("```text")
+            lines.append(context_excerpt)
+            lines.append("```")
+        else:
+            lines.append("No compiled context text available.")
+
+        return "\n".join(lines).strip() + "\n"
+
+    def _save_markdown(self, markdown_content: str, output_dir: str, project_name: str) -> Optional[str]:
         try:
-            import markdown
-            import pdfkit
-            
-            # Convert Markdown to HTML
-            html_body = markdown.markdown(
-                markdown_content,
-                extensions=['extra', 'codehilite', 'tables', 'toc']
-            )
-            
-            # Professional Research Paper CSS
-            css_style = """
-            <style>
-                @page {
-                    size: A4;
-                    margin: 2.5cm;
-                }
-                body {
-                    font-family: 'Georgia', 'Times New Roman', serif;
-                    font-size: 11pt;
-                    line-height: 1.6;
-                    color: #2c3e50;
-                    max-width: 800px;
-                    margin: 0 auto;
-                }
-                h1 {
-                    font-size: 24pt;
-                    font-weight: bold;
-                    color: #1a252f;
-                    border-bottom: 3px solid #3498db;
-                    padding-bottom: 10px;
-                    margin-top: 30px;
-                    margin-bottom: 20px;
-                }
-                h2 {
-                    font-size: 18pt;
-                    font-weight: bold;
-                    color: #2c3e50;
-                    margin-top: 25px;
-                    margin-bottom: 15px;
-                    border-bottom: 1px solid #bdc3c7;
-                    padding-bottom: 8px;
-                }
-                h3 {
-                    font-size: 14pt;
-                    font-weight: bold;
-                    color: #34495e;
-                    margin-top: 20px;
-                    margin-bottom: 10px;
-                }
-                p {
-                    text-align: justify;
-                    margin-bottom: 12px;
-                }
-                ul, ol {
-                    margin-left: 20px;
-                    margin-bottom: 15px;
-                }
-                li {
-                    margin-bottom: 8px;
-                }
-                code {
-                    font-family: 'Courier New', monospace;
-                    background-color: #ecf0f1;
-                    padding: 2px 6px;
-                    border-radius: 3px;
-                    font-size: 10pt;
-                }
-                pre {
-                    background-color: #f8f9fa;
-                    border-left: 4px solid #3498db;
-                    padding: 15px;
-                    margin: 15px 0;
-                    overflow-x: auto;
-                    font-size: 9pt;
-                }
-                blockquote {
-                    border-left: 4px solid #95a5a6;
-                    padding-left: 20px;
-                    margin: 15px 0;
-                    font-style: italic;
-                    color: #7f8c8d;
-                }
-                table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin: 20px 0;
-                    font-size: 10pt;
-                }
-                th {
-                    background-color: #34495e;
-                    color: white;
-                    padding: 12px;
-                    text-align: left;
-                    font-weight: bold;
-                }
-                td {
-                    border: 1px solid #ddd;
-                    padding: 10px;
-                }
-                tr:nth-child(even) {
-                    background-color: #f8f9fa;
-                }
-                .risk-high {
-                    color: #e74c3c;
-                    font-weight: bold;
-                }
-                .risk-medium {
-                    color: #f39c12;
-                    font-weight: bold;
-                }
-                .risk-low {
-                    color: #27ae60;
-                    font-weight: bold;
-                }
-            </style>
-            """
-            
-            # Complete HTML document
-            html_document = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>{title}</title>
-                {css_style}
-            </head>
-            <body>
-                {html_body}
-            </body>
-            </html>
-            """
-            
-            # PDF conversion options
-            pdf_options = {
-                'page-size': 'A4',
-                'margin-top': '2.5cm',
-                'margin-right': '2.5cm',
-                'margin-bottom': '2.5cm',
-                'margin-left': '2.5cm',
-                'encoding': 'UTF-8',
-                'no-outline': None,
-                'enable-local-file-access': None,
-                'print-media-type': None,
-            }
-            
-            # Convert HTML to PDF
-            pdfkit.from_string(html_document, str(output_path), options=pdf_options)
-            
-            return str(output_path)
-            
-        except ImportError as e:
-            logger.debug(f"PDF conversion libraries not installed: {e}")
-            logger.debug("💡 Install with: pip install markdown pdfkit")
-            logger.debug("💡 Ensure wkhtmltopdf is installed: https://wkhtmltopdf.org/downloads.html")
+            output_path = Path(output_dir or "final_reports")
+            output_path.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_project = sanitize_filename(project_name, max_length=80)
+            markdown_file = output_path / f"{safe_project}_{timestamp}.md"
+            markdown_file.write_text(markdown_content, encoding="utf-8")
+            return str(markdown_file)
+        except Exception as exc:
+            logger.warning(f"Failed to save markdown report: {exc}")
             return None
-        except Exception as e:
-            logger.debug(f"PDF conversion skipped: {e}")
-            logger.debug("💡 PDF generation is optional. Markdown report is fully functional.")
-            return None
-    
-    def _count_pattern(self, evidence_items: List[Dict], pattern: str) -> int:
-        """Count occurrences of regex pattern in evidence text."""
-        import re
-        count = 0
-        for item in evidence_items:
-            text = item.get('paper_summary', '') + ' ' + str(item.get('risk_signals', []))
-            if re.search(pattern, text, re.IGNORECASE):
-                count += 1
-        return count
-    
-    def _count_image_type(self, forensic_items: List[Dict], pattern: str) -> int:
-        """Count images matching type pattern."""
-        import re
-        count = 0
-        for item in forensic_items:
-            img_type = item.get('image_type', '') or item.get('description', '')
-            if re.search(pattern, str(img_type), re.IGNORECASE):
-                count += 1
-        return count if count > 0 else len(forensic_items) // 3  # Fallback estimate
-    
-    def _render_dynamic_sections(
-        self,
-        template: str,
-        failed_trials: List[Dict],
-        high_risk_evidence: List[Dict],
-        all_evidence: List[Dict],
-        suspicious_images: List[Dict],
-        all_forensics: List[Dict]
-    ) -> str:
-        """
-        Render dynamic list sections with actual data.
-        
-        Args:
-            template: Template string with {{#each}} blocks
-            failed_trials: List of failed trial data
-            high_risk_evidence: High-risk evidence items
-            all_evidence: All evidence items
-            suspicious_images: Suspicious image findings
-            all_forensics: All forensic results
-        
-        Returns:
-            Rendered template with data-filled sections
-        """
-        import re
-        
-        # 1. Render Failed Trials section
-        failed_trials_html = ""
-        for idx, trial in enumerate(failed_trials[:5], 1):  # Top 5
-            nct = trial.get('nct_id') or trial.get('metadata', {}).get('nct_id', 'N/A')
-            trial_title = trial.get('title', 'Unknown')
-            trial_url = trial.get('url') or trial.get('link') or f"https://clinicaltrials.gov/study/{nct}"
-            acronym = trial.get('acronym') or trial.get('metadata', {}).get('acronym', 'N/A')
-            study_status = trial.get('status') or trial.get('study_status', 'N/A')
-            phase = trial.get('phase') or trial.get('metadata', {}).get('phase', 'N/A')
-            why_stopped = trial.get('why_stopped') or trial.get('snippet', 'Not disclosed')
-            sponsor = trial.get('sponsor') or trial.get('metadata', {}).get('sponsor', 'N/A')
-            primary_outcomes = trial.get('primary_outcome_measures') or trial.get('metadata', {}).get('primary_outcome_measures', 'Not specified')
-            enrollment = trial.get('enrollment') or trial.get('metadata', {}).get('enrollment', 'N/A')
-            start_date = trial.get('start_date') or trial.get('metadata', {}).get('start_date', 'N/A')
-            completion_date = trial.get('completion_date') or trial.get('date', 'N/A')
-
-            failed_trials_html += f"""
-#### Trial {idx}: [{nct}]({trial_url}) — {trial_title}
-
-| Field | Value |
-|---|---|
-| **NCT Number** | [{nct}]({trial_url}) |
-| **Study Title** | {trial_title} |
-| **Acronym** | {acronym} |
-| **Study Status** | {study_status} |
-| **Phase** | {phase} |
-| **Sponsor (Developer)** | {sponsor} |
-| **Primary Outcome Measures** | {primary_outcomes} |
-| **Enrollment** | {enrollment} |
-| **Start Date** | {start_date} |
-| **Completion Date** | {completion_date} |
-| **Study URL** | [{trial_url}]({trial_url}) |
-
-**Termination Reason:** {why_stopped}
-
-**Red Flag Analysis:**
-{trial.get('red_flag_analysis', 'Safety or efficacy concerns led to early termination.')}
-
----
-"""
-        
-        # Replace {{#each failed_trials}} block
-        template = re.sub(
-            r'\{\{#each failed_trials\}\}.*?\{\{/each\}\}',
-            failed_trials_html if failed_trials_html else '**No failed trials identified.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 2. Render High-Risk Evidence section
-        high_risk_html = ""
-        for idx, evidence in enumerate(high_risk_evidence[:10], 1):  # Top 10
-            risk_type = evidence.get('risk_type', 'Unknown Risk')
-            high_risk_html += f"""
-#### Signal {idx}: {risk_type.upper()}
-
-**Source:** {evidence.get('filename', 'Unknown')} (Page ~{evidence.get('page', 'N/A')})  
-**Category:** {risk_type}
-
-**Direct Quote:**
-> {evidence.get('quote', 'N/A')[:300]}...
-
-**Analysis:**
-{evidence.get('explanation', 'Significant safety or efficacy concern identified.')}
-
-**Investor Impact:**
-{evidence.get('investment_impact', 'Requires further investigation before investment decision.')}
-
----
-"""
-        
-        template = re.sub(
-            r'\{\{#each high_risk_evidence\}\}.*?\{\{/each\}\}',
-            high_risk_html if high_risk_html else '**No high-risk signals detected in analyzed PDFs.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 3. Render Medium-Risk Evidence section
-        medium_risk = [e for e in all_evidence if e.get('risk_level') == 'MEDIUM']
-        medium_risk_html = ""
-        for idx, evidence in enumerate(medium_risk[:5], 1):  # Top 5
-            medium_risk_html += f"""
-#### Signal {idx}: {evidence.get('risk_type', 'Unknown').upper()}
-
-**Source:** {evidence.get('filename', 'Unknown')}  
-**Category:** {evidence.get('risk_type', 'Statistical Concern')}
-
-**Direct Quote:**
-> {evidence.get('quote', 'N/A')[:200]}...
-
-**Analysis:** {evidence.get('explanation', 'Requires monitoring.')}
-
----
-"""
-        
-        template = re.sub(
-            r'\{\{#each medium_risk_evidence\}\}.*?\{\{/each\}\}',
-            medium_risk_html if medium_risk_html else '**No medium-risk signals detected.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 4. Render Suspicious Images section
-        suspicious_html = ""
-        for idx, image in enumerate(suspicious_images[:5], 1):  # Top 5
-            findings = image.get('findings', [])
-            findings_list = '\\n'.join([f'- {f}' for f in findings]) if findings else '- Potential manipulation detected'
-            
-            suspicious_html += f"""
-#### Figure {idx}: {image.get('image_id', f'Image_{idx}')}
-
-**Page:** {image.get('page_num', 'N/A')}  
-**Suspicion Level:** {image.get('confidence', 0.0):.2f} ({image.get('status', 'suspicious')})
-
-**Findings:**
-{findings_list}
-
-**Detailed Analysis:**
-{image.get('raw_analysis', 'Anomalies detected in image data.')[:300]}...
-
-**Image Location:** `{image.get('image_path', 'N/A')}`
-
-**Investor Interpretation:**
-{image.get('investor_impact', 'Independent verification recommended before relying on these figures.')}
-
----
-"""
-        
-        template = re.sub(
-            r'\{\{#each suspicious_images\}\}.*?\{\{/each\}\}',
-            suspicious_html if suspicious_html else '**No suspicious images detected. All figures passed forensic analysis.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 5. Render PubMed Papers section (from harvest data)
-        template = re.sub(
-            r'\{\{#each pubmed_papers\}\}.*?\{\{/each\}\}',
-            '**Literature synthesis included in Executive Summary and Risk Analysis sections.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 6. Render Manipulation Types section
-        template = re.sub(
-            r'\{\{#each manipulation_types\}\}.*?\{\{/each\}\}',
-            '**No systematic manipulation patterns detected across analyzed figures.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        # 7. Render Similar Failures section
-        template = re.sub(
-            r'\{\{#each similar_failures\}\}.*?\{\{/each\}\}',
-            '**Comparative analysis integrated into Risk Cascade section.**',
-            template,
-            flags=re.DOTALL
-        )
-        
-        return template
 
 
 def create_agent() -> ReportWriterAgent:
-    """
-    Factory function to create a ReportWriterAgent instance.
-    
-    Returns:
-        ReportWriterAgent: Initialized agent ready for use
-    
-    Example:
-        >>> agent = create_agent()
-        >>> report = agent.write_report(
-        ...     user_query="Analyze drug X",
-        ...     harvest_data=harvest_results,
-        ...     forensic_data=forensic_results,
-        ...     evidence_data=evidence_results
-        ... )
-    """
+    """Factory function for report writer agent."""
     return ReportWriterAgent()
+
+
+__all__ = ["ReportWriterAgent", "ReportOutput", "ReportData", "create_agent"]
