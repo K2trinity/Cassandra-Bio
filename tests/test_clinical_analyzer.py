@@ -67,6 +67,35 @@ def test_analyze_empty_input():
     assert result["safety_signals"] == []
 
 
+def test_clinical_analyzer_node_writes_slot_b():
+    from src.graph.nodes.clinical_analyzer_node import clinical_analyzer_node
+
+    state = {
+        "harvested_data": [
+            {"title": "Phase III trial", "nct_id": "NCT001", "source": "ClinicalTrials.gov", "summary": "Completed.", "metadata": {"phase": "Phase III", "conditions": ["NSCLC"], "interventions": ["Drug A"], "status": "Completed"}},
+        ],
+        "harvest_source_payloads": {},
+        "extension_payloads": {"slot_a": {"evidence_synthesis": {}}, "slot_b": {}, "slot_c": {}},
+    }
+    result = clinical_analyzer_node(state)
+    assert result["status"] == "clinical_analysis_complete"
+    slot_b = result["extension_payloads"]["slot_b"]
+    assert "clinical_analysis" in slot_b
+    assert "pipeline_matrix" in slot_b["clinical_analysis"]
+
+
+def test_clinical_analyzer_node_handles_empty():
+    from src.graph.nodes.clinical_analyzer_node import clinical_analyzer_node
+
+    state = {
+        "harvested_data": [],
+        "harvest_source_payloads": {},
+        "extension_payloads": {"slot_a": {}, "slot_b": {}, "slot_c": {}},
+    }
+    result = clinical_analyzer_node(state)
+    assert result["status"] == "clinical_analysis_complete"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
