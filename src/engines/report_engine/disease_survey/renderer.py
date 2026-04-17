@@ -26,16 +26,16 @@ def render_executive_summary(state: DiseaseSurveyState) -> Dict[str, Any]:
 
 def render_drug_pipeline(state: DiseaseSurveyState) -> Dict[str, Any]:
     by_phase: Dict[str, int] = defaultdict(int)
-    by_target: Dict[str, int] = defaultdict(int)
     by_modality: Dict[str, int] = defaultdict(int)
 
     for asset in state.drug_assets:
         phase = asset.phase or "Unknown"
         by_phase[phase] += 1
-        for t in asset.targets:
-            by_target[t] += 1
         if asset.modality:
             by_modality[asset.modality] += 1
+
+    raw_by_target = group_by_target(state.drug_assets)
+    by_target = {k: len(v) for k, v in raw_by_target.items()}
 
     assets = [
         {
@@ -226,7 +226,7 @@ def render_market_landscape(state: DiseaseSurveyState) -> Dict[str, Any]:
             "lead_phase": s.lead_phase,
         }
         for s in state.sponsors
-        if s.ticker or s.market_cap
+        if s.ticker or s.market_cap is not None
     ]
     return {
         "sponsors_with_financials": with_financials,

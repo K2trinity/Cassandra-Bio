@@ -185,6 +185,21 @@ def test_target_biology_empty():
     assert result["total_unique"] == 0
 
 
+def test_target_biology_benchmark_fallback():
+    # Asset has a target not present in cns_benchmark — should get fallback values
+    state = make_state(
+        drug_assets=[DrugAsset(asset_name="ExperimentalDrug", targets=["TREM2"], sponsor="X")],
+        cns_benchmark=[],  # no benchmark data
+    )
+    result = render_target_biology(state)
+    assert len(result["targets"]) == 1
+    entry = result["targets"][0]
+    assert entry["target_name"] == "TREM2"
+    assert entry["publication_count_5yr"] == 0
+    assert entry["trial_count_5yr"] == 0
+    assert entry["trend"] == "unknown"
+
+
 # ── render_safety_profile ─────────────────────────────────────────────
 
 def test_safety_profile_keys():
@@ -255,3 +270,17 @@ def test_market_landscape_financials():
     assert "company_name" in entry
     assert "ticker" in entry
     assert "market_cap" in entry
+
+
+def test_market_landscape_excludes_private_sponsors():
+    state = make_state(
+        sponsors=[
+            SponsorProfile(company_name="PublicCo", pipeline_count=1, ticker="PUB", market_cap=1e9),
+            SponsorProfile(company_name="PrivateCo", pipeline_count=1),  # no ticker, no market_cap
+        ]
+    )
+    result = render_market_landscape(state)
+    assert result["total_sponsors"] == 2
+    names = [e["company_name"] for e in result["sponsors_with_financials"]]
+    assert "PublicCo" in names
+    assert "PrivateCo" not in names
