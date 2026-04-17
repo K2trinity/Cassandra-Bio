@@ -86,6 +86,12 @@ def test_disease_survey_state_minimal():
     assert isinstance(state.generated_at, datetime)
 
 
-def test_disease_survey_state_rejects_bad_type():
+def test_disease_survey_state_rejects_int_for_str():
+    # Pydantic v2 does NOT coerce int to str — it raises ValidationError
     with pytest.raises(ValidationError):
         DiseaseSurveyState(disease_name=123, query="test")
+
+
+def test_disease_survey_state_rejects_missing_required():
+    with pytest.raises(ValidationError):
+        DiseaseSurveyState(query="test")  # disease_name is required
