@@ -77,6 +77,37 @@ def test_assess_empty_input():
     assert result["confidence_grade"] == "D"
 
 
+def test_quality_assessor_node_writes_slot_c():
+    from src.graph.nodes.quality_assessor_node import quality_assessor_node
+
+    state = {
+        "harvested_data": [
+            {"title": "Study", "pmid": "1", "source": "PubMed", "summary": "Text", "metadata": {"year": "2025"}},
+        ],
+        "extension_payloads": {
+            "slot_a": {"evidence_synthesis": {"grade_scores": {"overall": "B", "score": 3.0}}},
+            "slot_b": {"clinical_analysis": {"pipeline_matrix": []}},
+            "slot_c": {},
+        },
+    }
+    result = quality_assessor_node(state)
+    assert result["status"] == "quality_assessment_complete"
+    slot_c = result["extension_payloads"]["slot_c"]
+    assert "quality_assessment" in slot_c
+    assert "confidence_grade" in slot_c["quality_assessment"]
+
+
+def test_quality_assessor_node_handles_empty():
+    from src.graph.nodes.quality_assessor_node import quality_assessor_node
+
+    state = {
+        "harvested_data": [],
+        "extension_payloads": {"slot_a": {}, "slot_b": {}, "slot_c": {}},
+    }
+    result = quality_assessor_node(state)
+    assert result["status"] == "quality_assessment_complete"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
