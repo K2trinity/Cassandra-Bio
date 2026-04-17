@@ -5,7 +5,6 @@ This module defines:
 - Contract version
 - JSON Schema dictionaries for key handoff payloads
 - Lightweight validator for runtime checks
-- Risk-field stripping utility for writer payload hardening
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 
-CONTRACT_VERSION = "2026-04-03.v1"
+CONTRACT_VERSION = "2026-04-17.v4"
 
 
 BIOHARVEST_OUTPUT_SCHEMA: Dict[str, Any] = {
@@ -41,24 +40,16 @@ WRITER_INPUT_SCHEMA: Dict[str, Any] = {
     "required": [
         "user_query",
         "harvest_data",
-        "forensic_data",
-        "evidence_data",
         "output_dir",
-        "compiled_evidence_text",
-        "failed_count",
-        "total_files",
-        "analysis_status",
-        "failed_files",
         "contract_version",
     ],
     "properties": {
         "user_query": {"type": "string"},
         "harvest_data": {"type": "object"},
-        "forensic_data": {"type": "array"},
-        "evidence_data": {"type": "array"},
+        "synthesis_sections": {"type": ["object", "null"]},
         "project_name": {"type": ["string", "null"]},
         "output_dir": {"type": "string"},
-        "compiled_evidence_text": {"type": "string"},
+        "compiled_context_text": {"type": "string"},
         "failed_count": {"type": "integer"},
         "total_files": {"type": "integer"},
         "analysis_status": {"type": "string"},
@@ -67,6 +58,22 @@ WRITER_INPUT_SCHEMA: Dict[str, Any] = {
         "contract_version": {"type": "string"},
     },
     "additionalProperties": False,
+}
+
+
+EXTENSION_OUTPUT_SCHEMA: Dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "cassandra://contracts/extension-output",
+    "title": "Extension Agent Output Contract",
+    "type": "object",
+    "required": ["slot_id", "agent_name", "data", "status"],
+    "properties": {
+        "slot_id": {"type": "string"},
+        "agent_name": {"type": "string"},
+        "data": {"type": "object"},
+        "status": {"type": "string"},
+    },
+    "additionalProperties": True,
 }
 
 
@@ -126,25 +133,6 @@ def validate_payload(payload: Any, schema: Dict[str, Any], path: str = "$") -> L
     return errors
 
 
-def strip_risk_fields(obj: Any) -> Any:
-    """
-    Recursively remove keys that contain 'risk' from dict/list payloads.
-
-    This is used to ensure risk-specific structured fields are not transmitted
-    from Supervisor payload into Writer.
-    """
-    if isinstance(obj, dict):
-        cleaned: Dict[str, Any] = {}
-        for key, value in obj.items():
-            if "risk" in key.lower():
-                continue
-            cleaned[key] = strip_risk_fields(value)
-        return cleaned
-    if isinstance(obj, list):
-        return [strip_risk_fields(item) for item in obj]
-    return obj
-
-
 def validate_bioharvest_output(payload: Dict[str, Any]) -> Tuple[bool, List[str]]:
     errors = validate_payload(payload, BIOHARVEST_OUTPUT_SCHEMA)
     return len(errors) == 0, errors
@@ -152,4 +140,9 @@ def validate_bioharvest_output(payload: Dict[str, Any]) -> Tuple[bool, List[str]
 
 def validate_writer_input(payload: Dict[str, Any]) -> Tuple[bool, List[str]]:
     errors = validate_payload(payload, WRITER_INPUT_SCHEMA)
+    return len(errors) == 0, errors
+
+
+def validate_extension_output(payload: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    errors = validate_payload(payload, EXTENSION_OUTPUT_SCHEMA)
     return len(errors) == 0, errors
