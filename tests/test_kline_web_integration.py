@@ -124,6 +124,17 @@ def test_kline_route_uses_real_data_service_for_events(monkeypatch):
     Contract: /kline/<symbol> must call get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]
     and use the returned events instead of inline mock data.
     """
+    mock_ohlc_rows = [
+        {
+            "date": "2026-04-19",
+            "open": 100.0,
+            "high": 102.5,
+            "low": 99.0,
+            "close": 101.5,
+            "volume": 1000000,
+        },
+    ]
+
     mock_events = [
         {
             "id": "evt_real_001",
@@ -133,9 +144,13 @@ def test_kline_route_uses_real_data_service_for_events(monkeypatch):
         },
     ]
 
+    def fake_get_ohlc_rows(ticker: str, max_age_hours: int = 24):
+        return mock_ohlc_rows
+
     def fake_get_events_for_ticker(ticker: str, max_age_hours: int = 6):
         return mock_events
 
+    monkeypatch.setattr(app_module, "get_ohlc_rows", fake_get_ohlc_rows)
     monkeypatch.setattr(app_module, "get_events_for_ticker", fake_get_events_for_ticker)
 
     client = app.test_client()
@@ -144,6 +159,28 @@ def test_kline_route_uses_real_data_service_for_events(monkeypatch):
 
     assert response.status_code == 200
     assert "Real Phase 3 data from service" in html
+
+
+def test_kline_route_handles_empty_ohlc_and_events(monkeypatch):
+    """
+    Contract: /kline/<symbol> must render successfully even when services return empty lists.
+    Template receives ohlc_json=[] and events_json=[].
+    """
+    def fake_get_ohlc_rows(ticker: str, max_age_hours: int = 24):
+        return []
+
+    def fake_get_events_for_ticker(ticker: str, max_age_hours: int = 6):
+        return []
+
+    monkeypatch.setattr(app_module, "get_ohlc_rows", fake_get_ohlc_rows)
+    monkeypatch.setattr(app_module, "get_events_for_ticker", fake_get_events_for_ticker)
+
+    client = app.test_client()
+    response = client.get("/kline/MRNA")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "[]" in html  # Empty JSON arrays should be in the response
 
 
 def test_kline_template_has_three_tab_shell(monkeypatch):

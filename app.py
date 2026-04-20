@@ -35,7 +35,7 @@ try:
 except AttributeError:
     pass  # Python < 3.7
 
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file, Response, redirect, url_for
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from loguru import logger
@@ -45,6 +45,8 @@ from config import Settings
 
 # Import the core LangGraph workflow
 from src.services.workflow_service import WorkflowService
+from src.services.market_data_service import get_ohlc_rows
+from src.services.event_ingestion_service import get_events_for_ticker
 from src.graph.state import AgentState
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -91,6 +93,7 @@ active_analysis: Dict[str, Any] = {
     "query": None,
     "thread": None,
     "result": None,
+    "result_payload": None,
     "error": None,
     # ── v2 additions ──
     "task_id": None,          # UUID for this task
@@ -126,6 +129,7 @@ def _reset_active_analysis():
     active_analysis["thread"] = None
     active_analysis["error"] = active_analysis.get("error")  # preserve error
     active_analysis["progress"] = active_analysis.get("progress", 0)
+    active_analysis["result_payload"] = None
 
 
 def _start_thread_watchdog(thread: threading.Thread, task_id: Optional[str] = None, timeout: int = 3600) -> None:
@@ -261,8 +265,16 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
         "status": status,
         "percentage": pct,
         "message": message,
+        "task_id": active_analysis.get("task_id"),
+        "query": active_analysis.get("query"),
     })
-    _emit_event("step", {"step": step, "status": status, "percentage": pct})
+    _emit_event("step", {
+        "step": step,
+        "status": status,
+        "percentage": pct,
+        "task_id": active_analysis.get("task_id"),
+        "query": active_analysis.get("query"),
+    })
 
 
 # ============================================================================
@@ -336,9 +348,24 @@ logger.add(socketio_handler.write, level="INFO")
 # ============================================================================
 
 @app.route('/')
+def root_redirect():
+    """Default entry: open the New Investigation workspace."""
+    return redirect(url_for('index'))
+
+
+@app.route('/investigation')
 def index():
     """Mission Control - Main Dashboard"""
     return render_template('index.html')
+
+
+@app.route('/kline')
+def kline_default():
+    """Default K-line route with optional symbol query parameter."""
+    symbol = (request.args.get('symbol') or 'MRNA').strip().upper()
+    if not symbol:
+        symbol = 'MRNA'
+    return redirect(url_for('kline_view', symbol=symbol))
 
 
 @app.route('/graph')
@@ -351,56 +378,18 @@ def graph_view():
 def kline_view(symbol: str):
     """Render K-line chart with Cassandra report integration."""
     import json
-    from datetime import datetime, timedelta
 
-    # Generate mock OHLC data (last 60 days)
-    ohlc_rows = []
-    base_price = 100.0
-    current_date = datetime.now() - timedelta(days=60)
+    # Fetch real OHLC data from market_data_service
+    ohlc_rows = get_ohlc_rows(symbol.upper())
 
-    for i in range(60):
-        price_change = (i % 5 - 2) * 2
-        open_p = base_price + price_change
-        close_p = open_p + (i % 3 - 1) * 1.5
-        high_p = max(open_p, close_p) + abs(i % 2) * 2
-        low_p = min(open_p, close_p) - abs(i % 2) * 1
-
-        ohlc_rows.append({
-            "date": current_date.strftime("%Y-%m-%d"),
-            "open": round(open_p, 2),
-            "high": round(high_p, 2),
-            "low": round(low_p, 2),
-            "close": round(close_p, 2),
-            "volume": 1000000 + (i * 50000) % 500000,
-        })
-        current_date += timedelta(days=1)
-        base_price = close_p
-
-    # Sample events
-    events_list = [
-        {
-            "id": "evt_001",
-            "date": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"),
-            "type": "clinical_readout",
-            "priority": 1,
-            "catalyst": "Phase 3 trial positive results",
-            "sentiment": "positive",
-        },
-        {
-            "id": "evt_002",
-            "date": (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d"),
-            "type": "fda_decision",
-            "priority": 1,
-            "catalyst": "FDA approval granted",
-            "sentiment": "positive",
-        },
-    ]
+    # Fetch real events from event_ingestion_service
+    events_list = get_events_for_ticker(symbol.upper())
 
     return render_template(
         "kline_report.html",
         symbol=symbol.upper(),
-        ohlc_json=ohlc_rows,
-        events_json=events_list,
+        ohlc_json=json.dumps(ohlc_rows),
+        events_json=json.dumps(events_list),
     )
 
 
@@ -531,6 +520,7 @@ def analyze():
         "query": query,
         "thread": None,
         "result": None,
+        "result_payload": None,
         "error": None,
         "task_id": str(_uuid.uuid4()),
         "progress": 0,
@@ -585,6 +575,8 @@ def analyze():
                             "status": "active",
                             "percentage": nxt,
                             "message": "",
+                            "task_id": active_analysis.get("task_id"),
+                            "query": active_analysis.get("query"),
                         })
                     _ticker_stop.wait(timeout=3.0)  # tick every ~3s
 
@@ -605,10 +597,15 @@ def analyze():
                 if _cancel_event.is_set() and active_analysis.get("task_id") == _this_task_id:
                     logger.warning("⚠️  Analysis cancelled by user — stopping stream.")
                     _ticker_stop.set()
-                    _emit_event('analysis_cancelled', {'message': 'Analysis was cancelled.'})
+                    _emit_event('analysis_cancelled', {
+                        'message': 'Analysis was cancelled.',
+                        'task_id': active_analysis.get("task_id"),
+                        'query': active_analysis.get("query"),
+                    })
                     active_analysis["running"] = False
                     active_analysis["status"] = "cancelled"
                     active_analysis["error"] = "Cancelled by user"
+                    active_analysis["result_payload"] = None
                     return
                 result = partial_state  # keep last partial as fallback
                 if node_name in _NODE_PROGRESS:
@@ -916,8 +913,10 @@ def analyze():
             extension_payloads = result.get("extension_payloads") or {}
 
             _emit_progress("writing", "complete", 100, "✅ Analysis complete!")
-            _emit_event('analysis_complete', {
+            completion_payload = {
                 'success': True,
+                'task_id': active_analysis.get("task_id"),
+                'query': query,
                 'report_path': pdf_report_path_v2 or report_path,
                 'html_report_path': html_report_path,
                 'full_report_markdown': full_report_markdown,
@@ -951,7 +950,9 @@ def analyze():
                 'evidence_stats': evidence_stats,
                 'extension_payloads': extension_payloads,
                 'contract_version': result.get('dataflow_contract_version'),
-            })
+            }
+            active_analysis["result_payload"] = completion_payload
+            _emit_event('analysis_complete', completion_payload)
             
             logger.info("✅ Analysis complete!")
             
@@ -970,6 +971,7 @@ def analyze():
             active_analysis["running"] = False
             active_analysis["status"] = "error"
             active_analysis["completed_at"] = datetime.now().isoformat()
+            active_analysis["result_payload"] = None
             
             _emit_progress(
                 active_analysis.get("current_step", "harvest"),
@@ -980,6 +982,8 @@ def analyze():
             _emit_event('analysis_error', {
                 'success': False,
                 'error': str(e),
+                'task_id': active_analysis.get("task_id"),
+                'query': active_analysis.get("query"),
                 'step': active_analysis.get("current_step"),
                 'progress': active_analysis.get("progress", 0),
             })
@@ -1017,6 +1021,8 @@ def reset_analysis():
     active_analysis["status"] = "idle"
     active_analysis["thread"] = None
     active_analysis["error"] = None
+    active_analysis["result"] = None
+    active_analysis["result_payload"] = None
     active_analysis["task_id"] = None
     active_analysis["progress"] = 0
     active_analysis["current_step"] = None
@@ -1054,6 +1060,7 @@ def get_status():
         "step_status": active_analysis.get("step_status", {}),
         "started_at": active_analysis.get("started_at"),
         "completed_at": active_analysis.get("completed_at"),
+        "result_payload": active_analysis.get("result_payload"),
     })
 
 
@@ -2426,6 +2433,8 @@ def handle_connect():
         'message': 'Connected to Cassandra backend',
         'analysis_running': active_analysis["running"],
         'analysis_status': active_analysis.get("status"),
+        'task_id': active_analysis.get("task_id"),
+        'query': active_analysis.get("query"),
         'progress': active_analysis.get("progress", 0),
         'current_step': active_analysis.get("current_step"),
         'step_status': active_analysis.get("step_status", {}),
@@ -2438,6 +2447,8 @@ def handle_connect():
             'status': 'active',
             'percentage': active_analysis.get("progress", 0),
             'message': 'Analysis in progress...',
+            'task_id': active_analysis.get("task_id"),
+            'query': active_analysis.get("query"),
         })
 
 
@@ -2498,7 +2509,7 @@ def handle_anomaly_signal(data):
 
 @socketio.on("request_report")
 def handle_request_report(data):
-    """Forward link: user clicks event particle → request detailed report."""
+    """Compatibility bridge: legacy K-line clients forward to the main analysis flow."""
     logger.info(f"📊 Report requested for event: {data}")
     event_type = data.get("event_type", "")
     ticker = data.get("ticker", "")
@@ -2509,12 +2520,31 @@ def handle_request_report(data):
         f"Generate a detailed analysis of the {event_type.replace('_', ' ')} "
         f"event for {ticker} on {date}: {catalyst}"
     )
+    with app.test_request_context(
+        "/api/analyze",
+        method="POST",
+        json={"query": user_query, "pdfs": []},
+    ):
+        response = app.make_response(analyze())
+        response_payload = response.get_json(silent=True) or {}
 
-    socketio.emit("report_queued", {
-        "ticker": ticker,
-        "event_id": data.get("event_id"),
-        "status": "queued",
+    if response.status_code == 202:
+        socketio.emit("report_queued", {
+            "ticker": ticker,
+            "event_id": data.get("event_id"),
+            "status": "queued",
+            "task_id": response_payload.get("task_id"),
+            "query": user_query,
+        })
+        return
+
+    _emit_event("analysis_error", {
+        "success": False,
+        "task_id": response_payload.get("task_id") or active_analysis.get("task_id"),
         "query": user_query,
+        "error": response_payload.get("message") or response_payload.get("error") or "Failed to queue report analysis.",
+        "step": active_analysis.get("current_step"),
+        "progress": active_analysis.get("progress", 0),
     })
 
 
