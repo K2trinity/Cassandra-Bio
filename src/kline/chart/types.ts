@@ -1,0 +1,55 @@
+// src/kline/chart/types.ts
+
+export interface OHLCRow {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface BiotechEvent {
+  id: string;
+  date: string;
+  type: 'fda_decision' | 'clinical_readout' | 'partnership' | 'financing' | 'patent' | 'competitor';
+  priority: 1 | 2 | 3;
+  ticker: string;
+  disease_area: string;
+  catalyst: string;
+  sentiment: 'positive' | 'negative' | 'neutral';
+  price_impact?: number;
+}
+
+export interface HoverData {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  change: number;
+}
+
+export interface RangeSelection {
+  startDate: string;
+  endDate: string;
+  priceChange?: number;
+  popupX?: number;
+  popupY?: number;
+}
+
+export interface AnomalySignal {
+  ticker: string;
+  date: string;
+  type: 'volume_spike' | 'gap' | 'particle_cluster';
+  magnitude: number;
+}
+
+export interface ChartConfig {
+  ohlcData: OHLCRow[];
+  events: BiotechEvent[];
+  onEventClick?: (event: BiotechEvent) => void;
+  onAnomalyDetected?: (signal: AnomalySignal) => void;
+  onHover?: (date: string | null, ohlc?: HoverData) => void;
+  onRangeSelect?: (range: RangeSelection | null) => void;
+}
