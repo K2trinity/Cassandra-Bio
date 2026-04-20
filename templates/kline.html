@@ -1,0 +1,78 @@
+<!-- templates/kline.html -->
+{% extends "base.html" %}
+{% block title %}K-Line · {{ symbol }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/pokie-chart.css">
+<style>
+  #kline-container {
+    width: 100%;
+    height: 600px;
+    background: #0d1117;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .kline-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 0;
+  }
+  .kline-header h2 {
+    margin: 0;
+    color: #e6edf3;
+  }
+  .kline-header .ticker {
+    font-size: 1.4em;
+    color: #00e5ff;
+    font-weight: 700;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kline-header">
+  <span class="ticker">{{ symbol }}</span>
+  <h2>K-Line + Event Overlay</h2>
+</div>
+<div id="kline-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/react@19/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@19/umd/react-dom.production.min.js"></script>
+<script src="/static/vendor/pokie-chart.umd.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<script>
+  const socket = io();
+  const ticker = '{{ symbol }}';
+
+  const cleanup = PokieChart.render(
+    document.getElementById('kline-container'),
+    {
+      ohlcData: {{ ohlc_json | tojson }},
+      events: {{ events_json | tojson }},
+      onEventClick: function(evt) {
+        socket.emit('request_report', {
+          ticker: ticker,
+          event_id: evt.id,
+          event_type: evt.type,
+          date: evt.date,
+          catalyst: evt.catalyst
+        });
+      },
+      onAnomalyDetected: function(signal) {
+        signal.ticker = ticker;
+        socket.emit('anomaly_signal', signal);
+      }
+    }
+  );
+
+  socket.on('report_ready', function(data) {
+    console.log('Report ready:', data.report_path);
+  });
+
+  socket.on('upcoming_catalysts', function(catalysts) {
+    console.log('Upcoming catalysts:', catalysts);
+  });
+</script>
+{% endblock %}
