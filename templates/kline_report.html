@@ -1,0 +1,292 @@
+<!-- templates/kline_report.html -->
+{% extends "base.html" %}
+{% block title %}K-Line + Report · {{ symbol }}{% endblock %}
+
+{% block head %}
+<style>
+  .kline-report-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 20px;
+    height: calc(100vh - 100px);
+  }
+
+  .kline-panel {
+    display: flex;
+    flex-direction: column;
+    background: #0d1117;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #30363d;
+  }
+
+  .kline-header {
+    padding: 16px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .kline-header .ticker {
+    font-size: 1.6em;
+    color: #00e5ff;
+    font-weight: 700;
+  }
+
+  .kline-header h3 {
+    margin: 0;
+    color: #e6edf3;
+    font-size: 1em;
+  }
+
+  #kline-container {
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .report-panel {
+    display: flex;
+    flex-direction: column;
+    background: #0d1117;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #30363d;
+  }
+
+  .report-header {
+    padding: 16px;
+    border-bottom: 1px solid #30363d;
+    background: #161b22;
+  }
+
+  .report-header h3 {
+    margin: 0;
+    color: #e6edf3;
+  }
+
+  .report-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .report-section {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #30363d;
+  }
+
+  .report-section:last-child {
+    border-bottom: none;
+  }
+
+  .report-section h4 {
+    color: #00e5ff;
+    margin: 0 0 8px 0;
+    font-size: 0.95em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .report-text {
+    color: #c9d1d9;
+    font-size: 0.9em;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .event-item {
+    background: #161b22;
+    padding: 12px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    border-left: 3px solid #00e5ff;
+  }
+
+  .event-item .date {
+    color: #8b949e;
+    font-size: 0.85em;
+  }
+
+  .event-item .type {
+    color: #00e5ff;
+    font-weight: 600;
+    font-size: 0.9em;
+  }
+
+  .event-item .catalyst {
+    color: #c9d1d9;
+    margin-top: 4px;
+    font-size: 0.9em;
+  }
+
+  .loading {
+    color: #8b949e;
+    text-align: center;
+    padding: 20px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #30363d;
+    border-top-color: #00e5ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (max-width: 1200px) {
+    .kline-report-container {
+      grid-template-columns: 1fr;
+      height: auto;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="kline-report-container">
+  <!-- K-Line Chart Panel -->
+  <div class="kline-panel">
+    <div class="kline-header">
+      <span class="ticker">{{ symbol }}</span>
+      <h3>K-Line Chart</h3>
+    </div>
+    <div id="kline-container"></div>
+  </div>
+
+  <!-- Cassandra Report Panel -->
+  <div class="report-panel">
+    <div class="report-header">
+      <h3>📊 Cassandra Analysis Report</h3>
+    </div>
+    <div class="report-content" id="report-content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <p>Generating analysis...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- React + D3 + Socket.IO -->
+<script src="https://cdn.jsdelivr.net/npm/react@19/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@19/umd/react-dom.production.min.js"></script>
+<script src="/static/vendor/pokie-chart.umd.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<script>
+  const socket = io();
+  const ticker = '{{ symbol }}';
+  const ohlcData = {{ ohlc_json | tojson }};
+  const eventsData = {{ events_json | tojson }};
+
+  // Render K-line chart
+  const cleanup = PokieChart.render(
+    document.getElementById('kline-container'),
+    {
+      ohlcData: ohlcData,
+      events: eventsData,
+      onEventClick: function(evt) {
+        console.log('Event clicked:', evt);
+        socket.emit('request_report', {
+          ticker: ticker,
+          event_id: evt.id,
+          event_type: evt.type,
+          date: evt.date,
+          catalyst: evt.catalyst
+        });
+      },
+      onAnomalyDetected: function(signal) {
+        console.log('Anomaly detected:', signal);
+        signal.ticker = ticker;
+        socket.emit('anomaly_signal', signal);
+      }
+    }
+  );
+
+  // Display events in report panel
+  function displayEvents() {
+    const reportContent = document.getElementById('report-content');
+    let html = '<div class="report-section"><h4>📅 Biotech Events</h4>';
+
+    if (eventsData.length === 0) {
+      html += '<p class="report-text">No events found for this period.</p>';
+    } else {
+      eventsData.forEach(evt => {
+        html += `
+          <div class="event-item">
+            <div class="date">${evt.date}</div>
+            <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
+            <div class="catalyst">${evt.catalyst}</div>
+          </div>
+        `;
+      });
+    }
+    html += '</div>';
+    reportContent.innerHTML = html;
+  }
+
+  // Listen for report updates from Cassandra
+  socket.on('report_ready', function(data) {
+    console.log('Report ready:', data);
+    const reportContent = document.getElementById('report-content');
+    let html = '<div class="report-section"><h4>📋 Analysis Report</h4>';
+    html += '<div class="report-text">' + (data.report || 'Report generated') + '</div></div>';
+    html += '<div class="report-section"><h4>📅 Events</h4>';
+
+    eventsData.forEach(evt => {
+      html += `
+        <div class="event-item">
+          <div class="date">${evt.date}</div>
+          <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
+          <div class="catalyst">${evt.catalyst}</div>
+        </div>
+      `;
+    });
+    html += '</div>';
+    reportContent.innerHTML = html;
+  });
+
+  socket.on('anomaly_acknowledged', function(data) {
+    console.log('Anomaly acknowledged:', data);
+    const reportContent = document.getElementById('report-content');
+    let html = '<div class="report-section"><h4>⚠️ Anomaly Signal</h4>';
+    html += '<div class="report-text">Type: ' + data.query + '</div></div>';
+    html += '<div class="report-section"><h4>📅 Events</h4>';
+
+    eventsData.forEach(evt => {
+      html += `
+        <div class="event-item">
+          <div class="date">${evt.date}</div>
+          <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
+          <div class="catalyst">${evt.catalyst}</div>
+        </div>
+      `;
+    });
+    html += '</div>';
+    reportContent.innerHTML = html;
+  });
+
+  // Initial display
+  displayEvents();
+
+  // Auto-trigger analysis on page load
+  setTimeout(() => {
+    socket.emit('request_report', {
+      ticker: ticker,
+      event_type: 'overview',
+      date: new Date().toISOString().split('T')[0],
+      catalyst: 'Full ticker analysis'
+    });
+  }, 1000);
+</script>
+{% endblock %}

@@ -349,31 +349,55 @@ def graph_view():
 
 @app.route("/kline/<symbol>")
 def kline_view(symbol: str):
-    """Render K-line chart with event overlay for a biotech ticker."""
-    import yfinance as yf
+    """Render K-line chart with Cassandra report integration."""
     import json
+    from datetime import datetime, timedelta
 
-    # Fetch OHLC data (last 2 years)
-    ticker_data = yf.download(symbol, period="2y", interval="1d", progress=False)
-    if ticker_data.empty:
-        return f"No data found for {symbol}", 404
-
+    # Generate mock OHLC data (last 60 days)
     ohlc_rows = []
-    for idx, row in ticker_data.iterrows():
-        ohlc_rows.append({
-            "date": idx.strftime("%Y-%m-%d"),
-            "open": round(float(row["Open"]), 2),
-            "high": round(float(row["High"]), 2),
-            "low": round(float(row["Low"]), 2),
-            "close": round(float(row["Close"]), 2),
-            "volume": int(row["Volume"]),
-        })
+    base_price = 100.0
+    current_date = datetime.now() - timedelta(days=60)
 
-    # Events placeholder — will be populated from events_db later
-    events_list = []
+    for i in range(60):
+        price_change = (i % 5 - 2) * 2
+        open_p = base_price + price_change
+        close_p = open_p + (i % 3 - 1) * 1.5
+        high_p = max(open_p, close_p) + abs(i % 2) * 2
+        low_p = min(open_p, close_p) - abs(i % 2) * 1
+
+        ohlc_rows.append({
+            "date": current_date.strftime("%Y-%m-%d"),
+            "open": round(open_p, 2),
+            "high": round(high_p, 2),
+            "low": round(low_p, 2),
+            "close": round(close_p, 2),
+            "volume": 1000000 + (i * 50000) % 500000,
+        })
+        current_date += timedelta(days=1)
+        base_price = close_p
+
+    # Sample events
+    events_list = [
+        {
+            "id": "evt_001",
+            "date": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"),
+            "type": "clinical_readout",
+            "priority": 1,
+            "catalyst": "Phase 3 trial positive results",
+            "sentiment": "positive",
+        },
+        {
+            "id": "evt_002",
+            "date": (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d"),
+            "type": "fda_decision",
+            "priority": 1,
+            "catalyst": "FDA approval granted",
+            "sentiment": "positive",
+        },
+    ]
 
     return render_template(
-        "kline.html",
+        "kline_report.html",
         symbol=symbol.upper(),
         ohlc_json=ohlc_rows,
         events_json=events_list,
