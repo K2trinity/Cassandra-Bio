@@ -14,7 +14,9 @@ https://clinicaltrials.gov/data-api/api
 
 import requests
 import time
+import uuid
 from typing import List, Dict, Optional
+from datetime import datetime
 from loguru import logger
 
 
@@ -724,22 +726,117 @@ if __name__ == "__main__":
     if trials:
         nct_id = trials[0]['nct_id']
         results = fetch_trial_results(nct_id)
-        
+
         if results and results['has_results']:
             print(f"\n{nct_id} Results Summary:")
             print(f"  Outcome Measures: {len(results.get('outcome_measures', []))}")
-            
+
             # Extract adverse events
             ae_summary = extract_adverse_events_summary(results)
             if ae_summary:
                 print(f"  Adverse Events: {len(ae_summary)} events recorded")
-                
+
                 # Show serious events
                 serious = [ae for ae in ae_summary if ae['category'] == 'Serious']
                 if serious:
                     print(f"\n  🔥 Serious Adverse Events:")
                     for ae in serious[:5]:  # Show top 5
                         print(f"    - {ae['term']}: {ae['affected']}/{ae['at_risk']} affected")
-            
+
             print(f"\n  Full data: {results['results_url']}")
+
+
+def normalize_biotech_events(trials: List[Dict[str, str]], source: str = "clinicaltrials") -> List[Dict[str, any]]:
+    """
+    Normalize ClinicalTrials.gov payloads into consistent biotech_events schema.
+
+    Args:
+        trials: List of trial dictionaries from search_trials() or similar
+        source: Data source identifier (default: "clinicaltrials")
+
+    Returns:
+        List of normalized event dictionaries with schema:
+        {
+            "id": "...",
+            "date": "YYYY-MM-DD",
+            "type": "clinical_readout",
+            "priority": 1-5,
+            "ticker": "COMPANY",
+            "disease_area": "...",
+            "catalyst": "...",
+            "sentiment": "positive" | "negative" | "neutral",
+            "price_impact": None,
+            "source": "clinicaltrials",
+        }
+    """
+    events = []
+
+    for trial in trials:
+        try:
+            # Extract usable date (prefer results_first_posted, fallback to completion_date)
+            event_date = trial.get("results_first_posted") or trial.get("completion_date")
+
+            if not event_date or event_date == "Unknown" or event_date == "N/A":
+                logger.debug(f"Skipping trial {trial.get('nct_id')} with no usable date")
+                continue
+
+            # Parse date to YYYY-MM-DD format
+            try:
+                if isinstance(event_date, str) and len(event_date) == 10:
+                    # Already in YYYY-MM-DD format
+                    date_str = event_date
+                else:
+                    # Try parsing various formats
+                    date_obj = datetime.strptime(str(event_date), "%Y-%m-%d")
+                    date_str = date_obj.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid date format for {trial.get('nct_id')}: {event_date}")
+                continue
+
+            # Determine sentiment based on status
+            status = str(trial.get("status", "")).upper()
+            if status in {"COMPLETED", "ACTIVE_NOT_RECRUITING"}:
+                sentiment = "positive"
+                priority = 4
+            elif status in {"TERMINATED", "SUSPENDED", "WITHDRAWN"}:
+                sentiment = "negative"
+                priority = 5
+            else:
+                sentiment = "neutral"
+                priority = 2
+
+            # Extract ticker from sponsor
+            sponsor = trial.get("sponsor", "UNKNOWN")
+            ticker = sponsor.split()[0] if sponsor else "UNKNOWN"
+
+            # Extract disease area from conditions
+            conditions = trial.get("conditions", "")
+            disease_area = conditions.split(",")[0] if conditions else ""
+
+            # Build catalyst description
+            trial_title = trial.get("title", "Clinical Trial")
+            phase = trial.get("phase", "")
+            phase_str = f" ({phase})" if phase and phase != "Not specified" else ""
+            catalyst = f"Clinical Trial: {trial_title}{phase_str}"
+
+            event = {
+                "id": str(uuid.uuid4()),
+                "date": date_str,
+                "type": "clinical_readout",
+                "priority": priority,
+                "ticker": ticker,
+                "disease_area": disease_area,
+                "catalyst": catalyst,
+                "sentiment": sentiment,
+                "price_impact": None,
+                "source": source,
+            }
+
+            events.append(event)
+
+        except Exception as e:
+            logger.error(f"Error normalizing clinical trial {trial.get('nct_id')}: {e}")
+            continue
+
+    return events
 

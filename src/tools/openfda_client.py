@@ -10,7 +10,9 @@ Endpoints covered:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+import uuid
+from datetime import datetime
 
 import requests
 from loguru import logger
@@ -68,3 +70,98 @@ class OpenFDAClient:
                 "drugsfda": len(approval.get("results", []) or []),
             },
         }
+
+
+def normalize_biotech_events(payload: Dict[str, Any], source: str = "openfda") -> List[Dict[str, Any]]:
+    """
+    Normalize openFDA payloads into consistent biotech_events schema.
+
+    Args:
+        payload: Raw openFDA API response
+        source: Data source identifier (default: "openfda")
+
+    Returns:
+        List of normalized event dictionaries with schema:
+        {
+            "id": "...",
+            "date": "YYYY-MM-DD",
+            "type": "fda_decision" | "regulatory_change",
+            "priority": 1-5,
+            "ticker": "MRNA",
+            "disease_area": "",
+            "catalyst": "...",
+            "sentiment": "positive" | "negative" | "neutral",
+            "price_impact": None,
+            "source": "openfda",
+        }
+    """
+    events = []
+    results = payload.get("results", [])
+
+    for result in results:
+        try:
+            # Extract key fields
+            action_type = result.get("action_type", "").upper()
+            approval_date = result.get("approval_date")
+            recall_date = result.get("recall_initiation_date")
+            event_date = approval_date or recall_date
+
+            if not event_date:
+                logger.warning("Skipping openFDA record with no date")
+                continue
+
+            # Parse date from YYYYMMDD format to YYYY-MM-DD
+            try:
+                date_obj = datetime.strptime(str(event_date), "%Y%m%d")
+                date_str = date_obj.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid date format: {event_date}")
+                continue
+
+            # Determine event type and sentiment
+            if action_type == "APPROVAL":
+                event_type = "fda_decision"
+                sentiment = "positive"
+                priority = 5
+            elif "RECALL" in action_type or result.get("recall_number"):
+                event_type = "regulatory_change"
+                sentiment = "negative"
+                priority = 4
+            else:
+                logger.debug(f"Skipping unknown action type: {action_type}")
+                continue
+
+            # Extract ticker/brand name
+            openfda = result.get("openfda", {})
+            brand_names = openfda.get("brand_name", [])
+            ticker = brand_names[0] if brand_names else result.get("sponsor_name", "UNKNOWN")
+
+            # Extract catalyst description
+            if action_type == "APPROVAL":
+                products = result.get("products", [])
+                product_desc = products[0].get("brand_name", "") if products else ""
+                catalyst = f"FDA Approval: {product_desc}"
+            else:
+                reason = result.get("reason_for_recall", "Regulatory action")
+                catalyst = f"Regulatory Change: {reason}"
+
+            event = {
+                "id": str(uuid.uuid4()),
+                "date": date_str,
+                "type": event_type,
+                "priority": priority,
+                "ticker": ticker,
+                "disease_area": "",
+                "catalyst": catalyst,
+                "sentiment": sentiment,
+                "price_impact": None,
+                "source": source,
+            }
+
+            events.append(event)
+
+        except Exception as e:
+            logger.error(f"Error normalizing openFDA record: {e}")
+            continue
+
+    return events
