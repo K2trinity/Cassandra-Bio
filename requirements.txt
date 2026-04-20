@@ -59,3 +59,5 @@ scispacy>=0.5.5         # Biomedical NER, entity linking, abbreviation detection
 pytest>=7.4.0
 black>=23.0.0
 flake8>=6.0.0
+yfinance>=0.2.40
+pyarrow>=15.0.0

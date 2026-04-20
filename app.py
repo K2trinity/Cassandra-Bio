@@ -347,6 +347,39 @@ def graph_view():
     return render_template('graph_view.html')
 
 
+@app.route("/kline/<symbol>")
+def kline_view(symbol: str):
+    """Render K-line chart with event overlay for a biotech ticker."""
+    import yfinance as yf
+    import json
+
+    # Fetch OHLC data (last 2 years)
+    ticker_data = yf.download(symbol, period="2y", interval="1d", progress=False)
+    if ticker_data.empty:
+        return f"No data found for {symbol}", 404
+
+    ohlc_rows = []
+    for idx, row in ticker_data.iterrows():
+        ohlc_rows.append({
+            "date": idx.strftime("%Y-%m-%d"),
+            "open": round(float(row["Open"]), 2),
+            "high": round(float(row["High"]), 2),
+            "low": round(float(row["Low"]), 2),
+            "close": round(float(row["Close"]), 2),
+            "volume": int(row["Volume"]),
+        })
+
+    # Events placeholder — will be populated from events_db later
+    events_list = []
+
+    return render_template(
+        "kline.html",
+        symbol=symbol.upper(),
+        ohlc_json=ohlc_rows,
+        events_json=events_list,
+    )
+
+
 @app.route('/graph-debug')
 def graph_debug():
     """Graph Debugging and Testing Page"""
@@ -2414,6 +2447,51 @@ def handle_replay(data):
     for event in missed:
         # payload 已含 id 字段（_emit_event 注入），直接转发即可
         emit(event["type"], event["payload"])
+
+
+@socketio.on("anomaly_signal")
+def handle_anomaly_signal(data):
+    """Forward link: K-line anomaly → trigger Cassandra report."""
+    logger.info(f"📊 Anomaly signal received: {data}")
+    ticker = data.get("ticker", "")
+    date = data.get("date", "")
+    signal_type = data.get("type", "")
+    magnitude = data.get("magnitude", 0)
+
+    user_query = (
+        f"Analyze the {signal_type.replace('_', ' ')} anomaly for {ticker} "
+        f"on {date} (magnitude: {magnitude:.1f}). "
+        f"Identify the catalyst and assess impact on the investment thesis."
+    )
+
+    socketio.emit("anomaly_acknowledged", {
+        "ticker": ticker,
+        "date": date,
+        "status": "report_queued",
+        "query": user_query,
+    })
+
+
+@socketio.on("request_report")
+def handle_request_report(data):
+    """Forward link: user clicks event particle → request detailed report."""
+    logger.info(f"📊 Report requested for event: {data}")
+    event_type = data.get("event_type", "")
+    ticker = data.get("ticker", "")
+    catalyst = data.get("catalyst", "")
+    date = data.get("date", "")
+
+    user_query = (
+        f"Generate a detailed analysis of the {event_type.replace('_', ' ')} "
+        f"event for {ticker} on {date}: {catalyst}"
+    )
+
+    socketio.emit("report_queued", {
+        "ticker": ticker,
+        "event_id": data.get("event_id"),
+        "status": "queued",
+        "query": user_query,
+    })
 
 
 # ============================================================================
