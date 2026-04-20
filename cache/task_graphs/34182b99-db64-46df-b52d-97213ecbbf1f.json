@@ -1,0 +1,186 @@
+{
+  "task_id": "34182b99-db64-46df-b52d-97213ecbbf1f",
+  "query": "Assess nivolumab hepatotoxicity in melanoma patients",
+  "drug_name": "Assess nivolumab hepatotoxicity in melanoma patients",
+  "created_at": "2026-04-17T13:18:10.180774",
+  "nodes": [
+    {
+      "id": "analysis_0",
+      "label": "Analysis",
+      "name": "34182b99-db64-46df-b52d-97213e",
+      "query": "Assess nivolumab hepatotoxicity in melanoma patients"
+    },
+    {
+      "id": "drug_1",
+      "label": "Drug",
+      "name": "Assess nivolumab hepatotoxicity in melanoma patients"
+    },
+    {
+      "id": "risk_2",
+      "label": "Risk",
+      "name": "A Phase 1 Study of Pegilodecakin (LY3500518) in Participants With Advanced Solid Tumors"
+    },
+    {
+      "id": "source_3",
+      "label": "Source",
+      "name": "NCT02009449"
+    },
+    {
+      "id": "risk_4",
+      "label": "Risk",
+      "name": "SUPRAME-ACTengine® IMA203 vs. Investigator's Choice of Treatment in Previously Treated, Unresectable or Metastatic Cutan"
+    },
+    {
+      "id": "source_5",
+      "label": "Source",
+      "name": "NCT06743126"
+    },
+    {
+      "id": "risk_6",
+      "label": "Risk",
+      "name": "Fecal Microbiota Transplant (FMT) in Melanoma Patients"
+    },
+    {
+      "id": "source_7",
+      "label": "Source",
+      "name": "NCT03341143"
+    },
+    {
+      "id": "risk_8",
+      "label": "Risk",
+      "name": "Talimogene Laherparepvec and Nivolumab in Treating Patients With Refractory Lymphomas or Advanced or Refractory Non-mela"
+    },
+    {
+      "id": "source_9",
+      "label": "Source",
+      "name": "NCT02978625"
+    },
+    {
+      "id": "endpoint_10",
+      "label": "Endpoint",
+      "name": "Phase: Published"
+    },
+    {
+      "id": "endpoint_11",
+      "label": "Endpoint",
+      "name": "Phase: PHASE1"
+    },
+    {
+      "id": "endpoint_12",
+      "label": "Endpoint",
+      "name": "Phase: PHASE3"
+    },
+    {
+      "id": "endpoint_13",
+      "label": "Endpoint",
+      "name": "Phase: PHASE2"
+    },
+    {
+      "id": "keyword_14",
+      "label": "Keyword",
+      "name": "nivolumab"
+    },
+    {
+      "id": "keyword_15",
+      "label": "Keyword",
+      "name": "hepatotoxicity"
+    },
+    {
+      "id": "keyword_16",
+      "label": "Keyword",
+      "name": "melanoma"
+    },
+    {
+      "id": "keyword_17",
+      "label": "Keyword",
+      "name": "patients"
+    }
+  ],
+  "links": [
+    {
+      "source": "analysis_0",
+      "target": "drug_1",
+      "type": "ANALYZED"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_5",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_9",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_10",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_11",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_12",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_13",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_14",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_15",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_16",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_17",
+      "type": "ASSOCIATED_WITH"
+    }
+  ]
+}

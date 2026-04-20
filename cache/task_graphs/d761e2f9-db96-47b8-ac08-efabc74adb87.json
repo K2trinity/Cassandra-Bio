@@ -1,0 +1,76 @@
+{
+  "task_id": "d761e2f9-db96-47b8-ac08-efabc74adb87",
+  "query": "conduct a comprehensive survey on Alzheimer disease",
+  "drug_name": "conduct a comprehensive survey on Alzheimer disease",
+  "created_at": "2026-04-17T14:33:58.769195",
+  "nodes": [
+    {
+      "id": "analysis_0",
+      "label": "Analysis",
+      "name": "d761e2f9-db96-47b8-ac08-efabc7",
+      "query": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "drug_1",
+      "label": "Drug",
+      "name": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "endpoint_2",
+      "label": "Endpoint",
+      "name": "Phase: Published"
+    },
+    {
+      "id": "keyword_3",
+      "label": "Keyword",
+      "name": "comprehensive"
+    },
+    {
+      "id": "keyword_4",
+      "label": "Keyword",
+      "name": "survey"
+    },
+    {
+      "id": "keyword_5",
+      "label": "Keyword",
+      "name": "Alzheimer"
+    },
+    {
+      "id": "keyword_6",
+      "label": "Keyword",
+      "name": "disease"
+    }
+  ],
+  "links": [
+    {
+      "source": "analysis_0",
+      "target": "drug_1",
+      "type": "ANALYZED"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_2",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_3",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_4",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_5",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_6",
+      "type": "ASSOCIATED_WITH"
+    }
+  ]
+}

@@ -1,0 +1,956 @@
+{
+  "task_id": "c6f7e3e9-cb8e-4d0f-aecb-582e25e6846e",
+  "query": "conduct a comprehensive survey on Alzheimer disease",
+  "drug_name": "conduct a comprehensive survey on Alzheimer disease",
+  "created_at": "2026-04-14T15:25:13.119984",
+  "nodes": [
+    {
+      "id": "analysis_0",
+      "label": "Analysis",
+      "name": "c6f7e3e9-cb8e-4d0f-aecb-582e25",
+      "query": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "drug_1",
+      "label": "Drug",
+      "name": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "risk_2",
+      "label": "Risk",
+      "name": "METHODOLOGY"
+    },
+    {
+      "id": "source_3",
+      "label": "Source",
+      "name": "PMC6484269_6d59ad35.pdf"
+    },
+    {
+      "id": "risk_4",
+      "label": "Risk",
+      "name": "CONCLUSION"
+    },
+    {
+      "id": "risk_5",
+      "label": "Risk",
+      "name": "LIMITATION"
+    },
+    {
+      "id": "risk_6",
+      "label": "Risk",
+      "name": "STATISTICAL_RESULT"
+    },
+    {
+      "id": "source_7",
+      "label": "Source",
+      "name": "PMC4661820_7ccd3541.pdf"
+    },
+    {
+      "id": "risk_8",
+      "label": "Risk",
+      "name": "SAFETY_SIGNAL"
+    },
+    {
+      "id": "risk_9",
+      "label": "Risk",
+      "name": "COMPARISON"
+    },
+    {
+      "id": "risk_10",
+      "label": "Risk",
+      "name": "SECONDARY_OUTCOME"
+    },
+    {
+      "id": "source_11",
+      "label": "Source",
+      "name": "PMC8608577_2fc84ff2.pdf"
+    },
+    {
+      "id": "source_12",
+      "label": "Source",
+      "name": "PMC8148506_34f44aa3.pdf"
+    },
+    {
+      "id": "risk_13",
+      "label": "Risk",
+      "name": "PRIMARY_OUTCOME"
+    },
+    {
+      "id": "source_14",
+      "label": "Source",
+      "name": "PMC6398562_6d5fad14.pdf"
+    },
+    {
+      "id": "source_15",
+      "label": "Source",
+      "name": "PMC11397357_90251cf2.pdf"
+    },
+    {
+      "id": "source_16",
+      "label": "Source",
+      "name": "PMC7640652_994d206c.pdf"
+    },
+    {
+      "id": "risk_17",
+      "label": "Risk",
+      "name": "MECHANISM"
+    },
+    {
+      "id": "endpoint_18",
+      "label": "Endpoint",
+      "name": "Phase: Published"
+    },
+    {
+      "id": "keyword_19",
+      "label": "Keyword",
+      "name": "comprehensive"
+    },
+    {
+      "id": "keyword_20",
+      "label": "Keyword",
+      "name": "survey"
+    },
+    {
+      "id": "keyword_21",
+      "label": "Keyword",
+      "name": "Alzheimer"
+    },
+    {
+      "id": "keyword_22",
+      "label": "Keyword",
+      "name": "disease"
+    }
+  ],
+  "links": [
+    {
+      "source": "analysis_0",
+      "target": "drug_1",
+      "type": "ANALYZED"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_9",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_7",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_9",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_11",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_12",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_13",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_14",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_5",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_10",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_9",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_15",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_17",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_4",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_6",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_8",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_16",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_18",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_19",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_20",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_21",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_22",
+      "type": "ASSOCIATED_WITH"
+    }
+  ]
+}

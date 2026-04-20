@@ -1,0 +1,96 @@
+{
+  "task_id": "c8447584-b4d1-4ee3-b207-2a06fd6d1f22",
+  "query": "conduct a comprehensive survey on Alzheimer disease",
+  "drug_name": "conduct a comprehensive survey on Alzheimer disease",
+  "created_at": "2026-04-15T08:45:47.373467",
+  "nodes": [
+    {
+      "id": "analysis_0",
+      "label": "Analysis",
+      "name": "c8447584-b4d1-4ee3-b207-2a06fd",
+      "query": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "drug_1",
+      "label": "Drug",
+      "name": "conduct a comprehensive survey on Alzheimer disease"
+    },
+    {
+      "id": "risk_2",
+      "label": "Risk",
+      "name": "U.S. Study to Protect Brain Health Through Lifestyle Intervention to Reduce Risk"
+    },
+    {
+      "id": "source_3",
+      "label": "Source",
+      "name": "NCT03688126"
+    },
+    {
+      "id": "endpoint_4",
+      "label": "Endpoint",
+      "name": "Phase: Published"
+    },
+    {
+      "id": "keyword_5",
+      "label": "Keyword",
+      "name": "comprehensive"
+    },
+    {
+      "id": "keyword_6",
+      "label": "Keyword",
+      "name": "survey"
+    },
+    {
+      "id": "keyword_7",
+      "label": "Keyword",
+      "name": "Alzheimer"
+    },
+    {
+      "id": "keyword_8",
+      "label": "Keyword",
+      "name": "disease"
+    }
+  ],
+  "links": [
+    {
+      "source": "analysis_0",
+      "target": "drug_1",
+      "type": "ANALYZED"
+    },
+    {
+      "source": "drug_1",
+      "target": "risk_2",
+      "type": "HAS_RISK"
+    },
+    {
+      "source": "source_3",
+      "target": "drug_1",
+      "type": "REPORTS_FAILURE"
+    },
+    {
+      "source": "drug_1",
+      "target": "endpoint_4",
+      "type": "HAS_ENDPOINT"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_5",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_6",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_7",
+      "type": "ASSOCIATED_WITH"
+    },
+    {
+      "source": "drug_1",
+      "target": "keyword_8",
+      "type": "ASSOCIATED_WITH"
+    }
+  ]
+}

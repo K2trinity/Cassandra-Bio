@@ -15,7 +15,7 @@ interface Props {
   events?: BiotechEvent[] | null;
   onEventClick?: (event: BiotechEvent) => void;
   onAnomalyDetected?: (signal: AnomalySignal) => void;
-  onHover: (date: string | null, ohlc?: HoverData) => void;
+  onHover?: (date: string | null, ohlc?: HoverData) => void;
   onRangeSelect?: (range: RangeSelection | null) => void;
 }
 
@@ -421,7 +421,7 @@ export default function CandlestickChart({
           .attr('x', 37.5)
           .text(d.dateStr);
 
-        onHover(d.dateStr, {
+        onHover?.(d.dateStr, {
           date: d.dateStr,
           open: d.open,
           high: d.high,
@@ -467,7 +467,7 @@ export default function CandlestickChart({
         crossH.style('display', 'none');
         priceLabel.style('display', 'none');
         dateLabel.style('display', 'none');
-        onHover(null);
+        onHover?.(null);
 
         if (hoveredEventRef.current) {
           hoveredEventRef.current = null;
