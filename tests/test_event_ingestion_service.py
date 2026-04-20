@@ -249,3 +249,195 @@ def test_normalized_event_schema():
 
     # Verify sentiment is one of allowed values
     assert event["sentiment"] in {"positive", "negative", "neutral"}
+
+
+# ========== Event Ingestion Service Tests ==========
+
+def test_fetch_log_table_init():
+    """Test that fetch_log table is created successfully."""
+    from src.backtest.events_db import init_fetch_log_table, _get_conn
+
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='fetch_log'"
+    )
+    assert cur.fetchone() is not None, "fetch_log table should exist"
+    conn.close()
+
+
+def test_record_fetch_attempt():
+    """Test recording a fetch attempt with timestamp."""
+    from src.backtest.events_db import (
+        init_fetch_log_table,
+        record_fetch_attempt,
+        get_last_fetch_at,
+        _get_conn,
+    )
+
+    init_fetch_log_table()
+
+    # Clear any existing records
+    conn = _get_conn()
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'TEST' AND source = 'openfda'")
+    conn.commit()
+    conn.close()
+
+    # Record a fetch
+    record_fetch_attempt("TEST", "openfda", 5)
+
+    # Verify timestamp was recorded
+    last_fetch = get_last_fetch_at("TEST", "openfda")
+    assert last_fetch is not None, "Should have recorded fetch timestamp"
+    assert len(last_fetch) > 0, "Timestamp should not be empty"
+
+
+def test_empty_result_caching():
+    """Test that empty-result fetches still record a timestamp."""
+    from src.backtest.events_db import (
+        init_fetch_log_table,
+        record_fetch_attempt,
+        get_last_fetch_at,
+        _get_conn,
+    )
+
+    init_fetch_log_table()
+
+    # Clear any existing records
+    conn = _get_conn()
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'EMPTY' AND source = 'clinicaltrials'")
+    conn.commit()
+    conn.close()
+
+    # Record a fetch with zero items
+    record_fetch_attempt("EMPTY", "clinicaltrials", 0)
+
+    # Verify timestamp was recorded even with zero items
+    last_fetch = get_last_fetch_at("EMPTY", "clinicaltrials")
+    assert last_fetch is not None, "Should record timestamp even for empty results"
+
+
+def test_cache_freshness_logic():
+    """Test that cache freshness is correctly evaluated."""
+    from src.services.event_ingestion_service import _is_cache_stale
+    from datetime import datetime, timedelta
+
+    # None should be stale
+    assert _is_cache_stale(None, 6) is True
+
+    # Recent timestamp should not be stale
+    recent = (datetime.now() - timedelta(hours=2)).isoformat()
+    assert _is_cache_stale(recent, 6) is False
+
+    # Old timestamp should be stale
+    old = (datetime.now() - timedelta(hours=8)).isoformat()
+    assert _is_cache_stale(old, 6) is True
+
+    # Edge case: just past boundary should be stale
+    past_boundary = (datetime.now() - timedelta(hours=6, minutes=1)).isoformat()
+    assert _is_cache_stale(past_boundary, 6) is True
+
+
+def test_ingestion_service_first_request_fetches():
+    """Test that first request fetches from sources and writes DB."""
+    from src.services.event_ingestion_service import get_events_for_ticker
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from unittest.mock import patch, MagicMock
+
+    init_db()
+    init_fetch_log_table()
+
+    # Clear test data
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'TESTFIRST'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'TESTFIRST'")
+    conn.commit()
+    conn.close()
+
+    # Mock the API clients
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
+         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+
+        # Mock openFDA response
+        mock_fda_instance = MagicMock()
+        mock_fda.return_value = mock_fda_instance
+        mock_fda_instance.collect.return_value = {
+            "label": {"results": []},
+            "event": {"results": []},
+            "drugsfda": {
+                "results": [
+                    {
+                        "application_number": "BLA001",
+                        "sponsor_name": "TestCorp",
+                        "openfda": {"brand_name": ["TestDrug"]},
+                        "products": [{"brand_name": "TestDrug"}],
+                        "action_type": "APPROVAL",
+                        "approval_date": "20230101",
+                    }
+                ]
+            },
+        }
+
+        # Mock ClinicalTrials response
+        mock_trials.return_value = []
+
+        # First request should fetch
+        events = get_events_for_ticker("TESTFIRST", max_age_hours=6)
+
+        # Verify fetch was called
+        mock_fda_instance.collect.assert_called_once()
+        mock_trials.assert_called_once()
+
+        # Verify fetch log was recorded
+        from src.backtest.events_db import get_last_fetch_at
+        assert get_last_fetch_at("TESTFIRST", "openfda") is not None
+        assert get_last_fetch_at("TESTFIRST", "clinicaltrials") is not None
+
+
+def test_ingestion_service_cache_hit():
+    """Test that second request within 6h does not hit external sources."""
+    from src.services.event_ingestion_service import get_events_for_ticker
+    from src.backtest.events_db import (
+        init_db,
+        init_fetch_log_table,
+        _get_conn,
+    )
+    from unittest.mock import patch, MagicMock
+    from datetime import datetime, timedelta
+
+    init_db()
+    init_fetch_log_table()
+
+    # Clear and setup test data
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'TESTCACHE'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'TESTCACHE'")
+    conn.commit()
+
+    # Pre-populate fetch log with recent timestamps (2 hours ago)
+    recent_time = (datetime.now() - timedelta(hours=2)).isoformat()
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        ("TESTCACHE", "openfda", recent_time, 1)
+    )
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        ("TESTCACHE", "clinicaltrials", recent_time, 0)
+    )
+    conn.commit()
+    conn.close()
+
+    # Mock the API clients
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
+         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+
+        mock_fda_instance = MagicMock()
+        mock_fda.return_value = mock_fda_instance
+
+        # Second request should NOT call the APIs (cache hit)
+        events = get_events_for_ticker("TESTCACHE", max_age_hours=6)
+
+        # Verify APIs were NOT called
+        mock_fda_instance.collect.assert_not_called()
+        mock_trials.assert_not_called()

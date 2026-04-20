@@ -101,3 +101,42 @@ def get_events_for_chart(ticker: str) -> list[dict]:
     """Return events as list of dicts matching BiotechEvent interface."""
     df = get_events(ticker)
     return df.to_dict(orient="records")
+
+
+def init_fetch_log_table() -> None:
+    """Create fetch_log table if not exists."""
+    conn = _get_conn()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fetch_log (
+            ticker TEXT NOT NULL,
+            source TEXT NOT NULL,
+            last_fetch_at TEXT NOT NULL,
+            item_count INTEGER DEFAULT 0,
+            PRIMARY KEY (ticker, source)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def record_fetch_attempt(ticker: str, source: str, item_count: int) -> None:
+    """Record a fetch attempt with timestamp and item count."""
+    conn = _get_conn()
+    conn.execute("""
+        INSERT OR REPLACE INTO fetch_log (ticker, source, last_fetch_at, item_count)
+        VALUES (?, ?, datetime('now'), ?)
+    """, (ticker, source, item_count))
+    conn.commit()
+    conn.close()
+
+
+def get_last_fetch_at(ticker: str, source: str) -> Optional[str]:
+    """Get the last fetch timestamp for a ticker/source pair, or None if never fetched."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "SELECT last_fetch_at FROM fetch_log WHERE ticker = ? AND source = ?",
+        (ticker, source)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
