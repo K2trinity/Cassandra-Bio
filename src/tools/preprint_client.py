@@ -1,5 +1,5 @@
 """
-Preprint Client - Bio-Short-Seller Preprint Harvester
+Preprint Client - Cassandra Preprint Harvester
 
 This module provides tools to search BioRxiv and MedRxiv for preprints (unpublished research).
 90% of published articles have preprint versions that are freely accessible, making this a
@@ -89,7 +89,7 @@ def search_preprints(
                 response = requests.get(
                     url,
                     timeout=DEFAULT_TIMEOUT,
-                    headers={"User-Agent": "Bio-Short-Seller/1.0"}
+                    headers={"User-Agent": "Cassandra/1.0"}
                 )
                 
                 response.raise_for_status()
@@ -165,7 +165,7 @@ def find_preprint_by_doi(doi: str, retries: int = MAX_RETRIES) -> Optional[Dict[
                 response = requests.get(
                     url,
                     timeout=DEFAULT_TIMEOUT,
-                    headers={"User-Agent": "Bio-Short-Seller/1.0"}
+                    headers={"User-Agent": "Cassandra/1.0"}
                 )
                 
                 if response.status_code == 200:

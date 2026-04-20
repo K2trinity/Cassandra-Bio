@@ -533,8 +533,8 @@ class SegmentedJSONGenerator:
             'max_tokens': 2500
         },
         'evidence': {
-            'fields': ['dark_data_synthesis', 'forensic_findings'],
-            'description': 'Dark data and forensic findings',
+            'fields': ['literature_synthesis', 'figure_findings'],
+            'description': 'Literature synthesis and figure-derived findings',
             'max_tokens': 2000
         },
         'risk': {
@@ -564,7 +564,7 @@ class SegmentedJSONGenerator:
         """
         segment_info = SegmentedJSONGenerator.REPORT_SEGMENTS[segment_key]
         
-        prompt = f"""You are generating the '{segment_key}' section of a biomedical due diligence report.
+        prompt = f"""You are generating the '{segment_key}' section of a biomedical research analysis report.
 
 **SEGMENT FOCUS:** {segment_info['description']}
 

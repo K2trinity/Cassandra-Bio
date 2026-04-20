@@ -1,296 +1,143 @@
-# Bio-Short-Seller
+# Cassandra
 
-**Biomedical Due Diligence Platform for Investment Research**
+Biomedical evidence collection and report generation platform built on Flask + LangGraph.
 
-A forensic analysis system that mines scientific literature, clinical trials, and research papers to uncover buried negative results, failed trials, and potential fraud signals in biomedical research.
+## Overview
 
----
+Cassandra focuses on three things:
 
-## 🔬 What is Bio-Short-Seller?
+- structured biomedical source collection (PubMed / ClinicalTrials / Europe PMC / optional FDA)
+- deterministic workflow orchestration with explicit state transitions
+- final report generation with traceable references and export support
 
-Bio-Short-Seller is an AI-powered due diligence platform that helps investors, analysts, and researchers identify hidden risks in biomedical research projects. It combines:
+Current online workflow is:
 
-- **PubMed & ClinicalTrials.gov Harvesting** - Automated discovery of failed trials and adverse events
-- **Dark Data Mining** - Extraction of negative results buried in supplementary materials
-- **Forensic Image Analysis** - Detection of manipulated figures using AI vision
-- **Knowledge Graph** - Persistent tracking of risk signals across drugs and targets
-- **Investment-Grade Reports** - Structured markdown reports with risk scores
+```text
+START -> harvester -> extension_handoff -> writer -> END
+```
 
-**Powered by:**
-- Google Gemini 3.0 Pro (2M token context window)
-- LangGraph (agent orchestration)
-- Neo4j (knowledge graph database)
+The `extension_handoff` node is a reserved integration point for future agent or rule modules, without breaking the current chain.
 
----
+## Key Capabilities
 
-## 🚀 Quick Start
+- unified harvest output contract with source payload projection
+- uninterrupted workflow compilation and execution
+- streaming progress updates in the web UI
+- markdown + HTML + PDF report output
+- extension-ready state field (`extension_payloads`) for future stages
 
-### Prerequisites
+## Quick Start
+
+### 1) Prerequisites
+
 - Python 3.9+
-- Google Gemini API key ([Get one here](https://ai.google.dev/))
-- Neo4j database (optional, for knowledge graph features)
+- Google Cloud project with Vertex AI enabled
+- `gcloud` CLI configured for ADC
 
-### Installation
+### 2) Install
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-org/bio-short-seller.git
-   cd bio-short-seller
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Configure environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GOOGLE_API_KEY
-   ```
-
-4. **Run your first analysis:**
-   ```bash
-   python main.py "Analyze pembrolizumab cardiotoxicity"
-   ```
-
----
-
-## 📖 Usage
-
-### Interactive Mode
 ```bash
-python main.py
-# Follow the prompts to enter your research question
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-### Direct Query Mode
+### 3) Configure
+
 ```bash
-python main.py "Investigate CAR-T therapy failures" --pdfs paper1.pdf paper2.pdf
+copy .env.example .env
 ```
 
-### Example Output
-```
-📊 Report Generation: Analyze pembrolizumab cardiotoxicity
-=================================================================
-✅ Harvested 18 papers/trials
-✅ Mining Complete: 12 risk signals found
-✅ Forensic Audit: 3 suspicious figures
-✅ Report saved to: final_reports/pembrolizumab_20260201_143022.md
+Set at least:
 
-Recommendation: AVOID
-Risk Score: 7.2/10
-Confidence: 8.5/10
-```
+- `GOOGLE_CLOUD_PROJECT`
+- `GOOGLE_CLOUD_LOCATION`
 
----
+Authenticate locally:
 
-## 🏗️ Architecture
-
-```
-User Input
-    ↓
-BioHarvestEngine (PubMed + ClinicalTrials.gov)
-    ↓
-[Parallel Execution]
-    ├→ EvidenceEngine (Dark Data Miner)
-    └→ ForensicEngine (Image Forensics)
-    ↓
-GraphBuilder (Neo4j Knowledge Graph)
-    ↓
-ReportWriter (Investment Analysis)
-    ↓
-Final Markdown Report
-```
-
-### Core Engines
-
-1. **BioHarvestEngine** (`BioHarvestEngine/`)
-   - Searches PubMed for toxicity papers
-   - Finds terminated/suspended trials on ClinicalTrials.gov
-   - Extracts PMC full-text links
-
-2. **EvidenceEngine** (`EvidenceEngine/`)
-   - Reads full PDF texts (supplementary materials)
-   - Mines for "data not shown", insignificant p-values
-   - Extracts buried negative results
-
-3. **ForensicEngine** (`ForensicEngine/`)
-   - Analyzes scientific figures with Gemini Vision
-   - Detects Western blot splicing, duplicated data
-   - Flags suspicious image patterns
-
-4. **ReportEngine** (`src/agents/report_writer.py`)
-   - Synthesizes evidence into structured reports
-   - Calculates weighted risk scores
-   - Generates investment recommendations
-
----
-
-## 🗂️ Project Structure
-
-```
-bio-short-seller/
-├── main.py                     # CLI entry point
-├── requirements.txt            # Python dependencies
-├── .env.example               # Environment variable template
-│
-├── BioHarvestEngine/          # Literature & trial harvester
-│   └── agent.py
-├── EvidenceEngine/            # Dark data miner
-│   └── agent.py
-├── ForensicEngine/            # Image forensics
-│   └── agent.py
-│
-├── src/
-│   ├── agents/
-│   │   ├── supervisor.py      # LangGraph orchestration
-│   │   └── report_writer.py   # Report synthesis
-│   ├── graph/
-│   │   ├── state.py           # Workflow state
-│   │   └── manager.py         # Neo4j integration
-│   ├── llms/
-│   │   └── gemini_client.py   # Unified LLM client
-│   ├── tools/
-│   │   ├── pubmed_client.py
-│   │   ├── clinical_trials_client.py
-│   │   └── pdf_processor.py
-│   ├── prompts/               # Externalized prompts
-│   │   ├── report_writer/
-│   │   ├── evidence_miner/
-│   │   ├── forensic_auditor/
-│   │   └── bioharvest/
-│   └── templates/
-│       └── biomedical_report.md
-│
-├── final_reports/             # Generated markdown reports
-├── logs/                      # Application logs
-└── tests/                     # Unit tests
-```
-
----
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-**Required:**
 ```bash
-GOOGLE_API_KEY=your_gemini_api_key_here
+gcloud auth application-default login
 ```
 
-**Optional (Engine Tuning):**
+### 4) Run
+
+Web app:
+
 ```bash
-# Evidence Engine (long-context PDF analysis)
-EVIDENCE_ENGINE_TEMPERATURE=0.4
-EVIDENCE_ENGINE_MAX_TOKENS=8192
-
-# Forensic Engine (image analysis)
-FORENSIC_ENGINE_TEMPERATURE=0.2
-
-# Report Engine (creative writing)
-REPORT_ENGINE_TEMPERATURE=0.7
+python app.py
 ```
 
-**Optional (Neo4j Knowledge Graph):**
+CLI run:
+
 ```bash
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
+python main.py "summarize latest progress on EGFR inhibitors in NSCLC"
 ```
 
----
+## Runtime Architecture
 
-## 📊 Output Format
+### Workflow Layer
 
-Reports are generated in **Markdown** format with 7 sections:
+- graph builder: `src/graph/workflow.py`
+- shared state: `src/graph/state.py`
+- node adapters: `src/graph/nodes/`
 
-1. **Executive Summary** - Go/No-Go recommendation with risk level
-2. **Scientific Rationale** - Mechanism of action analysis
-3. **Clinical Trial Audit** - Failed trials with termination reasons
-4. **Dark Data Mining** - Buried negative results from supplements
-5. **Forensic Image Audit** - Suspicious figure analysis
-6. **Risk Graveyard** - Timeline of red flags
-7. **Analyst Verdict** - Bull/Bear/Black Swan cases
+### Orchestration Layer
 
-### Example Excerpt
-```markdown
-## Clinical Trial Audit
+- supervisor entry: `src/agents/supervisor.py`
+- service facade: `src/services/workflow_service.py`
 
-NCT03456789 (Phase 2, Pembrolizumab + Chemotherapy): TERMINATED
-- **Termination Reason:** "Unacceptable cardiotoxicity"
-- **Evidence:** 8/30 subjects (27%) experienced Grade 3+ cardiac events [Trial: NCT03456789]
-- **Red Flag:** Cardiac biomarker elevations dismissed as "not statistically significant" (p=0.14) despite clinical relevance [Source: PMC7654321, Supplementary Table 3]
+### App Layer
 
-**Risk Score:** 7.8/10
+- Flask + Socket.IO server: `app.py`
+- web templates: `templates/`
+
+## Dataflow Contract
+
+Core schema validation lives in:
+
+- `src/graph/contracts.py`
+
+Harvester output and writer input are validated before report generation.
+
+## Project Layout
+
+```text
+Cassandra/
+  app.py
+  main.py
+  config.py
+  src/
+    agents/
+    graph/
+    services/
+    tools/
+    report_engine/
+    report_core/
+  templates/
+  tests/
+  docs/
 ```
 
----
+## Testing
 
-## 🧪 Development
+Run full tests:
 
-### Running Tests
 ```bash
-pytest tests/
+pytest tests
 ```
 
-### Code Quality
+Run selected integrity checks:
+
 ```bash
-black src/ *.py
-flake8 src/ *.py
+python -m pytest tests/test_dataflow_integrity.py
+python -m pytest tests/test_report_engine_sanitization.py
 ```
 
-### Docker Deployment
-```bash
-docker-compose up -d
-```
+## Notes
 
----
+- Existing compatibility adapters under `src/engines/` are kept to reduce migration risk.
+- Legacy terms may still appear in historical logs or generated report artifacts; these are not used by the active workflow chain.
 
-## 🤝 Contributing
+## License
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Key Areas for Improvement
-- [ ] Table extraction from PDF supplements (currently text-only)
-- [ ] Multi-language support (currently English-focused)
-- [ ] Real-time clinical trial monitoring
-- [ ] Automated email alerts for new risk signals
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## ⚠️ Disclaimer
-
-Bio-Short-Seller is a **research tool** designed to surface publicly available data. It does not constitute financial or medical advice. Always conduct comprehensive due diligence before making investment decisions.
-
-**Data Sources:**
-- PubMed Central (PMC) - Public domain biomedical literature
-- ClinicalTrials.gov - U.S. National Library of Medicine database
-- All data analyzed is publicly accessible
-
----
-
-## 🙏 Acknowledgments
-
-- **Google Gemini Team** - For the 2M token context LLM
-- **LangChain/LangGraph** - For agent orchestration framework
-- **Neo4j** - For graph database technology
-- **NCBI** - For PubMed API access
-
----
-
-## 📞 Contact
-
-- **Issues:** [GitHub Issues](https://github.com/your-org/bio-short-seller/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/your-org/bio-short-seller/discussions)
-- **Email:** support@bio-short-seller.com
-
----
-
-**Built with ❤️ for transparent biomedical research**
+See `LICENSE`.

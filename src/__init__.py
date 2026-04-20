@@ -1,3 +1,3 @@
 """
-src package - centralized modules for Bio-Short-Seller
+src package - centralized modules for Cassandra Literature Review
 """

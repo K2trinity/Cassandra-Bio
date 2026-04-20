@@ -67,6 +67,8 @@ class AgentState(TypedDict):
     final_report: Optional[str]  # Last-write-wins (markdown content)
     final_report_path: Optional[str]  # Last-write-wins (file path)
     final_report_markdown: Optional[str]  # Last-write-wins (duplicate for clarity)
+    final_report_html_path: Optional[str]  # Last-write-wins (rendered HTML path)
+    final_report_pdf_path: Optional[str]  # Last-write-wins (rendered PDF path)
     assessment_override: Optional[str]  # Last-write-wins
     analysis_status: Optional[str]  # Last-write-wins
     

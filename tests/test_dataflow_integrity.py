@@ -149,6 +149,15 @@ def _():
     assert ok, f"Expected valid payload, got errors: {errors}"
 
 
+@test("Supervisor initial state includes html/pdf artifact path keys")
+def _():
+    from src.agents.supervisor import _initial_state
+
+    state = _initial_state("Alzheimer therapy landscape")
+    assert "final_report_html_path" in state
+    assert "final_report_pdf_path" in state
+
+
 @test("Legacy payload with evidence/forensic keys fails")
 def _():
     from src.graph.contracts import validate_writer_input

@@ -105,6 +105,8 @@ def _initial_state(user_query: str, pdf_paths: Optional[List[str]] = None) -> Ag
         "final_report": None,
         "final_report_path": None,
         "final_report_markdown": None,
+        "final_report_html_path": None,
+        "final_report_pdf_path": None,
         "project_name": None,
         "assessment_override": None,
         "analysis_status": "INITIALIZED",

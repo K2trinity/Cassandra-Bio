@@ -1,4 +1,6 @@
 """Tests for ReportWriterAgent disease survey routing."""
+from pathlib import Path
+
 import pytest
 
 from src.agents.report_writer import ReportWriterAgent
@@ -50,3 +52,20 @@ def test_unknown_report_type_raises():
     agent = ReportWriterAgent()
     with pytest.raises((ValueError, NotImplementedError, KeyError)):
         agent.run("unknown_type", [], query="test")
+
+
+def test_write_report_returns_artifact_paths_for_disease_survey():
+    agent = ReportWriterAgent()
+    output_dir = Path("test_output") / "report_writer_agent_artifacts"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result = agent.write_report(
+        user_query="Alzheimer's disease pipeline",
+        harvest_data={"results": SAMPLE_ROWS},
+        project_name="AD Pipeline",
+        output_dir=str(output_dir),
+    )
+
+    assert result.markdown_path
+    assert result.html_path
+    assert result.pdf_path

@@ -20,6 +20,7 @@ def render_executive_summary(state: DiseaseSurveyState) -> Dict[str, Any]:
         "total_literature": len(state.literature),
         "summary_text": state.summary_text or "",
         "phase_breakdown": phase_breakdown,
+        "phase_chart": build_chart_data(phase_breakdown, "bar"),
         "generated_at": state.generated_at.isoformat(),
     }
 

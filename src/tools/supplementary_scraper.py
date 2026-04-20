@@ -1,5 +1,5 @@
 """
-Supplementary Materials Scraper - Bio-Short-Seller Hidden Data Extractor
+Supplementary Materials Scraper - Cassandra Research Data Extractor
 
 This module scrapes supplementary materials from major publishers' websites.
 Supplementary files often contain the raw data, high-resolution figures, and

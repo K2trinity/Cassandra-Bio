@@ -2,7 +2,7 @@
 """Pydantic models for the disease survey report module."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -84,5 +84,5 @@ class DiseaseSurveyState(BaseModel):
     literature: List[LiteratureRecord] = Field(default_factory=list)
     cns_benchmark: List[CNSBenchmarkEntry] = Field(default_factory=list)
     summary_text: Optional[str] = None
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)

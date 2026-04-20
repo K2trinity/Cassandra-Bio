@@ -1,5 +1,5 @@
 """
-PDF Downloader - Bio-Short-Seller NCBI PMC PDF Retrieval Tool
+PDF Downloader - Cassandra NCBI PMC PDF Retrieval Tool
 
 🔐 STEALTH MODE: TLS Fingerprinting Bypass Edition
 Uses curl_cffi to impersonate Chrome 120 at the TLS layer.

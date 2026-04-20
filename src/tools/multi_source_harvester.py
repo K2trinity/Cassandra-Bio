@@ -14,7 +14,12 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
-from .clinical_trials_client import search_trials, fetch_trial_results
+from .clinical_trials_client import (
+    RESULTS_ELIGIBLE_STATUSES,
+    fetch_trial_results,
+    is_trial_results_candidate,
+    search_trials,
+)
 from .europmc_client import search_europmc
 from .ncbi_eutils_client import NCBIEutilsClient
 from .openfda_client import OpenFDAClient
@@ -28,6 +33,39 @@ class MultiSourceHarvester:
         self.ncbi = NCBIEutilsClient()
         self.openfda = OpenFDAClient()
 
+    @staticmethod
+    def _select_trials_for_results_fetch(trials: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep only trials that are likely to have posted structured results."""
+        selected: List[Dict[str, Any]] = []
+        skipped_no_results_flag = 0
+        skipped_non_terminal = 0
+
+        for trial in trials:
+            has_results = str((trial or {}).get("has_results", "")).strip().lower() == "true"
+            status = str((trial or {}).get("status") or (trial or {}).get("study_status") or "").strip().upper()
+
+            if not has_results:
+                skipped_no_results_flag += 1
+                continue
+
+            if status and status not in RESULTS_ELIGIBLE_STATUSES:
+                skipped_non_terminal += 1
+                continue
+
+            if is_trial_results_candidate(trial):
+                selected.append(trial)
+
+        logger.info(
+            "ClinicalTrials results pre-filter: total={}, eligible={}, skipped_no_results={}, "
+            "skipped_non_terminal={}".format(
+                len(trials),
+                len(selected),
+                skipped_no_results_flag,
+                skipped_non_terminal,
+            )
+        )
+        return selected
+
     def collect(self, query: str, max_results_per_source: int = 20) -> Dict[str, Any]:
         logger.info(f"Collecting multi-source biomedical data for query: {query}")
 
@@ -37,9 +75,10 @@ class MultiSourceHarvester:
             include_statuses=None,
         )
 
-        # Collect rich result modules for trials with posted results (bounded for latency).
+        # Collect rich result modules only for likely eligible studies (bounded for latency).
         results_modules: Dict[str, Any] = {}
-        for trial in trials[: min(len(trials), 15)]:
+        result_candidates = self._select_trials_for_results_fetch(trials)
+        for trial in result_candidates[: min(len(result_candidates), 15)]:
             nct_id = trial.get("nct_id")
             if not nct_id:
                 continue

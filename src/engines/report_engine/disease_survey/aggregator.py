@@ -80,6 +80,17 @@ def _safe_str(val: Any, max_len: int = 500) -> str:
     return text[:max_len] if len(text) > max_len else text
 
 
+def _first_text(data: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value if item)
+        text = _safe_str(value)
+        if text:
+            return text
+    return ""
+
+
 def _extract_targets_from_text(text: str) -> List[str]:
     found: List[str] = []
     lower = text.lower()
@@ -88,9 +99,10 @@ def _extract_targets_from_text(text: str) -> List[str]:
             found.append(canonical)
     try:
         from src.tools.biomedical_normalization import extract_normalized_targets
+        canonical_set = set(KNOWN_CNS_TARGETS.values())
         extra = extract_normalized_targets(text)
         for t in extra:
-            if t and t not in found:
+            if t and t in canonical_set and t not in found:
                 found.append(t)
     except Exception:
         pass
@@ -98,16 +110,15 @@ def _extract_targets_from_text(text: str) -> List[str]:
 
 
 def _parse_trial_row(row: Dict[str, Any]) -> tuple[Optional[TrialRecord], Optional[DrugAsset]]:
-    nct_id = _safe_str(row.get("nct_id"))
-    title = _safe_str(row.get("title"))
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    nct_id = _safe_str(row.get("nct_id") or meta.get("nct_id") or meta.get("nct_number"))
+    title = _safe_str(row.get("title") or meta.get("title"))
     if not nct_id or not title:
         return None, None
-
-    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-    intervention = _safe_str(meta.get("intervention", ""))
-    sponsor = _safe_str(meta.get("sponsor", ""))
-    phase = _safe_str(meta.get("phase", ""))
-    status = _safe_str(meta.get("status", ""))
+    intervention = _first_text(meta, "intervention", "interventions", "drug", "asset_name")
+    sponsor = _first_text(meta, "sponsor", "lead_sponsor", "trial_sponsor", "sponsor_name")
+    phase = _first_text(meta, "phase")
+    status = _first_text(meta, "status", "overall_status")
 
     trial = TrialRecord(
         nct_id=nct_id,
@@ -147,19 +158,23 @@ def _parse_trial_row(row: Dict[str, Any]) -> tuple[Optional[TrialRecord], Option
 
 
 def _parse_pubmed_row(row: Dict[str, Any]) -> Optional[LiteratureRecord]:
-    pmid = _safe_str(row.get("pmid"))
-    title = _safe_str(row.get("title"))
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    pmid = _safe_str(row.get("pmid") or meta.get("pmid"))
+    title = _safe_str(row.get("title") or meta.get("title"))
     if not pmid or not title:
         return None
-    year_raw = row.get("year") or row.get("publication_year")
+    year_raw = (
+        row.get("year") or row.get("publication_year")
+        or meta.get("year") or meta.get("publication_year")
+    )
     year = int(year_raw) if year_raw and str(year_raw).isdigit() else None
     return LiteratureRecord(
         pmid=pmid,
         title=title,
-        journal=_safe_str(row.get("journal")) or None,
+        journal=_safe_str(row.get("journal") or meta.get("journal")) or None,
         year=year,
-        authors=_safe_str(row.get("authors")) or None,
-        doi=_safe_str(row.get("doi")) or None,
+        authors=_safe_str(row.get("authors") or meta.get("authors")) or None,
+        doi=_safe_str(row.get("doi") or meta.get("doi")) or None,
     )
 
 
@@ -183,19 +198,28 @@ def aggregate_survey_data(rows: List[Dict[str, Any]], query: str) -> DiseaseSurv
     assets_map: Dict[str, DrugAsset] = {}
     seen_nct: set = set()
     seen_pmid: set = set()  # guard against duplicate PubMed records
+    missing_asset_count = 0
+    missing_sponsor_count = 0
 
     for row in rows:
         source = _safe_str(row.get("source", "")).lower()
-        if "pubmed" in source or row.get("pmid"):
+        _meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        _has_pmid = row.get("pmid") or _meta.get("pmid")
+        _has_nct = row.get("nct_id") or _meta.get("nct_id") or _meta.get("nct_number")
+        if "pubmed" in source or _has_pmid:
             rec = _parse_pubmed_row(row)
             if rec and rec.pmid not in seen_pmid:
                 literature.append(rec)
                 seen_pmid.add(rec.pmid)
-        if "clinicaltrial" in source or row.get("nct_id"):
+        if "clinicaltrial" in source or _has_nct:
             trial, asset = _parse_trial_row(row)
             if trial and trial.nct_id not in seen_nct:
                 trials.append(trial)
                 seen_nct.add(trial.nct_id)
+                if not trial.asset_name:
+                    missing_asset_count += 1
+                if not trial.sponsor:
+                    missing_sponsor_count += 1
             if asset and asset.asset_name not in assets_map:
                 assets_map[asset.asset_name] = asset
             elif asset and asset.asset_name in assets_map:
@@ -223,6 +247,15 @@ def aggregate_survey_data(rows: List[Dict[str, Any]], query: str) -> DiseaseSurv
         literature=literature,
         cns_benchmark=cns_benchmark,
         generated_at=datetime.now(timezone.utc),
+        metadata={
+            "field_audit": {
+                "missing_asset_count": missing_asset_count,
+                "missing_sponsor_count": missing_sponsor_count,
+                "total_trials": len(trials),
+                "total_assets": len(drug_assets),
+                "total_sponsors": len(sponsors),
+            }
+        },
     )
 
 

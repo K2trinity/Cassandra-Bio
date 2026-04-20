@@ -1,9 +1,9 @@
 """
-Cassandra - Biomedical Due Diligence Platform
+Cassandra - Biomedical Research Workflow Platform
 Flask API Backend with LangGraph Integration
 
 This is the main entry point for the Cassandra web application.
-It provides a REST API for triggering biomedical due diligence investigations
+It provides a REST API for triggering biomedical research analysis workflows
 and serves the modern web interface.
 
 Architecture:
@@ -44,12 +44,13 @@ from loguru import logger
 from config import Settings
 
 # Import the core LangGraph workflow
-from src.agents.supervisor import run_bio_short_seller, stream_bio_short_seller, get_workflow_state, resume_workflow, compile_workflow, get_workflow_state, resume_workflow, compile_workflow
+from src.services.workflow_service import WorkflowService
 from src.graph.state import AgentState
 from langgraph.checkpoint.memory import MemorySaver
 
 # Initialize Checkpointer
 _redis_checkpointer = MemorySaver()
+_workflow_service = WorkflowService()
 
 # Conditionally import Neo4j GraphManager
 try:
@@ -69,7 +70,7 @@ config = Settings()
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = config.SECRET_KEY if hasattr(config, 'SECRET_KEY') else 'cassandra-biomedical-due-diligence-2026'
+app.config['SECRET_KEY'] = config.SECRET_KEY if hasattr(config, 'SECRET_KEY') else 'cassandra-biomedical-research-2026'
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file upload
 app.config['TEMPLATES_AUTO_RELOAD'] = True  # Disable template caching for development
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable static file caching
@@ -82,9 +83,11 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 # Initialize SocketIO with CORS support
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
+
 # Global state for tracking active analysis
 active_analysis: Dict[str, Any] = {
     "running": False,
+    "status": "idle",
     "query": None,
     "thread": None,
     "result": None,
@@ -95,8 +98,7 @@ active_analysis: Dict[str, Any] = {
     "current_step": None,     # current step name
     "step_status": {          # per-step status
         "harvest": "pending",
-        "mining": "pending",
-        "auditing": "pending",
+        "handoff": "pending",
         "writing": "pending",
     },
     "started_at": None,
@@ -120,12 +122,13 @@ def _reset_active_analysis():
     """Reset global analysis state to idle. Call after crash, cancel, or completion."""
     global active_analysis
     active_analysis["running"] = False
+    active_analysis["status"] = "idle"
     active_analysis["thread"] = None
     active_analysis["error"] = active_analysis.get("error")  # preserve error
     active_analysis["progress"] = active_analysis.get("progress", 0)
 
 
-def _start_thread_watchdog(thread: threading.Thread, timeout: int = 3600) -> None:
+def _start_thread_watchdog(thread: threading.Thread, task_id: Optional[str] = None, timeout: int = 3600) -> None:
     """
     Background watchdog: if the analysis thread dies unexpectedly (exception,
     timeout, etc.) without setting running=False, auto-reset the flag so the
@@ -133,9 +136,26 @@ def _start_thread_watchdog(thread: threading.Thread, timeout: int = 3600) -> Non
     """
     def _watch():
         thread.join(timeout=timeout)
-        if active_analysis.get("running") and not active_analysis.get("thread", thread).is_alive():
+        current_thread = active_analysis.get("thread")
+        current_task_id = active_analysis.get("task_id")
+        current_status = str(active_analysis.get("status") or "").lower()
+
+        # Ignore stale watchdogs from prior tasks.
+        if task_id and current_task_id != task_id:
+            return
+
+        # If task already ended (or was reset), watchdog should stay silent.
+        if (not active_analysis.get("running")) or current_status in {"idle", "complete", "cancelled", "error"}:
+            return
+
+        # Only report when this exact watched thread is still the active thread.
+        if current_thread is not thread:
+            return
+
+        if current_thread is not None and not current_thread.is_alive():
             logger.warning("⚠️  Watchdog: analysis thread died unexpectedly — resetting state.")
             active_analysis["running"] = False
+            active_analysis["status"] = "error"
             active_analysis["error"] = active_analysis.get("error") or "Thread terminated unexpectedly"
             try:
                 _emit_event("analysis_error", {
@@ -347,7 +367,7 @@ def config_page():
 
 @app.route('/static/temp/<path:filename>')
 def serve_temp_image(filename: str):
-    """Serve temporary forensic images for real-time preview"""
+    """Serve temporary analysis images for real-time preview"""
     try:
         # Try multiple possible locations
         possible_paths = [
@@ -373,33 +393,12 @@ def serve_temp_image(filename: str):
 # Routes: Core API Endpoints
 # ============================================================================
 
-@app.route('/api/debug/hitl', methods=['POST'])
-def debug_hitl():
-    """Temporary endpoint for UI testing of HITL modal."""
-    global active_analysis
-    active_analysis["status"] = "waiting_for_approval"
-    
-    mock_data = {
-        "task_id": "debug-task-123",
-        "text_evidence": [
-            {"claim": "The phase III trial omitted 43 adverse patient reports.", "severity": "critical", "source_file": "Clinical_Data_Suppressed.pdf", "page": 17},
-            {"claim": "Cash runway is indicated to be < 6 months instead of stated 18.", "severity": "high", "source_file": "Internal_Audit.pdf", "page": 2}
-        ],
-        "forensic_evidence": [
-            {"finding": "Western blot band duplication detected.", "severity": "critical", "image_path": "temp/figure_002_p7.jpeg", "explanation": "Bands in lane 2 and 4 appear manually spliced."}
-        ]
-    }
-    
-    _emit_event('analysis_paused', mock_data)
-    logger.info("🛠️ [DEBUG] Triggered HITL modal simulation.")
-    return jsonify({"status": "ok", "message": "Triggered HITL Modal"})
-
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     """
     POST /api/analyze
     
-    Triggers a biomedical due diligence investigation.
+    Triggers a biomedical research analysis workflow.
     Executes the LangGraph workflow asynchronously in a background thread.
     
     Request Body:
@@ -471,6 +470,7 @@ def analyze():
     import uuid as _uuid
     active_analysis = {
         "running": True,
+        "status": "running",
         "query": query,
         "thread": None,
         "result": None,
@@ -480,8 +480,7 @@ def analyze():
         "current_step": "harvest",
         "step_status": {
             "harvest": "pending",
-            "mining": "pending",
-            "auditing": "pending",
+            "handoff": "pending",
             "writing": "pending",
         },
         "started_at": datetime.now().isoformat(),
@@ -495,11 +494,9 @@ def analyze():
     
     # ── Node → (step_id, pct_start, pct_end, label) mapping ──
     _NODE_PROGRESS = {
-        "harvester":    ("harvest",  3,  28, "🌾 BioHarvest: collecting PubMed / trials..."),
-        "miner":        ("mining",  30,  55, "⛏️  EvidenceMiner: extracting text evidence..."),
-        "auditor":      ("auditing",30,  55, "🔬 ForensicAuditor: scanning figures..."),
-        "graph_builder":("auditing",58,  70, "🕸️  GraphBuilder: validating knowledge graph..."),
-        "writer":       ("writing", 72,  94, "✍️  ReportWriter: composing final report..."),
+        "harvester": ("harvest", 3, 56, "🌾 BioHarvest: collecting PubMed / trials..."),
+        "extension_handoff": ("handoff", 58, 76, "🧩 Extension Handoff: preparing insertion slots..."),
+        "writer": ("writing", 78, 96, "✍️  ReportWriter: composing final report..."),
     }
 
     # Define background task
@@ -512,7 +509,7 @@ def analyze():
 
         try:
             _emit_progress("harvest", "active", 3, "🌾 Starting BioHarvest data collection...")
-            logger.info("🔬 Starting Bio-Short-Seller streaming workflow...")
+            logger.info("🔬 Starting Cassandra streaming workflow...")
 
             # ── Ticker thread: smoothly animates within the current node's pct range ──
             _ticker_stop = threading.Event()
@@ -539,11 +536,10 @@ def analyze():
 
             # ── Stream workflow nodes ──
             result = None
-            for node_name, partial_state in stream_bio_short_seller(
+            for node_name, partial_state in _workflow_service.stream(
                 user_query=query,
                 checkpointer=_redis_checkpointer,
                 thread_id=_this_task_id,
-                interrupt_before=["writer"],
                 pdf_paths=pdf_paths if pdf_paths else None
             ):
                 # Check for cancellation signal from /api/reset or page refresh.
@@ -554,6 +550,7 @@ def analyze():
                     _ticker_stop.set()
                     _emit_event('analysis_cancelled', {'message': 'Analysis was cancelled.'})
                     active_analysis["running"] = False
+                    active_analysis["status"] = "cancelled"
                     active_analysis["error"] = "Cancelled by user"
                     return
                 result = partial_state  # keep last partial as fallback
@@ -563,7 +560,7 @@ def analyze():
                     _current_range[1] = pct_hi + 2  # allow ticker above node completion
                     _emit_progress(step_id, "complete", pct_hi, msg)
                     # Mark the *next* step active immediately so badge flips
-                    _steps_order = ["harvest", "mining", "auditing", "writing"]
+                    _steps_order = ["harvest", "handoff", "writing"]
                     try:
                         nxt_idx = _steps_order.index(step_id) + 1
                         if nxt_idx < len(_steps_order):
@@ -574,27 +571,12 @@ def analyze():
 
             _ticker_stop.set()
 
-            # ── Check for HITL Breakpoint Pause ──
-            if _redis_checkpointer:
-                wk_state = get_workflow_state(_this_task_id, _redis_checkpointer)
-                if wk_state and wk_state.next:
-                    logger.warning(f"⏸️  Workflow paused. Next step: {wk_state.next}")
-                    active_analysis["status"] = "waiting_for_approval"
-                    
-                    # Send current state data to UI for review
-                    _emit_event('analysis_paused', {
-                        'task_id': _this_task_id,
-                        'text_evidence': result.get('text_evidence', []) if result else [],
-                        'forensic_evidence': result.get('forensic_evidence', []) if result else []
-                    })
-                    return  # Terminate this thread, wait for /api/hitl/resume
-
             # ── result is the full accumulated state from stream ──
             # If streaming somehow missed the final_report, fall back to sync invoke
             if result is None or not result.get("final_report"):
                 logger.warning("⚠️  Stream gave no final_report — running sync invoke as fallback...")
-                _emit_progress("writing", "active", 72, "✍️  Re-running writer (stream fallback)...")
-                result = run_bio_short_seller(
+                _emit_progress("writing", "active", 78, "✍️  Re-running writer (stream fallback)...")
+                result = _workflow_service.run(
                     user_query=query,
                     pdf_paths=pdf_paths if pdf_paths else None
                 )
@@ -602,6 +584,7 @@ def analyze():
             # Store result
             active_analysis["result"] = result
             active_analysis["running"] = False
+            active_analysis["status"] = "complete"
             active_analysis["completed_at"] = datetime.now().isoformat()
 
             # ── Persist analysis to Neo4j knowledge graph (non-blocking) ──
@@ -626,18 +609,19 @@ def analyze():
                 _rich_entities: List[Dict] = []  # {label, name, rel?, props?}
                 _source_nodes: List[str]   = []  # source IDs
 
-                # ── 2a. Extract from text_evidence (rich multi-field extraction) ──
-                for _ev in result.get("text_evidence", [])[:100]:
+                # ── 2a. Extract from literature findings (compatible with legacy keys) ──
+                _literature_rows = result.get("literature_findings") or result.get("text_evidence", [])
+                for _ev in _literature_rows[:100]:
                     if not isinstance(_ev, dict):
                         continue
 
                     # Risk / finding (primary node)
-                    _risk = (_ev.get("risk_type") or _ev.get("finding") or
+                    _risk = (_ev.get("finding_type") or _ev.get("risk_type") or _ev.get("finding") or
                              _ev.get("signal") or _ev.get("title") or "")[:120]
-                    _src  = (_ev.get("source") or _ev.get("pmid") or _ev.get("file") or "")[:80]
+                    _src  = (_ev.get("source_file") or _ev.get("source") or _ev.get("pmid") or _ev.get("file") or "")[:80]
                     _tgt  = (_ev.get("target") or "")[:80]
                     _mech = (_ev.get("mechanism") or "")[:80]
-                    _sev  = _ev.get("severity", "")
+                    _sev  = _ev.get("significance") or _ev.get("severity", "")
 
                     if _risk:
                         _risk_nodes.append({"name": _risk, "source": _src,
@@ -839,7 +823,7 @@ def analyze():
             # 降级：如果 IR 管线未生成，从 Markdown 渲染
             if not html_report_path or not pdf_report_path_v2:
                 try:
-                    from src.report_engine.renderers import PDFRenderer, HTMLRenderer
+                    from src.engines.report_engine.renderers import PDFRenderer, HTMLRenderer
                     title = f"Cassandra Analysis: {query[:60]}"
 
                     if not html_report_path:
@@ -867,6 +851,13 @@ def analyze():
                     logger.warning(f"Advanced PDF generation failed, falling back to legacy: {e}")
 
             # ── Emit completion ──
+            biomedical_profile = result.get("biomedical_profile", {}) or {}
+            analysis_focus = result.get("analysis_focus") or biomedical_profile.get("analysis_focus") or "disease-oriented"
+            disease_areas = result.get("disease_areas") or biomedical_profile.get("disease_areas") or []
+            clinical_data = result.get("clinical_data") or biomedical_profile.get("clinical_data") or {}
+            evidence_stats = result.get("evidence_stats") or biomedical_profile.get("evidence_stats") or {}
+            extension_payloads = result.get("extension_payloads") or {}
+
             _emit_progress("writing", "complete", 100, "✅ Analysis complete!")
             _emit_event('analysis_complete', {
                 'success': True,
@@ -886,9 +877,23 @@ def analyze():
                 ),
                 'summary': {
                     'harvested_items': len(result.get('harvested_data', [])),
-                    'text_evidence': len(result.get('text_evidence', [])),
-                    'forensic_evidence': len(result.get('forensic_evidence', []))
-                }
+                    'disease_areas': len(disease_areas),
+                    'trial_records': clinical_data.get('trial_records', 0),
+                    'publication_records': evidence_stats.get('publication_records', 0),
+                    'extension_slots': len(extension_payloads),
+                },
+                'analysis_focus': analysis_focus,
+                'biomedical_profile': biomedical_profile,
+                'disease_areas': disease_areas,
+                'drug_baselines': result.get('drug_baselines') or biomedical_profile.get('drug_baselines') or [],
+                'drug_class_distribution': result.get('drug_class_distribution') or biomedical_profile.get('drug_class_distribution') or [],
+                'drug_catalog': result.get('drug_catalog') or biomedical_profile.get('drug_catalog') or [],
+                'target_signals': result.get('target_signals') or biomedical_profile.get('target_signals') or [],
+                'company_entities': result.get('company_entities') or biomedical_profile.get('company_entities') or [],
+                'clinical_data': clinical_data,
+                'evidence_stats': evidence_stats,
+                'extension_payloads': extension_payloads,
+                'contract_version': result.get('dataflow_contract_version'),
             })
             
             logger.info("✅ Analysis complete!")
@@ -906,6 +911,7 @@ def analyze():
             
             active_analysis["error"] = str(e)
             active_analysis["running"] = False
+            active_analysis["status"] = "error"
             active_analysis["completed_at"] = datetime.now().isoformat()
             
             _emit_progress(
@@ -925,12 +931,13 @@ def analyze():
     analysis_thread = threading.Thread(target=run_analysis_async, daemon=True, name="analysis")
     analysis_thread.start()
     active_analysis["thread"] = analysis_thread
-    _start_thread_watchdog(analysis_thread)
+    _start_thread_watchdog(analysis_thread, task_id=active_analysis.get("task_id"))
     
     return jsonify({
         "status": "accepted",
         "message": "Analysis started. Monitor progress via WebSocket.",
-        "query": query
+        "query": query,
+        "task_id": active_analysis.get("task_id"),
     }), 202
 
 
@@ -950,13 +957,14 @@ def reset_analysis():
 
     prev_query = active_analysis.get("query", "unknown")
     active_analysis["running"] = False
+    active_analysis["status"] = "idle"
     active_analysis["thread"] = None
     active_analysis["error"] = None
+    active_analysis["task_id"] = None
     active_analysis["progress"] = 0
     active_analysis["current_step"] = None
     active_analysis["step_status"] = {
-        "harvest": "pending", "mining": "pending",
-        "auditing": "pending", "writing": "pending"
+        "harvest": "pending", "handoff": "pending", "writing": "pending"
     }
     with event_history_lock:
         event_history.clear()
@@ -964,90 +972,6 @@ def reset_analysis():
     logger.info(f"♻️  Analysis state reset (was: '{prev_query}')")
     return jsonify({"status": "ok", "message": "Analysis state reset. You can start a new analysis."})
 
-
-
-@app.route('/api/hitl/resume', methods=['POST'])
-def resume_hitl_analysis():
-    """
-    POST /api/hitl/resume
-    Resume the workflow from a paused state (Human-In-The-Loop approval).
-    """
-    global active_analysis
-
-    if active_analysis.get("status") != "waiting_for_approval":
-        return jsonify({"status": "error", "message": "Workflow is not waiting for approval"}), 400
-
-    data = request.json or {}
-    updated_text = data.get("text_evidence", [])
-    updated_forensic = data.get("forensic_evidence", [])
-
-    task_id = active_analysis.get("task_id")
-    if not task_id or not _redis_checkpointer:
-        return jsonify({"status": "error", "message": "No checkpoint available to resume"}), 500
-
-    logger.info(f"▶️ Resuming task {task_id} with updated evidence ({len(updated_text)} text, {len(updated_forensic)} forensic)")
-
-    # Define background thread to continue streaming
-    def run_resume_async():
-        global active_analysis
-
-        try:
-            active_analysis["running"] = True
-            active_analysis["status"] = "resuming"
-
-            _ticker_stop = threading.Event()
-            _emit_progress("writing", "active", 90, "✍️ Resuming... Analyzing evidence and drafting structural report...")
-
-            app_compiled = compile_workflow(checkpointer=_redis_checkpointer)
-            config = {"configurable": {"thread_id": task_id}}
-
-            # Apply modified evidence to state
-            # Generate the overwrite narrative for LLM
-            compiled_text = "[Human In The Loop Override]\n"
-            for ix, e in enumerate(updated_text):
-                compiled_text += f"Evidence {ix+1}: {e.get('claim', '')} (Severity: {e.get('severity', '')})\n"
-            
-            app_compiled.update_state(config, {
-                "text_evidence": {"$replace": updated_text},
-                "forensic_evidence": {"$replace": updated_forensic},
-                "compiled_evidence_text": compiled_text
-            }, as_node="graph_builder")
-
-            result = None
-            for node_name, partial_state in resume_workflow(task_id, _redis_checkpointer):
-                result = partial_state
-                _emit_progress("writing", "active", 97, f"✍️ Generating {node_name} chunks...")
-
-            _ticker_stop.set()
-
-            if result and "final_report" in result:
-                active_analysis["status"] = "complete"
-                active_analysis["progress"] = 100
-                active_analysis["running"] = False
-                active_analysis["result"] = result["final_report"]
-                active_analysis["nodes_completed"] = ["harvest", "mining", "auditing", "writing"]
-                
-                # Extract risk score for frontend badge
-                risk_score = result.get("risk_score", "Unknown")
-                
-                _emit_progress("writing", "complete", 100, f"✅ Report Synthesis Complete (Risk: {risk_score})")
-
-                _emit_event('analysis_complete', {
-                    'report': result["final_report"],
-                    'risk_score': risk_score
-                })
-        except Exception as e:
-            _ticker_stop.set()
-            active_analysis["running"] = False
-            active_analysis["status"] = "error"
-            active_analysis["error"] = str(e)
-            logger.error(f"❌ Resume stream failed: {e}")
-            _emit_event('analysis_error', {'error': str(e)})
-
-    resume_thread = threading.Thread(target=run_resume_async, daemon=True)
-    resume_thread.start()
-
-    return jsonify({"status": "success", "message": "Resumed analysis"}), 200
 
 
 @app.route('/api/status', methods=['GET'])
@@ -1064,6 +988,7 @@ def get_status():
 
     return jsonify({
         "running": active_analysis["running"],
+        "status": active_analysis.get("status"),
         "query": active_analysis["query"],
         "error": active_analysis["error"],
         "task_id": active_analysis.get("task_id"),
@@ -1599,7 +1524,7 @@ def convert_markdown_to_pdf(markdown_path: Path) -> Path:
     将 Markdown 文件转换为专业 PDF（WeasyPrint 优先，逐级降级）。
     """
     try:
-        from src.report_engine.renderers import PDFRenderer
+        from src.engines.report_engine.renderers import PDFRenderer
         renderer = PDFRenderer()
         content = markdown_path.read_text(encoding="utf-8")
         title = markdown_path.stem.replace("_", " ").title()
@@ -2213,37 +2138,48 @@ def test_gemini():
     """
     POST /api/test-gemini
     
-    Tests Google Gemini API connection.
+    Tests Google Gemini API connection via Vertex AI.
     
     Request Body:
-        {"api_key": "AIza..."}
+        {"project": "gen-lang-client-...", "location": "asia-northeast1"}
+        (Optional — defaults to env vars GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION)
     
     Response:
         {"success": true, "message": "Connection successful"}
     """
     try:
-        data = request.json
-        api_key = data.get('api_key')
+        data = request.json or {}
+        project = data.get('project') or os.getenv('GOOGLE_CLOUD_PROJECT')
+        location = data.get('location') or os.getenv('GOOGLE_CLOUD_LOCATION', 'asia-northeast1')
         
-        if not api_key:
+        if not project:
             return jsonify({
                 "success": False,
-                "error": "API key required"
+                "error": "Google Cloud project ID required. Set GOOGLE_CLOUD_PROJECT env var or pass 'project' in request body."
             }), 400
         
-        # Test Gemini connection
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        # Test Vertex AI connection using unified google-genai SDK
+        from google import genai
+        client = genai.Client(
+            vertexai=True,
+            project=project,
+            location=location,
+        )
         
         # Use the configured model or fallback to gemini-2.5-flash (stable and fast)
         model_name = getattr(config, 'REPORT_MODEL_NAME', 'gemini-2.5-flash')
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content("Hello, test connection")
+        response = client.models.generate_content(
+            model=model_name,
+            contents="Hello, test connection",
+        )
         
         return jsonify({
             "success": True,
-            "message": "Gemini API connection successful",
-            "test_response": response.text[:100]
+            "message": "Vertex AI Gemini connection successful",
+            "project": project,
+            "location": location,
+            "model": model_name,
+            "test_response": response.text[:100] if response.text else "(empty)"
         })
         
     except Exception as e:
@@ -2251,6 +2187,7 @@ def test_gemini():
             "success": False,
             "error": str(e)
         }), 500
+
 
 
 @app.route('/api/test-neo4j', methods=['POST'])
@@ -2388,7 +2325,7 @@ def get_system_config():
     try:
         return jsonify({
             "gemini": {
-                "model": getattr(config, 'REPORT_MODEL_NAME', 'gemini-3-pro-preview'),
+                "model": getattr(config, 'REPORT_MODEL_NAME', 'gemini-2.5-pro'),
                 "temperature": getattr(config, 'REPORT_TEMPERATURE', 0.7),
                 "max_tokens": getattr(config, 'REPORT_MAX_TOKENS', 8192)
             },
@@ -2431,6 +2368,7 @@ def handle_connect():
     emit('connected', {
         'message': 'Connected to Cassandra backend',
         'analysis_running': active_analysis["running"],
+        'analysis_status': active_analysis.get("status"),
         'progress': active_analysis.get("progress", 0),
         'current_step': active_analysis.get("current_step"),
         'step_status': active_analysis.get("step_status", {}),
@@ -2459,6 +2397,7 @@ def handle_heartbeat(data):
         'timestamp': datetime.now().isoformat(),
         'status': 'ok',
         'analysis_running': active_analysis["running"],
+        'analysis_status': active_analysis.get("status"),
     })
 
 
@@ -2485,7 +2424,7 @@ def emit_graph_node(node_type: str, node_name: str, properties: Dict = None):
     """
     🔥 实时推送新发现的节点到前端图谱
     
-    当BioHarvestEngine或EvidenceEngine发现新的论文、作者、临床试验时，
+    当BioHarvestEngine发现新的论文、作者、临床试验时，
     这个函数会立即通知前端，让图谱在评委眼前实时生长！
     
     Args:
@@ -2563,7 +2502,7 @@ def emit_graph_relationship(source_type: str, source_name: str,
 
 if __name__ == '__main__':
     logger.info("="*80)
-    logger.info("🧬 Cassandra - Biomedical Due Diligence Platform")
+    logger.info("🧬 Cassandra - Biomedical Research Workflow Platform")
     logger.info("="*80)
     logger.info(f"🌐 Server: http://0.0.0.0:{config.PORT}")
     logger.info(f"📊 Neo4j Available: {NEO4J_AVAILABLE}")

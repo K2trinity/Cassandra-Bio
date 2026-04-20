@@ -1,15 +1,15 @@
 """
-Neo4j Knowledge Graph Manager - Bio-Short-Seller
+Neo4j Knowledge Graph Manager - Cassandra
 
 This module manages persistent storage of biomedical risk signals in a Neo4j graph database.
 
 Schema:
 - Nodes: Drug, Target, Risk, Source (PMC articles, NCT trials)
-- Relationships: TARGETS, REPORTS_FAILURE, HAS_RISK
+- Relationships: TARGETS, REPORTS_FAILURE, HAS_FINDING
 
 Usage:
     graph = GraphManager()
-    graph.add_risk_signal(
+    graph.add_finding(
         drug="Pembrolizumab",
         target="PD-1",
         source="NCT03456789",
@@ -33,7 +33,7 @@ except ImportError:
 
 class GraphManager:
     """
-    Neo4j Knowledge Graph Manager for Bio-Short-Seller.
+    Neo4j Knowledge Graph Manager for Cassandra.
     
     Manages persistent storage of:
     - Drug entities and their molecular targets
@@ -106,7 +106,7 @@ class GraphManager:
             self.driver.close()
             logger.info("Neo4j connection closed")
     
-    def add_risk_signal(
+    def add_finding(
         self,
         drug: str,
         target: str,
@@ -132,7 +132,7 @@ class GraphManager:
         
         Example:
             >>> graph = GraphManager()
-            >>> graph.add_risk_signal(
+            >>> graph.add_finding(
             ...     drug="Pembrolizumab",
             ...     target="PD-1",
             ...     source="NCT03456789",
@@ -149,12 +149,12 @@ class GraphManager:
             query = """
             MERGE (d:Drug {name: $drug})
             MERGE (t:Target {name: $target})
-            MERGE (r:Risk {name: $risk})
+            MERGE (r:Finding {name: $risk})
             MERGE (s:Source {id: $source})
             
             MERGE (d)-[:TARGETS]->(t)
             MERGE (s)-[:REPORTS_FAILURE]->(d)
-            MERGE (d)-[:HAS_RISK]->(r)
+            MERGE (d)-[:HAS_FINDING]->(r)
             
             SET r += $metadata
             
@@ -236,7 +236,7 @@ class GraphManager:
             logger.error(f"Failed to add trial to graph: {e}")
             return False
     
-    def get_drug_risk_history(self, drug_name: str) -> List[Dict]:
+    def get_drug_findings(self, drug_name: str) -> List[Dict]:
         """
         Retrieve all risk signals for a drug from the graph.
         
@@ -247,7 +247,7 @@ class GraphManager:
             List of risk signal dictionaries with sources
         
         Example:
-            >>> risks = graph.get_drug_risk_history("Pembrolizumab")
+            >>> risks = graph.get_drug_findings("Pembrolizumab")
             >>> print(risks)
             [
                 {"risk": "Cardiotoxicity", "source": "NCT03456789"},
@@ -259,7 +259,7 @@ class GraphManager:
         
         try:
             query = """
-            MATCH (d:Drug {name: $drug})-[:HAS_RISK]->(r:Risk)
+            MATCH (d:Drug {name: $drug})-[:HAS_FINDING]->(r:Risk)
             MATCH (s:Source)-[:REPORTS_FAILURE]->(d)
             RETURN r.name as risk, s.id as source
             ORDER BY r.name
@@ -323,7 +323,7 @@ class GraphManager:
             logger.error(f"Failed to link drug to task: {e}")
             return False
 
-    def add_risk_signal_with_task(
+    def add_finding_with_task(
         self,
         task_id: str,
         drug: str,
@@ -339,9 +339,9 @@ class GraphManager:
             q = """
             MERGE (a:Analysis {task_id: $task_id})
             MERGE (d:Drug {name: $drug})
-            MERGE (r:Risk {name: $risk})
+            MERGE (r:Finding {name: $risk})
             MERGE (a)-[:ANALYZED]->(d)
-            MERGE (d)-[:HAS_RISK]->(r)
+            MERGE (d)-[:HAS_FINDING]->(r)
             MERGE (a)-[:FOUND_RISK]->(r)
             """
             params: Dict = dict(task_id=task_id, drug=drug, risk=risk)
@@ -614,14 +614,14 @@ class GraphManager:
             logger.error(f"get_shared_targets failed: {e}")
             return []
 
-    def get_shared_risks(self, min_drugs: int = 2, limit: int = 20) -> List[Dict]:
+    def get_shared_findings(self, min_drugs: int = 2, limit: int = 20) -> List[Dict]:
         """返回被多个药物共同关联的 Risk / AdverseEvent 节点（跨任务关联）。"""
         if not self.driver:
             return []
         try:
             q = """
-            MATCH (d:Drug)-[:HAS_RISK|CAUSES_AE]->(r)
-            WHERE r:Risk OR r:AdverseEvent
+            MATCH (d:Drug)-[:HAS_FINDING|CAUSES_AE]->(r)
+            WHERE r:Finding OR r:AdverseEvent
             WITH r, labels(r)[0] AS rtype, collect(DISTINCT d.name) AS drugs
             WHERE size(drugs) >= $min_drugs
             RETURN r.name AS risk, rtype AS type, drugs, size(drugs) AS drug_count
@@ -631,7 +631,7 @@ class GraphManager:
             with self.driver.session() as session:
                 return [dict(r) for r in session.run(q, min_drugs=min_drugs, limit=limit)]
         except Exception as e:
-            logger.error(f"get_shared_risks failed: {e}")
+            logger.error(f"get_shared_findings failed: {e}")
             return []
 
     def get_drug_comparison(self, drug1: str, drug2: str, limit: int = 30) -> List[Dict]:
@@ -718,6 +718,6 @@ def create_graph_manager() -> GraphManager:
     
     Example:
         >>> with create_graph_manager() as graph:
-        ...     graph.add_risk_signal(...)
+        ...     graph.add_finding(...)
     """
     return GraphManager()

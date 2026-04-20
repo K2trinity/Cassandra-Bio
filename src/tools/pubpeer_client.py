@@ -1,5 +1,5 @@
 """
-PubPeer Client - Bio-Short-Seller Academic Fraud Intelligence Harvester
+PubPeer Client - Cassandra Publication Integrity Intelligence Harvester
 
 🏴‍☠️ THE ULTIMATE WEAPON: PubPeer is where the scientific community exposes fraud.
 
@@ -247,7 +247,7 @@ def extract_flagged_images(pubpeer_data: Dict) -> List[Dict[str, str]]:
     """
     🔥 Extract all images from PubPeer comments that show potential fraud.
     
-    These images are GOLD for forensic analysis - they're often annotated
+    These images are valuable for figure-quality review - they're often annotated
     screenshots showing duplicated bands, cloned regions, or statistical anomalies.
     
     Args:

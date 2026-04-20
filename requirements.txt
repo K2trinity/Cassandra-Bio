@@ -1,19 +1,19 @@
 # ========================================
-#   Bio-Short-Seller: Biomedical Due Diligence Agent
-#   Production-Ready Minimal Dependencies (Post-Audit Cleanup)
+#   Cassandra: Biomedical Research Analysis Agent
+#   Production-Ready Minimal Dependencies
 # ========================================
 
 # ===== Core LLM & Orchestration =====
 google-genai>=0.1.0
+google-api-core>=2.20.0
 langgraph>=0.0.30
 langchain>=0.1.0
 langchain-core>=0.1.0
-langchain-google-genai>=0.0.5
 
 # ===== Data Processing =====
 pymupdf>=1.23.0        # PDF Text Extraction
 biopython>=1.81        # PubMed/NCBI API Integration
-Pillow>=9.5.0          # Forensic Image Analysis
+Pillow>=9.5.0          # Figure Image Analysis
 pandas>=2.0.0          # Data Handling
 numpy>=1.24.0          # Scientific Computing
 
@@ -49,6 +49,11 @@ playwright>=1.40.0      # Web Scraping
 flask-socketio>=5.3.2  # Real-time Communication
 pydantic-settings>=2.5.2  # Settings Management
 json-repair>=0.25.0    # JSON Auto-Repair for LLM Output (Unterminated Strings, Missing Brackets)
+
+# ===== Biomedical NER (SciSpacy) =====
+spacy>=3.7.0            # NLP Pipeline (required by SciSpacy)
+scispacy>=0.5.5         # Biomedical NER, entity linking, abbreviation detection
+# Model: pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.5/en_ner_bionlp13cg_md-0.5.5.tar.gz
 
 # ===== Development Tools (Optional) =====
 pytest>=7.4.0

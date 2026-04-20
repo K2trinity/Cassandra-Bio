@@ -165,6 +165,15 @@ def normalize_target_term(term: Any) -> str:
     if 2 <= len(compact) <= 10 and re.match(r"^[A-Z0-9\-]+$", compact):
         return compact
 
+    # ------- SciSpacy NER Fallback (extends coverage beyond ~30 regex rules) -------
+    try:
+        from src.tools.scispacy_ner_service import SciSpacyNERService
+        ner_result = SciSpacyNERService.get_instance().normalize_entity(raw, "TARGET")
+        if ner_result:
+            return ner_result
+    except Exception:
+        pass  # SciSpacy not installed or model not loaded — graceful degradation
+
     return ""
 
 

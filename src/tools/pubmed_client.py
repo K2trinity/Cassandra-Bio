@@ -1,5 +1,5 @@
 """
-PubMed Client - Bio-Short-Seller Biomedical Literature Harvester
+PubMed Client - Cassandra Biomedical Literature Harvester
 
 This module provides tools to search and retrieve scientific literature from PubMed
 using the NCBI E-utilities API via Biopython.
@@ -26,8 +26,8 @@ except ImportError:
 # ========== Configuration ==========
 # NCBI requires an email for API access (helps them contact you if there's a problem)
 # Set via environment variable PUBMED_EMAIL or use a default
-Entrez.email = os.getenv("PUBMED_EMAIL", "bio-short-seller@example.com")
-Entrez.tool = "Bio-Short-Seller"
+Entrez.email = os.getenv("PUBMED_EMAIL", "cassandra@example.com")
+Entrez.tool = "Cassandra"
 Entrez.max_tries = 3
 Entrez.sleep_between_tries = 2
 

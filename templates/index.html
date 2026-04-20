@@ -368,9 +368,7 @@
                             <span>Launch Analysis</span>
                         </span>
                     </button>
-                    <button type="button" onclick="fetch('/api/debug/hitl', {method: 'POST'})" class="px-4 py-4 bg-slate-700 hover:bg-slate-600 text-amber-400 font-semibold rounded-xl transition-all border border-amber-500/30">
-                        🧪 Mock HITL Popup
-                    </button>
+                    
                     <!-- Cancel / Reset button (hidden while idle) -->
                     <button
                         type="button"
@@ -470,33 +468,20 @@
                         <span class="step-state-badge badge-pending" id="badge-harvest">PENDING</span>
                     </div>
                     
-                    <!-- Step 2: Evidence Mining -->
-                    <div class="step-item flex flex-col items-center" data-step="mining">
+                    <!-- Step 2: Extension Handoff -->
+                    <div class="step-item flex flex-col items-center" data-step="handoff">
                         <div class="w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all">
                             <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h4a2 2 0 012 2v0a2 2 0 002 2h0a2 2 0 012 2v4m0-10h4m0 0v4m0-4l-5 5m-6 6H5a2 2 0 01-2-2v-4"></path>
                             </svg>
                         </div>
-                        <span class="text-sm text-gray-400 font-medium">Mining</span>
-                        <span class="text-xs text-gray-600 mt-1">Extract Evidence</span>
-                        <span class="step-pct-label" id="pct-mining">—</span>
-                        <span class="step-state-badge badge-pending" id="badge-mining">PENDING</span>
+                        <span class="text-sm text-gray-400 font-medium">Handoff</span>
+                        <span class="text-xs text-gray-600 mt-1">Extension Slot</span>
+                        <span class="step-pct-label" id="pct-handoff">—</span>
+                        <span class="step-state-badge badge-pending" id="badge-handoff">PENDING</span>
                     </div>
                     
-                    <!-- Step 3: Forensic Audit -->
-                    <div class="step-item flex flex-col items-center" data-step="auditing">
-                        <div class="w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all">
-                            <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-                            </svg>
-                        </div>
-                        <span class="text-sm text-gray-400 font-medium">Auditing</span>
-                        <span class="text-xs text-gray-600 mt-1">Safety Review</span>
-                        <span class="step-pct-label" id="pct-auditing">—</span>
-                        <span class="step-state-badge badge-pending" id="badge-auditing">PENDING</span>
-                    </div>
-                    
-                    <!-- Step 4: Report Writing -->
+                    <!-- Step 3: Report Writing -->
                     <div class="step-item flex flex-col items-center" data-step="writing">
                         <div class="w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all">
                             <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -537,7 +522,7 @@
                     <div class="flex flex-col gap-1">
                         <div class="flex items-center">
                             <span class="current-img-scanning-dot"></span>
-                            <span class="text-blue-400 font-bold text-xs font-mono">FORENSIC VISION ANALYSIS</span>
+                            <span class="text-blue-400 font-bold text-xs font-mono">FIGURE INSPECTION STREAM</span>
                         </div>
                         <div id="currentImageLabel" class="text-gray-300 font-mono text-xs"></div>
                         <div id="currentImageProgress" class="text-gray-500 text-xs mt-1"></div>
@@ -817,52 +802,7 @@
 </div>
 <!-- End PDF Preview Modal -->
 
-<!-- HITL Approval Modal -->
-<div id="hitlModal" class="fixed inset-0 z-[60] hidden flex-col justify-center items-center bg-black/80 backdrop-blur-sm">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-6 w-[90%] max-w-5xl max-h-[85vh] flex flex-col">
-        <div class="flex justify-between items-center mb-4">
-            <h2 class="text-2xl font-bold text-white flex items-center gap-3">
-                <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                Expert Review Required (HITL)
-            </h2>
-            <span class="px-3 py-1 bg-yellow-500/20 text-yellow-400 rounded-full text-sm font-medium border border-yellow-500/30 animate-pulse">Pending Approval</span>
-        </div>
-        <p class="text-slate-400 mb-6 border-b border-slate-800 pb-4">
-            The GraphBuilder has compiled the following evidence. Please review, check/uncheck items, or modify severities before giving the final sign-off to the ReportWriter.
-        </p>
 
-        <div class="flex-1 overflow-y-auto space-y-8 pr-4 custom-scrollbar" id="hitlContent">
-            <!-- Text Evidence Section -->
-            <section>
-                <div class="flex items-center gap-2 mb-4">
-                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                    <h3 class="text-lg font-semibold text-blue-400">Text Evidence (<span id="hitlTextCount">0</span>)</h3>
-                </div>
-                <div id="hitlTextEvidence" class="space-y-3"></div>
-            </section>
-
-            <!-- Forensic Evidence Section -->
-            <section>
-                <div class="flex items-center gap-2 mb-4">
-                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                    <h3 class="text-lg font-semibold text-purple-400">Forensic Evidence (<span id="hitlForensicCount">0</span>)</h3>
-                </div>
-                <div id="hitlForensicEvidence" class="space-y-3"></div>
-            </section>
-        </div>
-
-        <div class="mt-6 flex justify-end gap-3 border-t border-slate-800 pt-5 bg-slate-900 rounded-b-2xl">
-            <button onclick="document.getElementById('hitlModal').classList.add('hidden')" class="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg font-medium transition-colors border border-slate-600">
-                Review Later
-            </button>
-            <button id="hitlResumeBtn" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-blue-500/20 flex items-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
-                Approve & Generate Report
-            </button>
-        </div>
-    </div>
-</div>
-<!-- End HITL Modal -->
 
 <!-- Settings Tab -->
 <div id="settingsTab" class="flex-1 flex flex-col hidden">
@@ -1803,6 +1743,7 @@
         const evidenceStats = safeProfile.evidence_stats || {};
         const trialRecords = Number(clinicalData.trial_records || summary.trial_records || 0);
         const publicationRecords = Number(evidenceStats.publication_records || summary.publication_records || 0);
+        const figureRecords = Number(summary.figure_evidence || 0);
         const subtitle = restored ? '// Biomedical Assessment (Restored)' : '// Biomedical Assessment';
 
         return `
@@ -1829,7 +1770,7 @@
                             <div class="flex gap-4 text-gray-500 flex-wrap">
                                 <span>Records: ${summary.harvested_items || 0}</span>
                                 <span>Text Evidence: ${summary.text_evidence || 0}</span>
-                                <span>Forensics: ${summary.forensic_evidence || 0}</span>
+                                <span>Figures: ${figureRecords}</span>
                                 <span>Clinical Trials: ${trialRecords}</span>
                                 <span>Publications: ${publicationRecords}</span>
                             </div>
@@ -1995,7 +1936,7 @@
         logContainer.innerHTML = '';
         
         // Reset step badges + progress bar
-        ['harvest','mining','auditing','writing'].forEach(s => {
+        ['harvest','handoff','writing'].forEach(s => {
             const b = document.getElementById(`badge-${s}`);
             const p = document.getElementById(`pct-${s}`);
             if (b) { b.className = 'step-state-badge badge-pending'; b.textContent = 'PENDING'; }
@@ -2124,7 +2065,7 @@
         }
         
         // Overall progress bar (legacy position-based)
-        const steps = ['harvest', 'mining', 'auditing', 'writing'];
+        const steps = ['harvest', 'handoff', 'writing'];
         const idx = steps.indexOf(step);
         const legacy = ((idx + 1) / steps.length) * 100;
         document.getElementById('progressBar').style.width = `${legacy}%`;
@@ -2332,7 +2273,6 @@
                     if (ev.type === 'log')   addLog(ev.payload.level, ev.payload.message, ev.payload.image_path);
                     if (ev.type === 'step')  updateStep(ev.payload.step, ev.payload.status, ev.payload.percentage);
                     if (ev.type === 'progress') updateProgressBar(ev.payload.percentage, ev.payload.message);
-                    if (ev.type === 'analysis_paused') openHitlModal(ev.payload.text_evidence || [], ev.payload.forensic_evidence || [], ev.payload || {});
                     if (ev.type === 'analysis_complete') handleAnalysisComplete(ev.payload);
                     if (ev.type === 'analysis_error')    handleAnalysisError(ev.payload);
                 });
@@ -2364,194 +2304,6 @@
             analyzeBtn.innerHTML = '<span class="flex items-center space-x-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Launch Analysis</span></span>';
         }
     }
-
-    // === HITL Modal Handlers ===
-    let _currentHitlData = { taskId: null, schemaVersion: 'legacy', text: [], forensic: [] };
-    
-    function escapeHtml(unsafe) {
-        if (!unsafe) return '';
-        return unsafe.toString()
-             .replace(/&/g, "&amp;")
-             .replace(/</g, "&lt;")
-             .replace(/>/g, "&gt;")
-             .replace(/"/g, "&quot;")
-             .replace(/'/g, "&#039;");
-    }
-
-    function normalizeHitlSeverity(raw, fallback = 'medium') {
-        if (raw === undefined || raw === null) return fallback;
-        const text = String(raw).trim().toLowerCase();
-        if (!text) return fallback;
-        if (['critical', 'crit', 'severe', 'fatal'].includes(text)) return 'critical';
-        if (['high', 'major'].includes(text)) return 'high';
-        if (['medium', 'moderate', 'med'].includes(text)) return 'medium';
-        if (['low', 'minor'].includes(text)) return 'low';
-        const n = Number(text);
-        if (!Number.isNaN(n)) {
-            const score = n > 1 ? (n / 100) : n;
-            if (score >= 0.85) return 'critical';
-            if (score >= 0.65) return 'high';
-            if (score >= 0.35) return 'medium';
-            return 'low';
-        }
-        return fallback;
-    }
-
-    function normalizeHitlTextItem(item, idx) {
-        const src = (item && typeof item === 'object') ? item : { claim: String(item || '') };
-        const riskCategory = src.risk_category || src.risk_type || src.signal_type || src.type || 'Unknown Risk';
-        const claim = src.claim || src.quote || src.description || src.explanation || src.finding || src.findings || src.title || '';
-        const sourceFile = src.source_file || src.filename || src.file || src.source || src.pmid || src.nct_id || '';
-        const page = src.page || src.page_estimate || src.page_reference || '';
-        return {
-            id: src.id || `text-${idx + 1}`,
-            risk_category: String(riskCategory),
-            risk_type: String(src.risk_type || riskCategory),
-            claim: String(claim),
-            quote: String(src.quote || claim),
-            explanation: String(src.explanation || src.description || ''),
-            source_file: String(sourceFile),
-            source: String(src.source || sourceFile),
-            page: String(page || ''),
-            page_estimate: String(src.page_estimate || page || ''),
-            filename: String(src.filename || sourceFile),
-            severity: normalizeHitlSeverity(src.severity || src.risk_level || src.level)
-        };
-    }
-
-    function normalizeHitlForensicItem(item, idx) {
-        const src = (item && typeof item === 'object') ? item : { finding: String(item || '') };
-        const figId = src.fig_id || src.figure_id || src.image_id || src.id || `figure-${idx + 1}`;
-        const finding = src.finding || src.findings || src.caption || src.explanation || src.analysis || '';
-        const imagePath = src.image_path || src.image_url || src.image || '';
-        return {
-            id: src.id || `forensic-${idx + 1}`,
-            fig_id: String(figId),
-            figure_id: String(src.figure_id || figId),
-            image_id: String(src.image_id || figId),
-            finding: String(finding),
-            findings: String(src.findings || finding),
-            caption: String(src.caption || finding),
-            severity: normalizeHitlSeverity(src.severity || src.risk_level || src.level || src.tampering_risk_score),
-            status: String(src.status || 'UNASSESSED'),
-            image_path: String(imagePath),
-            image_url: String(src.image_url || imagePath),
-            source_file: String(src.source_file || src.pdf_name || src.filename || src.file || ''),
-            pdf_name: String(src.pdf_name || src.source_file || '')
-        };
-    }
-
-    function openHitlModal(textEvidence, forensicEvidence, meta = {}) {
-        _currentHitlData.taskId = meta.task_id || _currentHitlData.taskId || null;
-        _currentHitlData.schemaVersion = meta.schema_version || _currentHitlData.schemaVersion || 'legacy';
-        _currentHitlData.text = (Array.isArray(textEvidence) ? textEvidence : []).map((item, idx) => normalizeHitlTextItem(item, idx));
-        _currentHitlData.forensic = (Array.isArray(forensicEvidence) ? forensicEvidence : []).map((item, idx) => normalizeHitlForensicItem(item, idx));
-
-        const hitlModal = document.getElementById('hitlModal');
-        const textContainer = document.getElementById('hitlTextEvidence');
-        const forensicContainer = document.getElementById('hitlForensicEvidence');
-        document.getElementById('hitlTextCount').textContent = _currentHitlData.text.length;
-        document.getElementById('hitlForensicCount').textContent = _currentHitlData.forensic.length;
-
-        // Render Text Evidence
-        textContainer.innerHTML = _currentHitlData.text.length === 0 ? '<div class="text-slate-500 italic text-sm">No text evidence generated.</div>' : 
-            _currentHitlData.text.map((item, idx) => `
-            <div class="flex items-start gap-3 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 hover:bg-slate-800 transition-colors">
-                <input type="checkbox" id="hitl_t_${idx}" class="mt-1 w-4 h-4 text-blue-500 rounded border-slate-600 bg-slate-700 focus:ring-blue-500/50" checked data-idx="${idx}" data-type="text">
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm text-slate-200 font-medium mb-1">${escapeHtml(item.risk_category || 'Unknown Risk')}</p>
-                    <p class="text-xs text-slate-400 leading-snug">${escapeHtml(item.claim || '')}</p>
-                    <p class="text-[11px] text-slate-500 mt-1">
-                        ${escapeHtml(item.source_file || item.source || '')}${item.page ? ` · p.${escapeHtml(item.page)}` : ''}
-                    </p>
-                    <select class="mt-2 text-xs bg-slate-700 border-none rounded text-slate-300 py-1 hitl-severity" data-idx="${idx}" data-type="text">
-                        <option value="low" ${item.severity === 'low' ? 'selected' : ''}>Low Severity</option>
-                        <option value="medium" ${item.severity === 'medium' ? 'selected' : ''}>Medium Severity</option>
-                        <option value="high" ${item.severity === 'high' ? 'selected' : ''}>High Severity</option>
-                        <option value="critical" ${item.severity === 'critical' ? 'selected' : ''}>Critical Severity</option>
-                    </select>
-                </div>
-            </div>`).join('');
-
-        // Render Forensic Evidence
-        forensicContainer.innerHTML = _currentHitlData.forensic.length === 0 ? '<div class="text-slate-500 italic text-sm">No forensic anomalies detected.</div>' :
-            _currentHitlData.forensic.map((item, idx) => `
-            <div class="flex items-start gap-3 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 hover:bg-slate-800 transition-colors">
-                <input type="checkbox" id="hitl_f_${idx}" class="mt-1 w-4 h-4 text-purple-500 rounded border-slate-600 bg-slate-700 focus:ring-purple-500/50" checked data-idx="${idx}" data-type="forensic">
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm text-slate-200 font-medium mb-1">Figure: ${escapeHtml(item.fig_id || 'Unknown')}</p>
-                    <p class="text-xs text-slate-400 leading-snug">${escapeHtml(item.finding || '')}</p>
-                    <p class="text-[11px] text-slate-500 mt-1">${escapeHtml(item.image_path || item.image_url || item.source_file || '')}</p>
-                    <select class="mt-2 text-xs bg-slate-700 border-none rounded text-slate-300 py-1 hitl-severity" data-idx="${idx}" data-type="forensic">
-                        <option value="low" ${item.severity === 'low' ? 'selected' : ''}>Low Severity</option>
-                        <option value="medium" ${item.severity === 'medium' ? 'selected' : ''}>Medium Severity</option>
-                        <option value="high" ${item.severity === 'high' ? 'selected' : ''}>High Severity</option>
-                        <option value="critical" ${item.severity === 'critical' ? 'selected' : ''}>Critical Severity</option>
-                    </select>
-                </div>
-            </div>`).join('');
-
-        hitlModal.classList.remove('hidden');
-    }
-
-    document.getElementById('hitlResumeBtn')?.addEventListener('click', async () => {
-        const btn = document.getElementById('hitlResumeBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Resuming...';
-
-        // Gather approved/modified evidence
-        const approvedText = [];
-        const approvedForensic = [];
-
-        document.querySelectorAll('input[data-type="text"]').forEach(checkbox => {
-            if (checkbox.checked) {
-                const idx = checkbox.getAttribute('data-idx');
-                const item = _currentHitlData.text[idx];
-                const severitySelect = document.querySelector(`select.hitl-severity[data-type="text"][data-idx="${idx}"]`);
-                if (severitySelect) item.severity = severitySelect.value;
-                approvedText.push(item);
-            }
-        });
-
-        document.querySelectorAll('input[data-type="forensic"]').forEach(checkbox => {
-            if (checkbox.checked) {
-                const idx = checkbox.getAttribute('data-idx');
-                const item = _currentHitlData.forensic[idx];
-                const severitySelect = document.querySelector(`select.hitl-severity[data-type="forensic"][data-idx="${idx}"]`);
-                if (severitySelect) item.severity = severitySelect.value;
-                approvedForensic.push(item);
-            }
-        });
-
-        try {
-            const resp = await fetch('/api/hitl/resume', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task_id: _currentHitlData.taskId,
-                    schema_version: _currentHitlData.schemaVersion,
-                    decision: 'approve_selected',
-                    text_evidence: approvedText,
-                    forensic_evidence: approvedForensic
-                })
-            });
-            const data = await resp.json();
-            if (data.status === 'ok' || data.status === 'success') {
-                document.getElementById('hitlModal').classList.add('hidden');
-                updateProgressBar(92, 'HITL approved. Resuming report generation...', true);
-                addLog('info', '✅ Expert review submitted. Resuming workflow...');
-            } else {
-                alert('Failed to resume: ' + (data.message || 'Unknown error'));
-            }
-        } catch (e) {
-            alert('Network error when resuming workflow.');
-            console.error(e);
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>Approve & Generate Report';
-        }
-    });
-
     // === analysis_complete handler (extracted for reuse) ===
     function handleAnalysisComplete(data) {
         stopPollingFallback();
@@ -2713,7 +2465,7 @@
             _lastEventId = Math.max(_lastEventId, data.id || 0);
             const logType = ({
                 'error': 'error', 'warning': 'warning', 'success': 'success',
-                'scanning': 'scanning', 'forensic': 'scanning', 'scan': 'scanning',
+                'scanning': 'scanning', 'scan': 'scanning',
             })[data.level?.toLowerCase()] || 'info';
             addLog(logType, data.message || '', data.image_path || null);
         });
@@ -2749,13 +2501,6 @@
             handleAnalysisComplete(data);
             // Refresh investigate-tab task list if expanded
             if (typeof _igExpanded !== 'undefined' && _igExpanded) igRefreshTaskList();
-        });
-
-        // Human in the Loop (HITL) Logic
-        socket.on('analysis_paused', (data) => {
-            _lastEventId = Math.max(_lastEventId, data.id || 0);
-            openHitlModal(data.text_evidence || [], data.forensic_evidence || [], data || {});
-            addLog('warning', `⏸️ Workflow waiting for human review.`);
         });
 
         socket.on('analysis_error', (data) => {

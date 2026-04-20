@@ -4,6 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from unittest.mock import MagicMock, patch
+from src.agents.report_writer import ReportOutput
 from src.graph.nodes.writer_node import writer_node
 
 
@@ -95,6 +96,29 @@ def test_writer_includes_analysis_status_with_extensions(mock_profile, mock_agen
 
     call_kwargs = mock_agent.write_report.call_args[1]
     assert call_kwargs["analysis_status"] == "FULL_PIPELINE"
+
+
+@patch("src.graph.nodes.writer_node.create_report_agent")
+@patch("src.graph.nodes.writer_node.build_biomedical_profile")
+def test_writer_returns_html_and_pdf_artifact_paths(mock_profile, mock_agent_factory):
+    mock_profile.return_value = {
+        "disease_areas": [], "drug_baselines": [], "target_signals": [],
+        "company_entities": [], "clinical_data": {}, "evidence_stats": {},
+    }
+
+    mock_agent = MagicMock()
+    mock_agent.write_report.return_value = ReportOutput(
+        markdown_content="# Report",
+        markdown_path="final_reports/test.md",
+        html_path="final_reports/test.html",
+        pdf_path="final_reports/test.pdf",
+    )
+    mock_agent_factory.return_value = mock_agent
+
+    result = writer_node(_make_state_with_slots())
+
+    assert result["final_report_html_path"] == "final_reports/test.html"
+    assert result["final_report_pdf_path"] == "final_reports/test.pdf"
 
 
 if __name__ == "__main__":

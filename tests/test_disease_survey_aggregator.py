@@ -111,6 +111,47 @@ def test_aggregate_deduplicates_sponsors():
     assert eisai_sponsors[0].pipeline_count >= 1
 
 
+def test_aggregate_backfills_alternate_asset_and_sponsor_fields():
+    row = {
+        "source": "ClinicalTrials",
+        "nct_id": "NCT77777777",
+        "title": "Alternate metadata trial",
+        "summary": "Backfill test",
+        "metadata": {
+            "interventions": "Drug Z",
+            "trial_sponsor": "Sponsor Z",
+            "phase": "Phase 2",
+            "status": "Recruiting",
+        },
+    }
+
+    state = aggregate_survey_data([row], "test")
+
+    assert state.drug_assets[0].asset_name == "Drug Z"
+    assert state.trials[0].sponsor == "Sponsor Z"
+    assert state.sponsors[0].company_name == "Sponsor Z"
+
+
+def test_aggregate_records_field_audit_metadata():
+    row = {
+        "source": "ClinicalTrials",
+        "nct_id": "NCT88888888",
+        "title": "Missing sponsor trial",
+        "summary": "Audit test",
+        "metadata": {
+            "interventions": "Drug Audit",
+            "phase": "Phase 1",
+        },
+    }
+
+    state = aggregate_survey_data([row], "test")
+
+    audit = state.metadata.get("field_audit", {})
+    assert "missing_asset_count" in audit
+    assert "missing_sponsor_count" in audit
+    assert audit["missing_sponsor_count"] >= 1
+
+
 # ── group_by helpers ──────────────────────────────────────────────────
 
 def test_group_by_target():

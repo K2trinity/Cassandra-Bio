@@ -1,11 +1,11 @@
 """
-PDF Processor - Bio-Short-Seller Scientific Document Analyzer
+PDF Processor - Cassandra Scientific Document Analyzer
 
 This module provides tools to extract images and text from PDF documents,
 specifically optimized for scientific papers and clinical trial reports.
 
 Key Functions:
-- extract_images_from_pdf: Extract figures/charts from PDFs for forensic analysis
+- extract_images_from_pdf: Extract figures/charts from PDFs for figure-level review
 - extract_text_from_pdf: Extract full text for evidence mining
 
 Requires: PyMuPDF (fitz) - install via: pip install pymupdf
@@ -13,9 +13,16 @@ Requires: PyMuPDF (fitz) - install via: pip install pymupdf
 
 import os
 import tempfile
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
-from loguru import logger
+
+try:
+    from loguru import logger
+except Exception:  # pragma: no cover - optional dependency fallback
+    logger = logging.getLogger(__name__)
+    if not logger.handlers:
+        logging.basicConfig(level=logging.INFO)
 
 try:
     import fitz  # PyMuPDF

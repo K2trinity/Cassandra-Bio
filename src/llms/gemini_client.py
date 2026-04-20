@@ -1,5 +1,5 @@
 """
-Centralized Google Gemini client for Bio-Short-Seller.
+Centralized Google Gemini client for Cassandra.
 
 This is the ONLY LLM interface for the entire system.
 All engines (Query, Media, Insight, Report) use this unified client.
@@ -11,8 +11,8 @@ import os
 import ssl
 import time
 import json
+import importlib
 from typing import Any, Dict, List, Optional, Generator, Union
-from loguru import logger
 from pathlib import Path
 
 from google import genai
@@ -24,15 +24,23 @@ from google.api_core import exceptions as google_exceptions
 from ssl import SSLError, SSLEOFError
 
 
+def _resolve_logger():
+    try:
+        return importlib.import_module("loguru").logger
+    except Exception:  # pragma: no cover - optional dependency fallback
+        import logging
+
+        return logging.getLogger(__name__)
+
+
+logger = _resolve_logger()
+
+
 class GeminiClient:
     """
-    Universal Google Gemini API client for all Bio-Short-Seller engines.
+    Universal Google Gemini API client for active Cassandra engines.
     
-    Supports:
-    - Text generation (all engines)
-    - Multimodal vision (MediaEngine)
-    - Long-context reasoning (EvidenceEngine, ReportEngine)
-    - Streaming and non-streaming modes
+    Supports text generation with streaming and non-streaming modes.
     """
 
     # Permissive safety settings for scientific content
@@ -57,31 +65,39 @@ class GeminiClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        project: Optional[str] = None,
+        location: Optional[str] = None,
         # UPDATED: Strictly enforced default model as requested
-        model_name: str = "gemini-3-pro-preview", 
+        model_name: str = "gemini-2.5-pro",
         temperature: float = 1.0,  # 🔥 Gemini 3: MUST keep at 1.0 (default), DO NOT change
         max_output_tokens: int = 8192,  # Gemini 3 supports up to 64k output
     ):
         """
-        Initialize universal Gemini client with auto-fallback support.
+        Initialize universal Gemini client via Vertex AI with auto-fallback support.
 
         Args:
-            api_key: Google API key (defaults to GOOGLE_API_KEY env var)
-            model_name: Model ID (gemini-3-pro-preview)
+            project: Google Cloud project ID (defaults to GOOGLE_CLOUD_PROJECT env var)
+            location: Vertex AI region (defaults to GOOGLE_CLOUD_LOCATION env var, fallback 'asia-northeast1')
+            model_name: Model ID (e.g. gemini-2.5-pro)
             temperature: Sampling temperature - KEEP AT 1.0 for Gemini 3 (changing may cause looping)
             max_output_tokens: Maximum response tokens (Gemini 3 supports up to 64k)
+            
+        ⚠️  VERTEX AI AUTHENTICATION:
+            - Uses Application Default Credentials (ADC).
+            - For local dev: run `gcloud auth application-default login`
+            - For production: use service account or workload identity.
             
         ⚠️  GEMINI 3 RECOMMENDATIONS:
             - Temperature: MUST keep at 1.0 (default). Lower values may cause looping or degraded performance.
             - Thinking Level: Use thinking_level parameter instead of temperature tuning for reasoning control.
             - Context Window: 1M input / 64k output (as of Jan 2025 knowledge cutoff).
         """
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
+        self.project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
+        self.location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "asia-northeast1")
+        if not self.project:
             raise ValueError(
-                "Gemini API key required. Set GOOGLE_API_KEY environment variable "
-                "or pass api_key parameter."
+                "Google Cloud project ID required. Set GOOGLE_CLOUD_PROJECT environment variable "
+                "or pass project parameter. Auth via ADC: run `gcloud auth application-default login`."
             )
 
         self.model_name = model_name
@@ -91,7 +107,7 @@ class GeminiClient:
         # 🔥 NEW: Model fallback chain for quota exhaustion
         fallback_chain_str = os.getenv(
             "MODEL_FALLBACK_CHAIN",
-            "gemini-3-pro-preview,gemini-2.5-pro,gemini-2.5-flash"
+            "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash"
         )
         self.fallback_models = [m.strip() for m in fallback_chain_str.split(",")]
         
@@ -107,9 +123,13 @@ class GeminiClient:
         self.original_model = model_name
         self.downgraded = False
 
-        # Initialize client
-        self.client = genai.Client(api_key=self.api_key)
-        logger.info(f"Initialized central GeminiClient: {model_name} (temp={temperature})")
+        # Initialize Vertex AI client (ADC handles auth automatically)
+        self.client = genai.Client(
+            vertexai=True,
+            project=self.project,
+            location=self.location,
+        )
+        logger.info(f"Initialized central GeminiClient (Vertex AI): {model_name} (temp={temperature}, project={self.project}, location={self.location})")
         logger.debug(f"Model fallback chain: {' → '.join(self.fallback_models)}")
 
     def _try_downgrade_model(self) -> bool:
@@ -143,6 +163,16 @@ class GeminiClient:
             self.current_model_index = self.fallback_models.index(self.original_model)
             self.downgraded = False
             logger.info(f"🔄 Model reset to original: {self.model_name}")
+
+    @staticmethod
+    def _is_model_access_error(error_msg: str) -> bool:
+        """Detect model-not-found / model-access-denied errors returned by Vertex AI."""
+        msg = (error_msg or "").lower()
+        return (
+            ("publisher model" in msg and ("not found" in msg or "does not have access" in msg))
+            or ("404 not_found" in msg and "models/" in msg)
+            or ("permission_denied" in msg and "models/" in msg)
+        )
     
     def _build_config(self, **kwargs) -> types.GenerateContentConfig:
         """Build generation config with overrides.
@@ -259,7 +289,7 @@ class GeminiClient:
                 # 🔥 CRITICAL FIX: Check for None before calling len()
                 if result is None:
                     logger.error(f"⚠️ Gemini returned None response on attempt {attempt}")
-                    if attempt < max_retries:
+                    if attempt < max_attempts:
                         continue  # Retry
                     else:
                         raise ValueError("Gemini API returned None after all retries")
@@ -369,8 +399,9 @@ class GeminiClient:
                     logger.debug("🔧 Attempting SSL connection warmup...")
                     # Create new client to force fresh SSL handshake
                     self.client = genai.Client(
-                        api_key=self.api_key,
-                        http_options={'api_version': 'v1alpha'}
+                        vertexai=True,
+                        project=self.project,
+                        location=self.location,
                     )
                     # Test connection with minimal request
                     self.client.models.generate_content(
@@ -423,11 +454,44 @@ class GeminiClient:
                     logger.info(f"🔄 Rate limit hit, waiting {backoff:.1f}s before retry...")
                     time.sleep(backoff)
                     # Continue to next attempt
+
+            except google_exceptions.NotFound as e:
+                # Model version not available in current region/project
+                last_exception = e
+                logger.error(f"⚠️ Model not found or not accessible: {self.model_name}")
+
+                if self._try_downgrade_model():
+                    logger.info(f"♻️  Retrying with fallback model: {self.model_name}")
+                    attempt = 1
+                    continue
+
+                logger.error("❌ No fallback model left for 404 NOT_FOUND")
+                raise
+
+            except google_exceptions.PermissionDenied as e:
+                # Some projects are denied for specific publisher models.
+                last_exception = e
+                error_msg = str(e)
+                if self._is_model_access_error(error_msg):
+                    logger.error(f"⚠️ Model access denied: {self.model_name}")
+                    if self._try_downgrade_model():
+                        logger.info(f"♻️  Retrying with fallback model: {self.model_name}")
+                        attempt = 1
+                        continue
+                raise
             
             except Exception as e:
                 # 🔥 CRITICAL FIX: Catch errors that aren't properly typed
                 error_msg = str(e)
                 error_dict = getattr(e, 'args', ())
+
+                # Some SDK layers surface 404/permission issues as generic exceptions.
+                if self._is_model_access_error(error_msg):
+                    logger.error(f"⚠️ Model unavailable for current project/region: {self.model_name}")
+                    if self._try_downgrade_model():
+                        logger.info(f"♻️  Retrying with fallback model: {self.model_name}")
+                        attempt = 1
+                        continue
                 
                 # 🔥 NEW: Check for SSL errors that weren't caught by specific handler
                 is_ssl_error = (
@@ -448,8 +512,9 @@ class GeminiClient:
                         # Force client recreation
                         try:
                             self.client = genai.Client(
-                                api_key=self.api_key,
-                                http_options={'api_version': 'v1alpha'}
+                                vertexai=True,
+                                project=self.project,
+                                location=self.location,
                             )
                             logger.debug("🔧 Recreated Gemini client for SSL recovery")
                         except Exception as recreate_error:
@@ -521,8 +586,9 @@ class GeminiClient:
                         # Recreate client to establish fresh connection
                         try:
                             self.client = genai.Client(
-                                api_key=self.api_key,
-                                http_options={'api_version': 'v1alpha'}
+                                vertexai=True,
+                                project=self.project,
+                                location=self.location,
                             )
                             logger.debug("🔧 Recreated Gemini client after disconnect")
                         except Exception as recreate_error:
@@ -697,7 +763,9 @@ class GeminiClient:
             "model_name": self.model_name,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
-            "provider": "Google Gemini",
+            "provider": "Google Gemini (Vertex AI)",
+            "project": self.project,
+            "location": self.location,
         }
 
     # ===== Compatibility Methods for Legacy Code =====
@@ -738,71 +806,33 @@ class GeminiClient:
         return f"GeminiClient(model={self.model_name}, temp={self.temperature})"
 
 
-# Convenience factory functions for specific use cases
-# UPDATED: All engines strictly default to gemini-3-pro-preview
+# Convenience factory functions for active use cases
 
 def create_bioharvest_client() -> GeminiClient:
     """
-    Create client optimized for BioHarvestEngine (biomedical literature search).
-    
-    Formerly create_query_client() - renamed to match new BioHarvestEngine.
-    Uses lower temperature for precise search query generation.
-    
-    🔥 Gemini 3: Consider using thinking_level="low" for fast query generation.
+    Legacy shim for Harvest query client construction.
+
+    The canonical factory now lives in Harvest to keep harvest-specific
+    instantiation out of src.
     """
-    return GeminiClient(
-        model_name=os.getenv("BIOHARVEST_MODEL_NAME", "gemini-2.5-flash"),
-        temperature=float(os.getenv("BIOHARVEST_TEMPERATURE", "0.3")),  # ⚠️ Non-Gemini-3 model
-        max_output_tokens=int(os.getenv("BIOHARVEST_MAX_TOKENS", "4096")),
-    )
+    from src.engines.harvest.llm.client_factory import create_harvest_client
+
+    return create_harvest_client()
 
 
 # Alias for backwards compatibility
 create_query_client = create_bioharvest_client
 
 
-def create_forensic_client() -> GeminiClient:
-    """
-    Create client optimized for ForensicEngine (vision, image analysis).
-    
-    Formerly create_media_client() - renamed to match new ForensicEngine.
-    Uses Gemini 3 Pro Preview for precise forensic analysis.
-    
-    🔥 Gemini 3: Keep temperature at 1.0 (default) for best reasoning performance.
-    🔧 Token Fix: Increased to 8192 to prevent JSON truncation (System Prompt ~2.5k + Image ~1.5k + Output ~4k)
-    """
-    return GeminiClient(
-        model_name=os.getenv("FORENSIC_MODEL_NAME", "gemini-3.1-pro-preview"),
-        temperature=float(os.getenv("FORENSIC_TEMPERATURE", "1.0")),  # ✅ Gemini 3 default
-        max_output_tokens=int(os.getenv("FORENSIC_MAX_TOKENS", "8192")),  # 🔥 FIXED: 4096 → 8192
-    )
-
-
-# Alias for backwards compatibility
-create_media_client = create_forensic_client
-
-
-def create_evidence_client() -> GeminiClient:
-    """Create client optimized for EvidenceEngine (long-context PDFs).
-    
-    🔥 Gemini 3: Uses 2.5-pro as Evidence processing doesn't require Gemini 3 reasoning.
-    """
-    return GeminiClient(
-        model_name=os.getenv("EVIDENCE_MODEL_NAME", "gemini-2.5-pro"),
-        temperature=float(os.getenv("EVIDENCE_TEMPERATURE", "0.4")),  # ⚠️ Non-Gemini-3 model
-        max_output_tokens=int(os.getenv("EVIDENCE_MAX_TOKENS", "8192")),
-    )
-
-
 def create_report_client() -> GeminiClient:
     """
     Create client optimized for ReportEngine (long-form generation).
     
-    🔥 Gemini 3 Pro Preview: Best for complex reasoning and report synthesis.
+    Uses a stable default model with automatic fallback for region/access differences.
     Uses default temperature (1.0) for optimal reasoning performance.
     """
     return GeminiClient(
-        model_name=os.getenv("REPORT_MODEL_NAME", "gemini-3-pro-preview"),
+        model_name=os.getenv("REPORT_MODEL_NAME", "gemini-2.5-pro"),
         temperature=float(os.getenv("REPORT_TEMPERATURE", "1.0")),  # ✅ Gemini 3 default
         max_output_tokens=int(os.getenv("REPORT_MAX_TOKENS", "8192")),
     )

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Cassandra - Biomedical Due Diligence Configuration
+Cassandra - Biomedical Research Analysis Configuration
 
 This module uses pydantic-settings to manage global configuration with automatic
 loading from environment variables and .env files.
 
 Architecture:
-- Google Gemini 3.0 Pro: Primary Intelligence Layer (Global Leader)
+- Google Gemini via Vertex AI: Primary Intelligence Layer (Global Leader)
 - Neo4j: Knowledge Graph Database
 - Redis: State Management & Caching
 - Flask: REST API Server
@@ -14,6 +14,7 @@ Architecture:
 """
 
 from pathlib import Path
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict
 from typing import Optional
@@ -43,7 +44,7 @@ def _ensure_env_file() -> None:
                 env_path.write_text(env_example.read_text(encoding='utf-8'), encoding='utf-8')
                 logger.success(f"✅ Created .env file at: {env_path}")
                 logger.info("📝 Please edit .env with your API keys before running the application.")
-                logger.info("   Required keys: GOOGLE_API_KEY")
+                logger.info("   Required keys: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION")
                 sys.exit(0)
             except Exception as e:
                 logger.error(f"❌ Failed to create .env file: {e}")
@@ -55,10 +56,15 @@ def _ensure_env_file() -> None:
             from loguru import logger
             logger.warning("⚠️ Neither .env nor .env.example found.")
             logger.info("💡 Create a .env file with required configuration:")
-            logger.info("   GOOGLE_API_KEY=your_api_key_here")
+            logger.info("   GOOGLE_CLOUD_PROJECT=your_project_id")
+            logger.info("   GOOGLE_CLOUD_LOCATION=your_region")
 
 # Run check on import
 _ensure_env_file()
+
+# Force .env to override stale terminal/session variables.
+# This keeps runtime LLM project/location consistent with workspace config.
+load_dotenv(dotenv_path=ENV_FILE, override=True)
 
 
 class Settings(BaseSettings):
@@ -98,11 +104,17 @@ class Settings(BaseSettings):
         description="Redis connection URL for state management and caching (use 'redis:6379' in Docker)"
     )
     
-    # ================== Section 3: Intelligence Layer (Google Gemini) ====================
-    # Primary API Key (Required for all engines)
-    GOOGLE_API_KEY: Optional[str] = Field(
+    # ================== Section 3: Intelligence Layer (Vertex AI) ====================
+    # Vertex AI Project & Region (Required for all engines)
+    # Authentication is handled via Application Default Credentials (ADC):
+    #   Run `gcloud auth application-default login` for local dev
+    GOOGLE_CLOUD_PROJECT: Optional[str] = Field(
         None,
-        description="Google Gemini API Key (obtain from https://ai.google.dev/)"
+        description="Google Cloud project ID for Vertex AI (e.g. 'gen-lang-client-0476183533')"
+    )
+    GOOGLE_CLOUD_LOCATION: str = Field(
+        "asia-northeast1",
+        description="Vertex AI region/location (e.g. 'us-central1', 'asia-northeast1')"
     )
     
     # BioHarvest Engine - PubMed/Clinical Trials Literature Search
@@ -119,38 +131,10 @@ class Settings(BaseSettings):
         description="BioHarvest maximum output tokens"
     )
     
-    # Evidence Engine - PDF Document Mining & Dark Data Extraction
-    EVIDENCE_MODEL_NAME: str = Field(
-        "gemini-2.5-pro",
-        description="Evidence engine model for long-context PDF analysis (Advanced reasoning)"
-    )
-    EVIDENCE_TEMPERATURE: float = Field(
-        0.4,
-        description="Evidence sampling temperature (balanced for fact extraction)"
-    )
-    EVIDENCE_MAX_TOKENS: int = Field(
-        8192,
-        description="Evidence maximum output tokens (supports long-form analysis)"
-    )
-    
-    # Forensic Engine - Image Forensics & Multimodal Scientific Analysis
-    FORENSIC_MODEL_NAME: str = Field(
-        "gemini-3-pro-preview",
-        description="Forensic engine model for multimodal vision analysis (Gemini 3 Pro Preview)"
-    )
-    FORENSIC_TEMPERATURE: float = Field(
-        0.2,
-        description="Forensic sampling temperature (low for rigorous forensic tasks)"
-    )
-    FORENSIC_MAX_TOKENS: int = Field(
-        4096,
-        description="Forensic maximum output tokens"
-    )
-    
-    # Report Engine - Biomedical Due Diligence Report Generation
+    # Report Engine - Biomedical Research Report Generation
     REPORT_MODEL_NAME: str = Field(
-        "gemini-3-pro-preview",
-        description="Report engine model for comprehensive report synthesis (Gemini 3 Pro Preview)"
+        "gemini-2.5-pro",
+        description="Report engine model for comprehensive report synthesis (stable default)"
     )
     REPORT_TEMPERATURE: float = Field(
         0.7,
@@ -183,8 +167,30 @@ class Settings(BaseSettings):
     
     # Model Fallback Configuration - Auto-downgrade when quota exhausted
     MODEL_FALLBACK_CHAIN: str = Field(
-        "gemini-3-pro-preview,gemini-2.5-pro,gemini-2.5-flash,gemini-1.5-pro,gemini-1.5-flash",
+        "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro,gemini-1.5-flash",
         description="Comma-separated list of models to try in order when quota is exhausted (highest to lowest priority)"
+    )
+    
+    # ================== Section 6: SciSpacy Biomedical NER ====================
+    SCISPACY_MODEL_NAME: str = Field(
+        "en_ner_bionlp13cg_md",
+        description="SciSpacy model for biomedical NER (default: BioNLP13CG medium/lightweight)"
+    )
+    SCISPACY_MODEL_VERSION: str = Field(
+        "0.5.4",
+        description="SciSpacy model package version used in download URLs"
+    )
+    SCISPACY_ENABLE_UMLS_LINKER: bool = Field(
+        False,
+        description="Enable UMLS concept linking (requires ~3GB additional data download)"
+    )
+    SCISPACY_SENTENCE_SCORE_THRESHOLD: float = Field(
+        0.15,
+        description="Minimum sentence score to keep in SmartContextBuilder v2 (0.0-1.0)"
+    )
+    SCISPACY_STATS_HARD_PROTECT: bool = Field(
+        True,
+        description="Always keep sentences containing statistical data (p-value, CI, HR)"
     )
     
     # Pydantic Settings Configuration

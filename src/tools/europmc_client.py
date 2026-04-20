@@ -1,5 +1,5 @@
 """
-Europe PMC API Client - Bio-Short-Seller PDF Retrieval
+Europe PMC API Client - Cassandra PDF Retrieval
 
 Europe PMC (https://europepmc.org) provides a comprehensive database of life sciences literature
 with direct access to full-text PDFs via a REST API.

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Bio-Short-Seller - Biomedical Due Diligence Platform
+Cassandra - Biomedical Research Workflow Platform
 Main CLI Entry Point
 
-This is the command-line interface for executing the full Bio-Short-Seller workflow.
+This is the command-line interface for executing the Cassandra workflow.
 
 Usage:
     python main.py "Analyze drug X safety concerns" [--pdfs path1.pdf path2.pdf]
@@ -37,22 +37,20 @@ logger.add(
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from src.agents.supervisor import run_bio_short_seller
+from src.agents.supervisor import run_cassandra_workflow
 
 
 def print_banner():
-    """Print the Bio-Short-Seller banner."""
+    """Print the Cassandra banner."""
     banner = """
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                           ║
-║                        BIO-SHORT-SELLER v1.0                              ║
-║                   Biomedical Due Diligence Platform                       ║
+║                            CASSANDRA v1.0                                 ║
+║                 Biomedical Research Workflow Platform                     ║
 ║                                                                           ║
 ║  Powered by:                                                              ║
 ║    • Google Gemini Pro (2M token context)                                 ║
 ║    • BioHarvestEngine (PubMed + ClinicalTrials.gov)                       ║
-║    • ForensicEngine (AI Image Forensics)                                  ║
-║    • EvidenceEngine (Dark Data Miner)                                     ║
 ║    • LangGraph Orchestration                                              ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -64,10 +62,10 @@ def interactive_mode():
     """Run in interactive mode - prompt user for input."""
     print_banner()
     
-    print("\n🔬 Welcome to Bio-Short-Seller Interactive Mode\n")
-    print("This tool performs forensic due diligence on biomedical research.")
-    print("It analyzes scientific literature, clinical trials, and research papers")
-    print("to uncover buried negative results and potential fraud.\n")
+    print("\n🔬 Welcome to Cassandra Interactive Mode\n")
+    print("This tool runs a connected biomedical research analysis workflow.")
+    print("It analyzes scientific literature and trial metadata to produce")
+    print("a structured disease-oriented report.\n")
     
     # Get user query
     print("=" * 80)
@@ -102,10 +100,8 @@ def interactive_mode():
     print(f"Pre-loaded PDFs: {len(pdf_paths)}")
     print("\nWorkflow Steps:")
     print("  1. 🔬 BioHarvest: Search PubMed + ClinicalTrials.gov")
-    print("  2. 🕵️  Evidence Miner: Extract dark data from supplementary materials (parallel)")
-    print("  3. 🔍 Forensic Auditor: Analyze scientific figures for manipulation (parallel)")
-    print("  4. 🧩 Graph Builder: Aggregate and validate evidence")
-    print("  5. 📝 Report Writer: Generate due diligence report")
+    print("  2. 🧩 Extension Handoff: Reserve insertion slots for future agents")
+    print("  3. 📝 Report Writer: Generate structured final report")
     print("=" * 80)
     
     confirm = input("\nProceed with analysis? (y/n): ")
@@ -119,7 +115,7 @@ def interactive_mode():
 
 def run_workflow(user_query: str, pdf_paths: list = None):
     """
-    Execute the Bio-Short-Seller workflow.
+    Execute the Cassandra workflow.
     
     Args:
         user_query: Research question
@@ -132,7 +128,7 @@ def run_workflow(user_query: str, pdf_paths: list = None):
     
     try:
         # Execute workflow
-        final_state = run_bio_short_seller(user_query, pdf_paths)
+        final_state = run_cassandra_workflow(user_query, pdf_paths)
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()
@@ -184,7 +180,7 @@ def main():
     
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
-        description="Bio-Short-Seller - Biomedical Due Diligence Platform",
+        description="Cassandra - Biomedical Research Workflow Platform",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -228,7 +224,7 @@ Examples:
         interactive_mode()
     else:
         # Direct execution mode
-        logger.info(f"🚀 Starting Bio-Short-Seller workflow...")
+        logger.info(f"🚀 Starting Cassandra workflow...")
         logger.info(f"📋 Query: {args.query}")
         
         if args.pdfs:

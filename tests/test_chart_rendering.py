@@ -20,11 +20,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.report_engine.ir.schema import (
+from src.engines.report_engine.ir.schema import (
     IRDocument, Chapter, ChapterBlock, BlockType,
 )
-from src.report_engine.ir.validator import IRValidator
-from src.report_engine.renderers.html_renderer import HTMLRenderer, _render_chart, _render_wordcloud
+from src.engines.report_engine.ir.validator import IRValidator
+from src.engines.report_engine.renderers.html_renderer import HTMLRenderer, _render_chart, _render_wordcloud
+from src.engines.report_engine.utils.chart_repair_api import create_llm_repair_functions
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,6 +403,22 @@ class TestChartBlockDeserialization(unittest.TestCase):
         block = ChapterBlock.from_dict(data)
         self.assertEqual(block.content["labels"][0], "2021-Q1")
         self.assertEqual(block.content["datasets"][0]["data"][3], 130)
+
+
+class TestChartRepairHooks(unittest.TestCase):
+
+    def test_create_llm_repair_functions_returns_callable_when_client_available(self):
+        from unittest.mock import patch
+
+        class _StubClient:
+            def invoke(self, system_prompt: str, user_prompt: str, **kwargs):
+                return '{"widgetType":"chart.js/bar","props":{"type":"bar"},"data":{"labels":["A"],"datasets":[{"data":[1]}]}}'
+
+        with patch("src.engines.report_engine.utils.chart_repair_api.create_report_client", return_value=_StubClient()):
+            hooks = create_llm_repair_functions()
+
+        self.assertTrue(hooks)
+        self.assertTrue(callable(hooks[0]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

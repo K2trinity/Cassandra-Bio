@@ -2,12 +2,12 @@
 Smart Context Builder - Intelligent Evidence Context Optimizer
 
 This module implements a token-aware context builder that prioritizes
-high-risk evidence and compresses low-value information to prevent
+high-impact evidence and compresses low-value information to prevent
 SSL errors caused by oversized prompts.
 
 Core Strategy:
-1. PRIORITIZE: Extract all high-risk signals first
-2. COMPRESS: Fold "clean" papers into one-liners
+1. PRIORITIZE: Extract all high-impact findings first
+2. COMPRESS: Fold supplementary papers into one-liners
 3. FILL: Dynamically add summaries until token limit
 
 Author: Cassandra Project
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 class ContextBudget:
     """Token budget allocation for different evidence types."""
     max_tokens: int = 30000  # Conservative limit (≈120k chars for Gemini)
-    critical_reserve: int = 5000  # Reserve for high-risk findings
+    critical_reserve: int = 5000  # Reserve for high-impact findings
     summary_per_paper: int = 800  # Avg chars per paper summary
     clean_paper_budget: int = 100  # Chars for "clean" papers
     
@@ -42,7 +42,7 @@ class SmartContextBuilder:
     Intelligent evidence context builder with token awareness.
     
     Optimizes prompt size by:
-    1. Prioritizing high-risk evidence
+    1. Prioritizing high-impact evidence
     2. Compressing low-value information
     3. Dynamically filling remaining space
     """
@@ -61,14 +61,12 @@ class SmartContextBuilder:
     def build_optimized_context(
         self,
         evidence_items: List[Dict[str, Any]],
-        forensic_items: List[Dict[str, Any]]
     ) -> Tuple[str, Dict[str, int]]:
         """
         Build optimized evidence context with intelligent prioritization.
         
         Args:
             evidence_items: List of evidence dictionaries from EvidenceMiner
-            forensic_items: List of forensic audit results
         
         Returns:
             Tuple of (optimized_context_string, statistics_dict)
@@ -88,25 +86,21 @@ class SmartContextBuilder:
         medium_evidence = []
         clean_evidence = []
         
-        # Classify evidence by risk level
+        # Classify evidence by significance level
         for item in evidence_items:
-            risk_level = item.get('risk_level', 'UNKNOWN').upper()
+            significance = item.get('significance', 'UNKNOWN').upper()
             
-            if risk_level == 'HIGH':
+            if significance in ('HIGH', 'HIGH_IMPACT'):
                 critical_evidence.append(item)
-            elif risk_level == 'MEDIUM':
+            elif significance in ('MEDIUM', 'MODERATE'):
                 medium_evidence.append(item)
             else:
                 clean_evidence.append(item)
         
-        # Classify forensic findings
-        suspicious_images = [f for f in forensic_items if f.get('status') == 'SUSPICIOUS']
-        
         logger.info(f"📊 Evidence Classification:")
-        logger.info(f"   - HIGH Risk: {len(critical_evidence)}")
-        logger.info(f"   - MEDIUM Risk: {len(medium_evidence)}")
-        logger.info(f"   - LOW/Clean: {len(clean_evidence)}")
-        logger.info(f"   - Suspicious Images: {len(suspicious_images)}")
+        logger.info(f"   - HIGH Impact: {len(critical_evidence)}")
+        logger.info(f"   - MODERATE: {len(medium_evidence)}")
+        logger.info(f"   - SUPPLEMENTARY/Clean: {len(clean_evidence)}")
         
         # Build context in priority order
         context_parts = []
@@ -115,7 +109,7 @@ class SmartContextBuilder:
         
         # ============ PHASE 1: CRITICAL RISKS (ALWAYS INCLUDE) ============
         logger.info("\n🚨 Phase 1: Adding Critical Risks (Top Priority)")
-        critical_section = self._build_critical_section(critical_evidence, suspicious_images)
+        critical_section = self._build_critical_section(critical_evidence)
         critical_chars = len(critical_section)
         
         if critical_chars > 0:
@@ -187,7 +181,6 @@ class SmartContextBuilder:
             'critical_count': len(critical_evidence),
             'medium_count': len(medium_evidence),
             'clean_count': len(clean_evidence),
-            'suspicious_images': len(suspicious_images),
             'compression_ratio': final_chars / original_size if (evidence_items and original_size > 0) else 1.0  # 🔥 FIX: Default to 1.0 (no compression) if original is empty
         }
         
@@ -199,23 +192,194 @@ class SmartContextBuilder:
         logger.info("="*60 + "\n")
         
         return final_context, stats
-    
+
+    # ==================================================================
+    # V2: SciSpacy NER-based Sentence-Level Importance Scoring
+    # ==================================================================
+
+    def build_scored_context(
+        self,
+        evidence_items: List[Dict[str, Any]],
+    ) -> Tuple[str, Dict[str, int]]:
+        """
+        Build optimized evidence context using **sentence-level NER filtering**.
+
+        This replaces the disabled v1 ``build_optimized_context`` which
+        suffered from 91% over-compression.  The new strategy:
+
+        Phase 1 — Split all evidence text into individual sentences
+        Phase 2 — Extract entities via SciSpacy NER + statistics regex
+        Phase 3 — Hard-protect sentences containing statistical data
+        Phase 4 — Fill remaining budget with entity-rich sentences
+
+        Returns
+        -------
+        (optimized_context, statistics_dict)
+        """
+        logger.info("\n" + "=" * 60)
+        logger.info("🧠 SMART CONTEXT BUILDER V2: NER-Based Sentence Filtering")
+        logger.info("=" * 60)
+
+        max_chars = self.budget.tokens_to_chars(self.budget.max_tokens)
+
+        # --- lazy-import NER service (avoids hard dependency at module level) ---
+        try:
+            from src.tools.scispacy_ner_service import SciSpacyNERService
+            ner = SciSpacyNERService.get_instance()
+            ner_available = True
+        except Exception as exc:
+            logger.warning(f"⚠️ SciSpacy unavailable ({exc}), falling back to regex-only filtering")
+            ner_available = False
+
+        # Read configurable flag
+        try:
+            from config import settings
+            stats_hard_protect: bool = getattr(settings, "SCISPACY_STATS_HARD_PROTECT", True)
+        except Exception:
+            stats_hard_protect = True
+
+        # ----- Phase 1: Collect sentences from all evidence items -------
+        from src.tools.scispacy_ner_service import ScoredSentence, _STATS_PATTERN
+
+        all_sentences: List[ScoredSentence] = []
+
+        for item in evidence_items:
+            text = item.get("paper_summary", "") or item.get("quote", "")
+            filename = item.get("filename", "unknown")
+            if not text:
+                continue
+
+            if ner_available:
+                sentences = ner.split_sentences(text)
+                for s in sentences:
+                    entities = ner.extract_entities(s)
+                    has_stats = bool(_STATS_PATTERN.search(s))
+                    all_sentences.append(ScoredSentence(
+                        text=s,
+                        entities=entities,
+                        has_statistics=has_stats,
+                        section=filename,
+                    ))
+            else:
+                # Fallback: naive sentence split + regex-only
+                sentences = [s.strip() for s in text.split(".") if s.strip()]
+                for s in sentences:
+                    has_stats = bool(_STATS_PATTERN.search(s))
+                    all_sentences.append(ScoredSentence(
+                        text=s,
+                        entities=[],
+                        has_statistics=has_stats,
+                        section=filename,
+                    ))
+
+        logger.info(f"📊 Total sentences collected: {len(all_sentences)}")
+
+        # ----- Phase 2: Separate hard-protected vs entity-rich -----
+        protected: List[ScoredSentence] = []
+        entity_rich: List[ScoredSentence] = []
+
+        for sc in all_sentences:
+            if stats_hard_protect and sc.has_statistics:
+                protected.append(sc)
+            elif len(sc.entities) > 0:
+                entity_rich.append(sc)
+            # else: discard (no entities, no statistics)
+
+        # Sort entity-rich by descending entity count
+        entity_rich.sort(key=lambda s: len(s.entities), reverse=True)
+
+        discarded_count = len(all_sentences) - len(protected) - len(entity_rich)
+        logger.info(f"   🛡️ Hard-protected (statistics): {len(protected)}")
+        logger.info(f"   📈 Entity-rich sentences: {len(entity_rich)}")
+        logger.info(f"   🗑️ Discarded (no entities): {discarded_count}")
+
+        # ----- Phase 3: Fill budget -----
+        context_parts: List[str] = []
+        char_counter = 0
+
+        # Protected sentences first
+        protected_lines: List[str] = []
+        for sc in protected:
+            line = f"[📊 {sc.section}] {sc.text}"
+            if char_counter + len(line) + 1 > max_chars:
+                break
+            protected_lines.append(line)
+            char_counter += len(line) + 1
+
+        if protected_lines:
+            section_header = (
+                "=" * 80
+                + "\n📊 STATISTICALLY CRITICAL SENTENCES (Hard-Protected)\n"
+                + "=" * 80
+                + "\n"
+            )
+            context_parts.append(section_header + "\n".join(protected_lines))
+            char_counter += len(section_header)
+
+        # Entity-rich sentences (remaining budget)
+        rich_lines: List[str] = []
+        for sc in entity_rich:
+            ent_count = len(sc.entities)
+            line = f"[{ent_count} entities | {sc.section}] {sc.text}"
+            if char_counter + len(line) + 1 > max_chars:
+                break
+            rich_lines.append(line)
+            char_counter += len(line) + 1
+
+        if rich_lines:
+            section_header = (
+                "\n"
+                + "=" * 80
+                + "\n📈 HIGH-RELEVANCE EVIDENCE (By Entity Density)\n"
+                + "=" * 80
+                + "\n"
+            )
+            context_parts.append(section_header + "\n".join(rich_lines))
+            char_counter += len(section_header)
+
+        # ----- Phase 4: Assemble and report -----
+        final_context = "\n\n".join(context_parts)
+        final_chars = len(final_context)
+        final_tokens = self.budget.chars_to_tokens(final_chars)
+
+        original_size = sum(
+            len(str(item.get("paper_summary", ""))) for item in evidence_items
+        )
+        compression = final_chars / original_size if original_size > 0 else 1.0
+
+        stats = {
+            "total_chars": final_chars,
+            "total_tokens": final_tokens,
+            "protected_count": len(protected_lines),
+            "entity_rich_count": len(rich_lines),
+            "discarded_count": discarded_count,
+            "compression_ratio": compression,
+        }
+
+        logger.info("\n" + "=" * 60)
+        logger.success("✅ CONTEXT OPTIMISATION V2 COMPLETE")
+        logger.info(f"   Original: {original_size:,} chars")
+        logger.info(f"   Final:    {final_chars:,} chars ({final_tokens:,} tokens)")
+        logger.info(f"   Budget:   {(final_tokens / self.budget.max_tokens * 100):.1f}%")
+        logger.info(f"   Compression: {compression:.1%}")
+        logger.info("=" * 60 + "\n")
+
+        return final_context, stats
+
     def _build_critical_section(
         self,
         critical_items: List[Dict[str, Any]],
-        suspicious_images: List[Dict[str, Any]]
     ) -> str:
         """
         Build section for HIGH-risk evidence (always included).
         
         Args:
             critical_items: High-risk evidence items
-            suspicious_images: Suspicious forensic findings
         
         Returns:
             Formatted critical evidence section
         """
-        if not critical_items and not suspicious_images:
+        if not critical_items:
             return ""
         
         lines = [
@@ -228,28 +392,15 @@ class SmartContextBuilder:
         # Add critical text evidence
         for idx, item in enumerate(critical_items, 1):
             filename = item.get('filename', 'Unknown')
-            risk_type = item.get('risk_type', 'Unknown')
+            risk_type = item.get('finding_type', 'Unknown')
             quote = item.get('quote', 'N/A')
             explanation = item.get('explanation', 'N/A')
             
             lines.extend([
-                f"### 🔴 CRITICAL RISK #{idx}: {risk_type}",
+                f"### 🔴 HIGH IMPACT #{idx}: {risk_type}",
                 f"**Source:** {filename}",
                 f"**Quote:** {quote[:300]}{'...' if len(quote) > 300 else ''}",
                 f"**Analysis:** {explanation[:400]}{'...' if len(explanation) > 400 else ''}",
-                ""
-            ])
-        
-        # Add suspicious images
-        for idx, img in enumerate(suspicious_images, 1):
-            image_id = img.get('image_id', f'Image_{idx}')
-            findings = img.get('findings', 'Manipulation detected')
-            score = img.get('tampering_risk_score', 0.0)
-            
-            lines.extend([
-                f"### 🔍 SUSPICIOUS IMAGE #{idx}: {image_id}",
-                f"**Risk Score:** {score:.2f}/1.0",
-                f"**Findings:** {findings[:300]}{'...' if len(str(findings)) > 300 else ''}",
                 ""
             ])
         
@@ -285,7 +436,7 @@ class SmartContextBuilder:
         
         for item in medium_items:
             filename = item.get('filename', 'Unknown')
-            risk_type = item.get('risk_type', 'Statistical Concern')
+            risk_type = item.get('finding_type', 'Evidence')
             quote = item.get('quote', 'N/A')
             
             item_text = f"**{filename}** | {risk_type}: {quote[:200]}...\n"

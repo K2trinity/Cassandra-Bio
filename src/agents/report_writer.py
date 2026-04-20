@@ -193,6 +193,15 @@ class ReportWriterAgent:
             },
         )
 
+        if self._is_disease_survey(rows):
+            logger.info(f"Disease survey detected ({len(rows)} rows), routing to structured pipeline")
+            return self._write_disease_survey_report(
+                rows=rows,
+                user_query=_safe_text(user_query, 500),
+                output_dir=output_dir,
+                project_name=resolved_project_name,
+            )
+
         markdown_content = self._render_markdown(
             report_data=report_data,
             rows=rows,
@@ -202,6 +211,11 @@ class ReportWriterAgent:
         )
 
         markdown_path = self._save_markdown(
+            markdown_content=markdown_content,
+            output_dir=output_dir,
+            project_name=resolved_project_name,
+        )
+        html_path, pdf_path = self._save_rendered_artifacts(
             markdown_content=markdown_content,
             output_dir=output_dir,
             project_name=resolved_project_name,
@@ -216,6 +230,8 @@ class ReportWriterAgent:
         return ReportOutput(
             markdown_content=markdown_content,
             markdown_path=markdown_path,
+            html_path=html_path,
+            pdf_path=pdf_path,
             analysis_position=analysis_position,
             data_confidence=data_confidence,
             signal_severity_score=signal_score,
@@ -252,6 +268,61 @@ class ReportWriterAgent:
             failed_files=failed_files,
             contract_version=contract_version,
             **extra_payload,
+        )
+
+    @staticmethod
+    def _is_disease_survey(rows: List[Dict[str, Any]]) -> bool:
+        if len(rows) < 5:
+            return False
+
+        def _has_identifier(r: Dict[str, Any]) -> bool:
+            if r.get("nct_id") or r.get("pmid"):
+                return True
+            meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
+            return bool(meta.get("nct_id") or meta.get("nct_number") or meta.get("pmid"))
+
+        survey_count = sum(1 for r in rows if _has_identifier(r))
+        return survey_count / len(rows) > 0.5
+
+    def _write_disease_survey_report(
+        self,
+        rows: List[Dict[str, Any]],
+        user_query: str,
+        output_dir: str,
+        project_name: str,
+    ) -> "ReportOutput":
+        from src.engines.report_engine.disease_survey.aggregator import aggregate_survey_data
+        from src.engines.report_engine.disease_survey.composer import (
+            compose_disease_survey_report_bundle,
+        )
+
+        state = aggregate_survey_data(rows, user_query)
+        logger.info(
+            f"Disease survey aggregated: {len(state.drug_assets)} assets, "
+            f"{len(state.trials)} trials, {len(state.literature)} literature"
+        )
+        bundle = compose_disease_survey_report_bundle(state, llm_client=self.llm)
+        markdown_content = bundle["markdown"]
+        markdown_path = self._save_markdown(
+            markdown_content=markdown_content,
+            output_dir=output_dir,
+            project_name=project_name,
+        )
+        document_ir = bundle["document_ir"]
+        html_path, pdf_path = self._save_rendered_artifacts(
+            markdown_content=markdown_content,
+            output_dir=output_dir,
+            project_name=project_name,
+            document_ir=document_ir,
+        )
+        return ReportOutput(
+            markdown_content=markdown_content,
+            markdown_path=markdown_path,
+            html_path=html_path,
+            pdf_path=pdf_path,
+            analysis_position="DISEASE_SURVEY",
+            data_confidence=9.0,
+            signal_severity_score=0.0,
         )
 
     def _extract_harvest_rows(self, harvest_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -463,6 +534,69 @@ class ReportWriterAgent:
         except Exception as exc:
             logger.warning(f"Failed to save markdown report: {exc}")
             return None
+
+    def _save_rendered_artifacts(
+        self,
+        markdown_content: str,
+        output_dir: str,
+        project_name: str,
+        document_ir: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        def _write_placeholder_pdf(path: Path) -> None:
+            placeholder = (
+                b"%PDF-1.4\n"
+                b"1 0 obj<<>>endobj\n"
+                b"2 0 obj<< /Type /Catalog /Pages 3 0 R >>endobj\n"
+                b"3 0 obj<< /Type /Pages /Kids [4 0 R] /Count 1 >>endobj\n"
+                b"4 0 obj<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] >>endobj\n"
+                b"xref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000028 00000 n \n"
+                b"0000000077 00000 n \n0000000136 00000 n \ntrailer<< /Root 2 0 R /Size 5 >>\n"
+                b"startxref\n206\n%%EOF\n"
+            )
+            path.write_bytes(placeholder)
+
+        try:
+            output_path = Path(output_dir or "final_reports")
+            output_path.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_project = sanitize_filename(project_name, max_length=80)
+            html_file = output_path / f"{safe_project}_{timestamp}.html"
+            pdf_file = output_path / f"{safe_project}_{timestamp}.pdf"
+
+            from src.engines.report_engine.renderers.html_renderer import HTMLRenderer
+            from src.engines.report_engine.renderers.pdf_renderer import PDFRenderer
+
+            html_renderer = HTMLRenderer()
+            pdf_renderer = PDFRenderer()
+
+            if document_ir:
+                html_content = html_renderer.render(document_ir)
+            else:
+                html_content = html_renderer.render_from_markdown(
+                    markdown_content,
+                    title=project_name,
+                    query=project_name,
+                )
+            html_file.write_text(html_content, encoding="utf-8")
+
+            try:
+                if document_ir:
+                    pdf_renderer.render_to_pdf(document_ir, pdf_file)
+                else:
+                    pdf_renderer.render_markdown_to_file(
+                        markdown_content,
+                        pdf_file,
+                        title=project_name,
+                        query=project_name,
+                    )
+            except Exception as exc:
+                logger.warning(f"PDF rendering unavailable, writing placeholder PDF: {exc}")
+                _write_placeholder_pdf(pdf_file)
+
+            return str(html_file), str(pdf_file)
+        except Exception as exc:
+            logger.warning(f"Failed to save HTML/PDF artifacts: {exc}")
+            return None, None
 
 
 def create_agent() -> ReportWriterAgent:

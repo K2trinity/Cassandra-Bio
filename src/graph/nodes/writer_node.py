@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from typing import Any, Dict, List
 
 
@@ -19,9 +20,23 @@ def _resolve_logger():
 logger = _resolve_logger()
 
 from src.engines.report_engine.agent import create_report_agent
+from src.engines.report_engine.disease_survey.aggregator import aggregate_survey_data
+from src.engines.report_engine.disease_survey.composer import disease_survey_to_markdown
 from src.graph.contracts import CONTRACT_VERSION, validate_writer_input
 from src.graph.profile import build_biomedical_profile
 from src.graph.state import AgentState
+
+_DISEASE_SURVEY_KEYWORDS = ("alzheimer", "parkinson", "huntington", "multiple sclerosis", "als ", "amyotrophic")
+
+
+def _is_disease_survey_query(query: str) -> bool:
+    # TODO(human): Implement smarter disease survey detection.
+    # Current approach: simple keyword match. Consider:
+    #   - Checking for survey-intent words ("survey", "comprehensive", "landscape", "overview")
+    #   - Reusing _detect_disease_name from the aggregator to avoid keyword duplication
+    #   - Guarding against false positives (e.g. "alzheimer drug interaction checker")
+    # Return True if this query should route to the disease survey renderer.
+    return any(kw in (query or "").lower() for kw in _DISEASE_SURVEY_KEYWORDS)
 
 
 def _build_harvest_context_text(user_query: str, harvested_data: List[Dict[str, Any]]) -> str:
@@ -118,8 +133,23 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
             "contract_version": CONTRACT_VERSION,
         }
 
-        report_output = agent.write_report(**writer_payload)
-        markdown = report_output.markdown_content if hasattr(report_output, "markdown_content") else str(report_output)
+        is_disease_survey = _is_disease_survey_query(user_query)
+        html_path = None
+        pdf_path = None
+
+        if is_disease_survey and harvested_data:
+            survey_state = aggregate_survey_data(harvested_data, user_query)
+            report_output = agent.write_report(**writer_payload)
+            markdown = report_output.markdown_content if hasattr(report_output, "markdown_content") else str(report_output)
+            report_path = getattr(report_output, "markdown_path", None)
+            html_path = getattr(report_output, "html_path", None)
+            pdf_path = getattr(report_output, "pdf_path", None)
+        else:
+            report_output = agent.write_report(**writer_payload)
+            markdown = report_output.markdown_content if hasattr(report_output, "markdown_content") else str(report_output)
+            report_path = getattr(report_output, "markdown_path", None)
+            html_path = getattr(report_output, "html_path", None)
+            pdf_path = getattr(report_output, "pdf_path", None)
 
         state_with_project = dict(state)
         if not state_with_project.get("project_name"):
@@ -129,7 +159,9 @@ def writer_node(state: AgentState) -> Dict[str, Any]:
         return {
             "final_report": markdown,
             "final_report_markdown": markdown,
-            "final_report_path": getattr(report_output, "markdown_path", None),
+            "final_report_path": report_path,
+            "final_report_html_path": html_path,
+            "final_report_pdf_path": pdf_path,
             "analysis_focus": analysis_status,
             "extension_payloads": extension_payloads,
             "biomedical_profile": biomedical_profile,

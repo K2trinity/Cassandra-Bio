@@ -37,6 +37,44 @@ ALL_KNOWN_STATUSES = [
 ]
 
 
+RESULTS_ELIGIBLE_STATUSES = {
+    "COMPLETED",
+    "TERMINATED",
+    "SUSPENDED",
+    "WITHDRAWN",
+}
+
+
+def _to_bool(value: object) -> bool:
+    """Normalize mixed bool/string flags returned by external APIs."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def is_trial_results_candidate(trial: Dict[str, str]) -> bool:
+    """
+    Return whether a trial should be queried for detailed results payload.
+
+    The policy is intentionally strict to avoid noisy no-result fetches:
+    - Trial must explicitly indicate has_results=true
+    - If status is available, it should be a terminal/posted-results status
+    """
+    if not isinstance(trial, dict):
+        return False
+
+    if not _to_bool(trial.get("has_results")):
+        return False
+
+    status = str(trial.get("status") or trial.get("study_status") or "").strip().upper()
+    if not status:
+        return True
+
+    return status in RESULTS_ELIGIBLE_STATUSES
+
+
 def search_trials(
     keyword: str,
     max_results: int = 50,
@@ -90,7 +128,7 @@ def search_trials(
                     CLINICALTRIALS_API_BASE,
                     params=params,
                     timeout=DEFAULT_TIMEOUT,
-                    headers={"User-Agent": "Bio-Short-Seller/1.0"},
+                    headers={"User-Agent": "Cassandra/1.0"},
                 )
                 response.raise_for_status()
                 response_data = response.json()
@@ -136,7 +174,7 @@ def search_failed_trials(
     
     This function specifically targets trials that were terminated, suspended, or withdrawn,
     which often indicate safety concerns, lack of efficacy, or funding issues - all critical
-    for biomedical short-selling due diligence.
+    for biomedical evidence analysis.
     
     Args:
         keyword: Search keyword (drug name, company, condition, etc.)
@@ -444,7 +482,6 @@ def fetch_trial_results(nct_id: str, retries: int = MAX_RETRIES) -> Optional[Dic
     url = f"{CLINICALTRIALS_API_BASE}/{nct_id}"
     params = {
         "format": "json",
-        "fields": "NCTId,HasResults,ResultsSection"
     }
     
     for attempt in range(retries):
@@ -453,19 +490,27 @@ def fetch_trial_results(nct_id: str, retries: int = MAX_RETRIES) -> Optional[Dic
                 url,
                 params=params,
                 timeout=DEFAULT_TIMEOUT,
-                headers={"User-Agent": "Bio-Short-Seller/1.0"}
+                headers={"User-Agent": "Cassandra/1.0"}
             )
             
             response.raise_for_status()
             data = response.json()
-            
-            studies = data.get("studies", [])
-            if not studies:
-                logger.warning(f"No data found for {nct_id}")
+
+            # ClinicalTrials v2 details endpoint commonly returns a single study object.
+            # Keep backward-compat parsing for list-wrapped payloads as well.
+            study = data
+            if isinstance(data, dict) and isinstance(data.get("studies"), list):
+                studies = data.get("studies", [])
+                if not studies:
+                    logger.info(f"No study payload found for {nct_id}")
+                    return None
+                study = studies[0]
+
+            if not isinstance(study, dict):
+                logger.warning(f"Unexpected study payload shape for {nct_id}")
                 return None
-            
-            study = studies[0]
-            has_results = study.get("hasResults", False)
+
+            has_results = _to_bool(study.get("hasResults", False))
             
             if not has_results:
                 logger.info(f"{nct_id} has no results posted yet")
@@ -476,7 +521,14 @@ def fetch_trial_results(nct_id: str, retries: int = MAX_RETRIES) -> Optional[Dic
                 }
             
             # Parse results section
-            results_section = study.get("resultsSection", {})
+            results_section = study.get("resultsSection", {}) or {}
+            if not results_section:
+                logger.warning(f"{nct_id} marked hasResults=true but resultsSection is empty")
+                return {
+                    "nct_id": nct_id,
+                    "has_results": False,
+                    "results_url": f"https://clinicaltrials.gov/study/{nct_id}/results"
+                }
             
             # Outcome measures
             outcome_measures_module = results_section.get("outcomeMeasuresModule", {})
