@@ -71,7 +71,13 @@ class AgentState(TypedDict):
     final_report_pdf_path: Optional[str]  # Last-write-wins (rendered PDF path)
     assessment_override: Optional[str]  # Last-write-wins
     analysis_status: Optional[str]  # Last-write-wins
-    
+
+    # K-line / quant integration
+    kline_ohlc_data: Optional[Dict[str, Any]]  # Last-write-wins (ticker → OHLC JSON)
+    kline_events: Optional[List[Dict[str, Any]]]  # Last-write-wins (BiotechEvent list)
+    kline_anomaly_signals: Annotated[List[Dict[str, Any]], operator.add]  # Accumulated
+    kline_report_triggers: Annotated[List[Dict[str, Any]], operator.add]  # Accumulated
+
     # Metadata
     project_name: Optional[str]  # Last-write-wins
     status: Optional[str]  # Last-write-wins
