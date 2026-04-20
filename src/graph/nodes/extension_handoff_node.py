@@ -31,10 +31,20 @@ def extension_handoff_node(state: AgentState) -> Dict[str, Any]:
     existing = state.get("extension_payloads")
     extension_payloads = existing if isinstance(existing, dict) else {}
 
-    # Slot keys are stable interfaces for future agents to attach payloads.
     extension_payloads.setdefault("slot_a", {})
     extension_payloads.setdefault("slot_b", {})
     extension_payloads.setdefault("slot_c", {})
+    extension_payloads.setdefault("slot_kline", {})
+
+    # If anomaly signals arrived from the K-line widget, inject them
+    # into the kline slot so downstream agents can reference them.
+    anomaly_signals = state.get("kline_anomaly_signals") or []
+    if anomaly_signals:
+        extension_payloads["slot_kline"] = {
+            "anomaly_signals": anomaly_signals,
+            "status": "signals_received",
+        }
+        logger.info(f"🧩 Injected {len(anomaly_signals)} anomaly signals into slot_kline")
 
     return {
         "extension_payloads": extension_payloads,
