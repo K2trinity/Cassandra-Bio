@@ -12,13 +12,14 @@ export interface OHLCRow {
 export interface BiotechEvent {
   id: string;
   date: string;
-  type: 'fda_decision' | 'clinical_readout' | 'partnership' | 'financing' | 'patent' | 'competitor';
+  type: 'fda_decision' | 'clinical_readout' | 'partnership' | 'financing' | 'patent' | 'competitor' | 'geopolitical' | 'trade_policy' | 'sanctions' | 'regulatory_change' | 'macro_economic';
   priority: 1 | 2 | 3;
   ticker: string;
   disease_area: string;
   catalyst: string;
   sentiment: 'positive' | 'negative' | 'neutral';
   price_impact?: number;
+  source?: 'openfda' | 'clinicaltrials' | 'gdelt' | 'cassandra_report' | 'manual';
 }
 
 export interface HoverData {
@@ -45,6 +46,11 @@ export interface AnomalySignal {
   magnitude: number;
 }
 
+export interface EquityPoint {
+  date: string;
+  equity: number;
+}
+
 export interface ChartConfig {
   ohlcData: OHLCRow[];
   events: BiotechEvent[];
@@ -52,4 +58,6 @@ export interface ChartConfig {
   onAnomalyDetected?: (signal: AnomalySignal) => void;
   onHover?: (date: string | null, ohlc?: HoverData) => void;
   onRangeSelect?: (range: RangeSelection | null) => void;
+  highlightedEventId?: string;
+  equityCurve?: EquityPoint[];
 }
