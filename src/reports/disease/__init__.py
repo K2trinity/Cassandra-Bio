@@ -8,10 +8,12 @@ from .models import (
     PipelineRiskRecord,
     SourceAudit,
 )
+from .orchestrator import DiseaseReportOrchestrator
 
 __all__ = [
     "ClinicalTrialRecord",
     "DiseaseProfile",
+    "DiseaseReportOrchestrator",
     "DiseaseReportArtifacts",
     "DiseaseReportPackage",
     "PipelineRiskRecord",
