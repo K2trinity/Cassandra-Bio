@@ -108,3 +108,42 @@ def test_relevance_gate_keeps_only_condition_full_match_records():
 
     assert [record.nct_number for record in result.retained] == ["NCT_KEEP"]
     assert result.rejected_nct_numbers == ["NCT_REJECT", "NCT_BROAD"]
+
+
+def test_relevance_gate_retains_later_matching_duplicate():
+    profile = DiseaseResolver().resolve("Alzheimer disease")
+    records = [
+        normalize_trial_payload(
+            {
+                "nct_id": "NCT_DUPLICATE",
+                "title": "Parkinson biomarker study",
+                "status": "RECRUITING",
+                "conditions": ["Parkinson Disease"],
+                "interventions": ["Biomarker panel"],
+            }
+        ),
+        normalize_trial_payload(
+            {
+                "nct_id": "NCT_DUPLICATE",
+                "title": "Alzheimer antibody study",
+                "status": "RECRUITING",
+                "conditions": ["Alzheimer's Disease"],
+                "interventions": ["Donanemab"],
+            }
+        ),
+        normalize_trial_payload(
+            {
+                "nct_id": "NCT_OTHER",
+                "title": "Parkinson motor study",
+                "status": "RECRUITING",
+                "conditions": ["Parkinson Disease"],
+                "interventions": ["Levodopa"],
+            }
+        ),
+    ]
+
+    result = DiseaseRelevanceGate().filter_records(records, profile)
+
+    assert [record.study_title for record in result.retained] == ["Alzheimer antibody study"]
+    assert [record.nct_number for record in result.retained] == ["NCT_DUPLICATE"]
+    assert result.rejected_nct_numbers == ["NCT_OTHER"]
