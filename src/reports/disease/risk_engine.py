@@ -10,7 +10,6 @@ from .models import ClinicalTrialRecord, PipelineRiskRecord
 TERMINAL_STATUSES = {
     "COMPLETED",
     "TERMINATED",
-    "SUSPENDED",
     "WITHDRAWN",
 }
 
@@ -22,14 +21,14 @@ def categorize_interventions(interventions: list[str]) -> str:
 
     if _has_amyloid_term(text) and _has_antibody_term(text):
         return "amyloid antibody"
-    if "tau" in text:
+    if any(term in text for term in ("diagnostic", "imaging", "pet", "mri", "biomarker")):
+        return "diagnostic or imaging"
+    if "tau" in text and any(term in text for term in ("therapy", "drug", "treatment")):
         return "tau therapy"
     if "cell" in text or "stem cell" in text:
         return "cell therapy"
     if any(term in text for term in ("device", "stimulation", "wearable")):
         return "device"
-    if any(term in text for term in ("diagnostic", "imaging", "pet", "mri", "biomarker")):
-        return "diagnostic or imaging"
     if any(term in text for term in ("behavioral", "cognitive behavioral", "psychotherapy")):
         return "behavioral intervention"
     if any(term in text for term in ("care", "caregiver", "telehealth")):

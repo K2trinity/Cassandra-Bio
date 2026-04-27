@@ -29,6 +29,7 @@ def test_categorize_interventions_covers_taxonomy_examples():
         (["Anti-amyloid monoclonal antibody"], "amyloid antibody"),
         (["A beta mAb infusion"], "amyloid antibody"),
         (["Anti-tau therapy"], "tau therapy"),
+        (["Tau PET imaging biomarker"], "diagnostic or imaging"),
         (["Oral beta secretase inhibitor"], "small molecule"),
         (["Stem cell transplant"], "cell therapy"),
         (["Neurostimulation device"], "device"),
@@ -74,6 +75,28 @@ def test_completed_old_trial_and_recent_recruiting_trial_yield_low_timeline():
     assert "age 8.0 years" in risks[0].timeline_evidence
     assert "status RECRUITING" in risks[1].timeline_evidence
     assert "age 1.0 years" in risks[1].timeline_evidence
+
+
+def test_timeline_status_handling_is_case_insensitive_and_age_based_for_paused_or_unknown():
+    records = [
+        _trial("NCTLOWERDONE", posted=date(2018, 4, 27), status="completed"),
+        _trial("NCTUNKNOWN", posted=date(2018, 4, 27), status="Unknown"),
+        _trial("NCTSUSPENDED", posted=date(2018, 4, 27), status="SUSPENDED"),
+    ]
+
+    risks = RuleBasedRiskEngine(current_date=date(2026, 4, 27)).build(
+        records,
+        "Alzheimer Disease",
+    )
+
+    assert [risk.timeline_signal for risk in risks] == [
+        "Low",
+        "High",
+        "High",
+    ]
+    assert "status COMPLETED" in risks[0].timeline_evidence
+    assert "status UNKNOWN" in risks[1].timeline_evidence
+    assert "status SUSPENDED" in risks[2].timeline_evidence
 
 
 def test_calendar_year_boundaries_drive_non_terminal_timeline_signal():
