@@ -109,6 +109,8 @@ def test_orchestrator_run_returns_app_state_keys(tmp_path):
     )
 
     assert state["status"] == "writer_complete"
+    assert state["handoff_complete"] is True
+    assert state["writer_complete"] is True
     assert state["user_query"] == "conduct a disease report on Alzheimer disease"
     assert state["project_name"] == "Alzheimer Disease"
     assert state["analysis_focus"] == "DISEASE_REPORT_PIPELINE"
@@ -174,6 +176,11 @@ def test_orchestrator_stream_yields_harvest_handoff_writer_nodes(tmp_path):
         "extension_handoff",
         "writer",
     ]
+    handoff_state = events[1][1]
+    writer_state = events[2][1]
+    assert handoff_state["handoff_complete"] is True
+    assert writer_state["handoff_complete"] is True
+    assert writer_state["writer_complete"] is True
 
 
 def test_workflow_service_run_uses_disease_orchestrator(tmp_path):

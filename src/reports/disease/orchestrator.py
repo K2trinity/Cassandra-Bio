@@ -111,6 +111,7 @@ class DiseaseReportOrchestrator:
         handoff_state = {
             **harvest_state,
             "status": "handoff_complete",
+            "handoff_complete": True,
             "disease_report_package": package.model_dump(mode="json"),
         }
         yield "extension_handoff", handoff_state
@@ -124,6 +125,7 @@ class DiseaseReportOrchestrator:
         writer_state = {
             **handoff_state,
             "status": "writer_complete",
+            "writer_complete": True,
             "final_report": artifacts.markdown_content,
             "final_report_markdown": artifacts.markdown_content,
             "final_report_path": artifacts.markdown_path,
