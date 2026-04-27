@@ -29,6 +29,28 @@ RISK_COLUMNS = [
     "Competition Evidence",
 ]
 
+LANDSCAPE_COLGROUP = [
+    {"key": "study_title", "width": "24%"},
+    {"key": "nct_number", "width": "12%"},
+    {"key": "status", "width": "12%"},
+    {"key": "conditions", "width": "14%"},
+    {"key": "interventions", "width": "16%"},
+    {"key": "sponsor", "width": "14%"},
+    {"key": "study_type", "width": "8%"},
+]
+
+RISK_COLGROUP = [
+    {"key": "study_title", "width": "18%"},
+    {"key": "nct_number", "width": "10%"},
+    {"key": "sponsor", "width": "12%"},
+    {"key": "status", "width": "10%"},
+    {"key": "intervention_category", "width": "12%"},
+    {"key": "timeline_signal", "width": "9%"},
+    {"key": "timeline_evidence", "width": "15%"},
+    {"key": "competition_signal", "width": "9%"},
+    {"key": "competition_evidence", "width": "15%"},
+]
+
 
 class DiseaseReportIRBuilder:
     def build(self, package: DiseaseReportPackage) -> dict:
@@ -44,13 +66,19 @@ class DiseaseReportIRBuilder:
             },
             "generatedAt": _isoformat(package.generated_at),
             "sourceAudit": package.source_audit.model_dump(mode="json"),
-            "layoutHints": {
+            "layout": {
                 "wideTables": [
                     {
                         "chapterId": "clinical_trial_and_pipeline_landscape",
                         "layout": "wide-clinical-trial-table",
                         "className": "clinical-trial-landscape",
                         "columns": len(LANDSCAPE_COLUMNS),
+                    },
+                    {
+                        "chapterId": "pipeline_timeline_and_competition_risk",
+                        "layout": "wide-risk-table",
+                        "className": "pipeline-risk",
+                        "columns": len(RISK_COLUMNS),
                     }
                 ]
             },
@@ -132,15 +160,7 @@ class DiseaseReportIRBuilder:
                         "layout": "wide-clinical-trial-table",
                         "className": "clinical-trial-landscape",
                     },
-                    colgroup=[
-                        {"key": "study_title", "width": "24%"},
-                        {"key": "nct_number", "width": "12%"},
-                        {"key": "status", "width": "12%"},
-                        {"key": "conditions", "width": "14%"},
-                        {"key": "interventions", "width": "16%"},
-                        {"key": "sponsor", "width": "14%"},
-                        {"key": "study_type", "width": "8%"},
-                    ],
+                    colgroup=LANDSCAPE_COLGROUP,
                 ),
             ],
         }
@@ -177,6 +197,11 @@ class DiseaseReportIRBuilder:
                     RISK_COLUMNS,
                     rows,
                     caption="Pipeline timeline and competition risk records",
+                    metadata={
+                        "layout": "wide-risk-table",
+                        "className": "pipeline-risk",
+                    },
+                    colgroup=RISK_COLGROUP,
                 ),
             ],
         }

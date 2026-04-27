@@ -132,6 +132,28 @@ def test_risk_table_consumes_pipeline_risk_record_values():
     values = [cell["blocks"][0]["inlines"][0]["text"] for cell in first_data_row]
 
     assert _table_headers(table) == RISK_COLUMNS
+    assert table["metadata"]["layout"] == "wide-risk-table"
+    assert table["metadata"]["className"] == "pipeline-risk"
+    assert len(table["colgroup"]) == len(RISK_COLUMNS)
+    assert [column["key"] for column in table["colgroup"]] == [
+        "study_title",
+        "nct_number",
+        "sponsor",
+        "status",
+        "intervention_category",
+        "timeline_signal",
+        "timeline_evidence",
+        "competition_signal",
+        "competition_evidence",
+    ]
+    assert all(len(row["cells"]) == len(RISK_COLUMNS) for row in table["rows"])
+    assert {
+        entry["chapterId"]
+        for entry in ir["metadata"]["layout"]["wideTables"]
+    } == {
+        "clinical_trial_and_pipeline_landscape",
+        "pipeline_timeline_and_competition_risk",
+    }
     assert values == [
         "A Study of Donanemab in Early Symptomatic Alzheimer Disease",
         "NCT00000001",
