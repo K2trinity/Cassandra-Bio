@@ -36,6 +36,13 @@ def test_resolver_handles_polite_generate_report_prompt():
     assert profile.condition_terms == ["Parkinson Disease"]
 
 
+def test_resolver_handles_common_request_prompts():
+    expected = "Parkinson Disease"
+
+    assert DiseaseResolver().resolve("Can you generate a report for Parkinson disease").disease_name == expected
+    assert DiseaseResolver().resolve("I need a report on Parkinson disease").disease_name == expected
+
+
 def test_resolver_preserves_slash_containing_disease_name():
     profile = DiseaseResolver().resolve("HIV/AIDS report")
 
@@ -55,6 +62,14 @@ def test_conditions_full_match_accepts_equivalent_ad_terms():
     assert conditions_full_match(["Alzheimer's Disease"], profile)
     assert conditions_full_match(["Alzheimer Disease"], profile)
     assert conditions_full_match(["ALZHEIMERS DISEASE"], profile)
+
+
+def test_conditions_full_match_accepts_general_possessive_disease_terms():
+    parkinson_profile = DiseaseResolver().resolve("Parkinson disease")
+    crohn_profile = DiseaseResolver().resolve("Crohn disease")
+
+    assert conditions_full_match(["Parkinson's Disease"], parkinson_profile)
+    assert conditions_full_match(["Crohn's Disease"], crohn_profile)
 
 
 def test_conditions_full_match_rejects_non_target_and_broad_terms():
@@ -78,3 +93,7 @@ def test_condition_variants_for_non_ad_disease_are_stable():
     assert build_expert_full_match_url("Parkinson Disease").endswith(
         "AREA%5BCondition%5DCOVERAGE%5BFullMatch%5BParkinson%20Disease%5D%5D&viewType=Card&sort=StudyFirstPostDate"
     )
+
+
+def test_expert_full_match_url_encodes_slashes():
+    assert "HIV%2FAIDS" in build_expert_full_match_url("HIV/AIDS")

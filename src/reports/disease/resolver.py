@@ -28,18 +28,19 @@ class DiseaseResolver:
 
 
 def build_expert_topic_url(disease_name: str) -> str:
-    return f"{EXPERT_SEARCH_BASE}?term={quote(disease_name)}&viewType=Topic"
+    return f"{EXPERT_SEARCH_BASE}?term={quote(disease_name, safe='')}&viewType=Topic"
 
 
 def build_expert_full_match_url(disease_name: str) -> str:
     expression = f"AREA[Condition]COVERAGE[FullMatch[{disease_name}]]"
-    return f"{EXPERT_SEARCH_BASE}?term={quote(expression)}&viewType=Card&sort=StudyFirstPostDate"
+    return f"{EXPERT_SEARCH_BASE}?term={quote(expression, safe='')}&viewType=Card&sort=StudyFirstPostDate"
 
 
 def _extract_disease_name(user_query: str) -> str:
     text = re.sub(r"\s+", " ", str(user_query or "")).strip()
     patterns = [
-        r"^(?:please\s+)?(?:conduct|perform|run|create|generate|write|prepare)\s+(?:a\s+|an\s+)?(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
+        r"^(?:please\s+)?(?:can you\s+)?(?:conduct|perform|run|create|generate|write|prepare)\s+(?:a\s+|an\s+)?(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
+        r"^(?:i\s+)?need\s+(?:a\s+|an\s+)?(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
         r"^(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
         r"^(.+?)\s+(?:survey|landscape|overview|review|report|analysis|pipeline)\s*$",
     ]
