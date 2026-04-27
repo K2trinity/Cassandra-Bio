@@ -156,9 +156,12 @@ class DiseaseReportOrchestrator:
             "harvested_data": [_harvested_data_item(record) for record in retained_records],
             "disease_areas": [profile.disease_name],
             "clinical_data": {
-                "trial_records": trial_records,
-                "raw_records": deepcopy(raw_records),
-                "rejected_records": list(rejected_nct_numbers),
+                "trial_records": len(trial_records),
+                "raw_records": len(raw_records),
+                "rejected_records": len(rejected_nct_numbers),
+                "trial_record_details": trial_records,
+                "raw_record_details": deepcopy(raw_records),
+                "rejected_nct_numbers": list(rejected_nct_numbers),
             },
             "evidence_stats": {
                 "clinical_trial_records": len(retained_records),

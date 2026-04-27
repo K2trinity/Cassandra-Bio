@@ -6,6 +6,7 @@ from typing import Any
 
 from src.reports.disease.models import DiseaseReportArtifacts
 from src.reports.disease.orchestrator import DiseaseReportOrchestrator
+from src.services.workflow_service import WorkflowService
 
 
 def _study(nct: str, condition: str, status: str = "RECRUITING") -> dict[str, Any]:
@@ -62,6 +63,29 @@ class FakeRendererAdapter:
         )
 
 
+class FakeOrchestrator:
+    def __init__(self) -> None:
+        self.run_calls: list[dict[str, Any]] = []
+        self.stream_calls: list[dict[str, Any]] = []
+
+    def run(self, *, user_query: str, output_dir: str) -> dict[str, Any]:
+        self.run_calls.append({"user_query": user_query, "output_dir": output_dir})
+        return {
+            "status": "writer_complete",
+            "user_query": user_query,
+            "output_dir": output_dir,
+        }
+
+    def stream(self, *, user_query: str, output_dir: str):
+        self.stream_calls.append({"user_query": user_query, "output_dir": output_dir})
+        for node_name in ["harvester", "extension_handoff", "writer"]:
+            yield node_name, {
+                "status": f"{node_name}_complete",
+                "user_query": user_query,
+                "output_dir": output_dir,
+            }
+
+
 def test_orchestrator_run_returns_app_state_keys(tmp_path):
     studies = [
         _study("NCT_ALZHEIMER", "Alzheimer's Disease"),
@@ -102,9 +126,15 @@ def test_orchestrator_run_returns_app_state_keys(tmp_path):
     assert harvested["url"] == "https://clinicaltrials.gov/study/NCT_ALZHEIMER"
     assert harvested["metadata"]["study_first_posted"] == "2024-01-15"
 
-    assert [record["nct_number"] for record in state["clinical_data"]["trial_records"]] == ["NCT_ALZHEIMER"]
-    assert len(state["clinical_data"]["raw_records"]) == 1
-    assert state["clinical_data"]["rejected_records"] == ["NCT_PARKINSON"]
+    assert state["clinical_data"]["trial_records"] == 1
+    assert state["clinical_data"]["raw_records"] == 1
+    assert state["clinical_data"]["rejected_records"] == 1
+    assert [
+        record["nct_number"]
+        for record in state["clinical_data"]["trial_record_details"]
+    ] == ["NCT_ALZHEIMER"]
+    assert len(state["clinical_data"]["raw_record_details"]) == 1
+    assert state["clinical_data"]["rejected_nct_numbers"] == ["NCT_PARKINSON"]
     assert state["evidence_stats"] == {"clinical_trial_records": 1}
 
     package = state["disease_report_package"]
@@ -144,3 +174,59 @@ def test_orchestrator_stream_yields_harvest_handoff_writer_nodes(tmp_path):
         "extension_handoff",
         "writer",
     ]
+
+
+def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
+    orchestrator = FakeOrchestrator()
+    service = WorkflowService(
+        orchestrator_factory=lambda: orchestrator,
+        output_dir=tmp_path,
+    )
+
+    state = service.run(
+        "Alzheimer disease",
+        pdf_paths=["ignored.pdf"],
+        checkpointer=object(),
+        thread_id="ignored-thread",
+    )
+
+    assert state["status"] == "writer_complete"
+    assert state["user_query"] == "Alzheimer disease"
+    assert state["output_dir"] == str(tmp_path)
+    assert orchestrator.run_calls == [
+        {"user_query": "Alzheimer disease", "output_dir": str(tmp_path)}
+    ]
+
+
+def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
+    orchestrator = FakeOrchestrator()
+    progress_events: list[tuple[str, dict[str, Any]]] = []
+    service = WorkflowService(
+        orchestrator_factory=lambda: orchestrator,
+        output_dir=tmp_path,
+    )
+
+    events = list(
+        service.stream(
+            "Alzheimer disease",
+            pdf_paths=["ignored.pdf"],
+            progress_callback=lambda node_name, state: progress_events.append((node_name, state)),
+            checkpointer=object(),
+            thread_id="ignored-thread",
+            interrupt_before=["ignored"],
+            allow_interrupts=True,
+        )
+    )
+
+    node_names = [node_name for node_name, state in events]
+    assert node_names == ["harvester", "extension_handoff", "writer"]
+    assert progress_events == events
+    assert orchestrator.stream_calls == [
+        {"user_query": "Alzheimer disease", "output_dir": str(tmp_path)}
+    ]
+    assert not {
+        "disease_survey_intelligence",
+        "evidence_synthesizer",
+        "clinical_analyzer",
+        "quality_assessor",
+    }.intersection(node_names)

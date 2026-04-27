@@ -1,21 +1,21 @@
-"""Workflow execution facade.
+"""Workflow execution facade for the disease report pipeline."""
 
-Provides a stable service API for graph execution, streaming updates, and
-progress callback wiring without exposing graph internals to app layers.
-"""
+from pathlib import Path
+from typing import Any, Callable, Dict, Generator, Optional, Tuple
 
-from typing import Any, Dict, Generator, Optional, Tuple
-
-from src.agents.supervisor import (
-    get_workflow_state,
-    resume_workflow,
-    run_cassandra_workflow,
-    stream_cassandra_workflow,
-)
+from src.reports.disease.orchestrator import DiseaseReportOrchestrator
 
 
 class WorkflowService:
-    """Anti-corruption service for running Cassandra workflow pipelines."""
+    """Anti-corruption service for running Cassandra disease report pipelines."""
+
+    def __init__(
+        self,
+        orchestrator_factory: Callable[[], Any] | None = None,
+        output_dir: str | Path = "final_reports",
+    ) -> None:
+        self.orchestrator_factory = orchestrator_factory or DiseaseReportOrchestrator
+        self.output_dir = Path(output_dir)
 
     def run(
         self,
@@ -24,11 +24,11 @@ class WorkflowService:
         checkpointer: Any = None,
         thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_cassandra_workflow(
+        _ = (pdf_paths, checkpointer, thread_id)
+        orchestrator = self.orchestrator_factory()
+        return orchestrator.run(
             user_query=user_query,
-            pdf_paths=pdf_paths,
-            checkpointer=checkpointer,
-            thread_id=thread_id,
+            output_dir=str(self.output_dir),
         )
 
     def stream(
@@ -41,18 +41,19 @@ class WorkflowService:
         interrupt_before: Optional[list] = None,
         allow_interrupts: bool = False,
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        yield from stream_cassandra_workflow(
+        _ = (pdf_paths, checkpointer, thread_id, interrupt_before, allow_interrupts)
+        orchestrator = self.orchestrator_factory()
+        for node_name, state in orchestrator.stream(
             user_query=user_query,
-            pdf_paths=pdf_paths,
-            progress_callback=progress_callback,
-            checkpointer=checkpointer,
-            thread_id=thread_id,
-            interrupt_before=interrupt_before,
-            allow_interrupts=allow_interrupts,
-        )
+            output_dir=str(self.output_dir),
+        ):
+            if progress_callback is not None:
+                progress_callback(node_name, state)
+            yield node_name, state
 
     def get_state(self, thread_id: str, checkpointer: Any = None) -> Any:
-        return get_workflow_state(thread_id=thread_id, checkpointer=checkpointer)
+        _ = (thread_id, checkpointer)
+        return None
 
     def resume(
         self,
@@ -60,11 +61,8 @@ class WorkflowService:
         checkpointer: Any,
         progress_callback: Any = None,
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
-        yield from resume_workflow(
-            thread_id=thread_id,
-            checkpointer=checkpointer,
-            progress_callback=progress_callback,
-        )
+        _ = (thread_id, checkpointer, progress_callback)
+        yield from ()
 
 
 __all__ = ["WorkflowService"]
