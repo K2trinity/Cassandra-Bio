@@ -229,6 +229,25 @@ def test_html_renderer_rejects_unsafe_colgroup_width_css():
     assert '<colgroup><col><col style="width: 12rem"></colgroup>' in html
 
 
+def test_html_renderer_places_caption_before_colgroup():
+    html = HTMLRenderer()._render_table(
+        _table_block(
+            caption="Disease trials",
+            colgroup=[{"key": "study", "width": "70%"}, {"key": "sponsor", "width": "30%"}],
+        )
+    )
+
+    assert html.index("<caption>Disease trials</caption>") < html.index("<colgroup>")
+
+
+def test_html_renderer_includes_actual_wide_table_css():
+    html = HTMLRenderer().render({"title": "Report", "metadata": {}, "chapters": []})
+
+    assert ".table-wrap--wide table" in html
+    assert "min-width: 960px" in html
+    assert "max-width: none" in html
+
+
 def test_html_renderer_plain_table_keeps_backward_compatible_markup():
     html = HTMLRenderer()._render_table(_table_block(caption=None))
 

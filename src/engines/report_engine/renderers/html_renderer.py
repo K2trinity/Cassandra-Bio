@@ -1629,7 +1629,7 @@ document.addEventListener('DOMContentLoaded', function() {
         wrapper_class = "table-wrap table-wrap--wide" if has_layout_hint else "table-wrap"
         return (
             f'<div class="{wrapper_class}"><table{table_attr}>'
-            f"{colgroup_html}{caption_html}<tbody>{rows_html}</tbody></table></div>"
+            f"{caption_html}{colgroup_html}<tbody>{rows_html}</tbody></table></div>"
         )
 
     def _render_table_colgroup(self, colgroup: List[Any]) -> str:
@@ -4265,6 +4265,10 @@ blockquote {{ /* 含义：引用块 - PDF基础样式；设置：在本块内调
   overflow-x: auto; /* 含义：横向溢出处理；设置：按需调整数值/颜色/变量 */
   margin: 20px 0; /* 含义：外边距，控制与周围元素的距离；设置：按需调整数值/颜色/变量 */
 }} /* 结束 .table-wrap */
+.table-wrap--wide table {{ /* 含义：宽表布局；设置：避免多列表格被压缩 */
+  min-width: 960px; /* 含义：宽表最小宽度；设置：按需调整数值/颜色/变量 */
+  max-width: none; /* 含义：允许宽表超过容器并由外层横向滚动 */
+}} /* 结束 .table-wrap--wide table */
 table {{ /* 含义：表格基础样式；设置：在本块内调整相关属性 */
   width: 100%; /* 含义：宽度设置；设置：按需调整数值/颜色/变量 */
   border-collapse: collapse; /* 含义：border-collapse 样式属性；设置：按需调整数值/颜色/变量 */
