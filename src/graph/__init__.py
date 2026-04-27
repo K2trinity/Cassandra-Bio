@@ -3,9 +3,6 @@
 The disease report workflow no longer lives in src.graph.
 """
 
-try:
-    from .manager import GraphManager
-except Exception:
-    GraphManager = None
+from .manager import GraphManager
 
 __all__ = ["GraphManager"]

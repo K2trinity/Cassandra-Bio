@@ -1,6 +1,7 @@
-"""BioHarvest public package interface."""
+"""Harvest engine package.
 
-from .agent import BioHarvestAgent, HarvestAgent, create_agent
-from .config import HarvestConfig
+Import concrete harvest submodules directly; the disease report pipeline does
+not depend on the legacy BioHarvest facade.
+"""
 
-__all__ = ["BioHarvestAgent", "HarvestAgent", "HarvestConfig", "create_agent"]
+__all__: list[str] = []

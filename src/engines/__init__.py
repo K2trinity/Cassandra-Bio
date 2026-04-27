@@ -1,5 +1,6 @@
-"""Execution engines for Cassandra domain workflows."""
+"""Execution engines package.
 
-from .harvest import BioHarvestAgent
+Domain-specific report pipelines import concrete engine modules directly.
+"""
 
-__all__ = ["BioHarvestAgent"]
+__all__: list[str] = []

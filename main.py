@@ -3,7 +3,7 @@
 Cassandra - Biomedical Research Workflow Platform
 Main CLI Entry Point
 
-This is the command-line interface for executing the Cassandra workflow.
+This is the command-line interface for executing the Cassandra disease report workflow.
 
 Usage:
     python main.py "Analyze drug X safety concerns" [--pdfs path1.pdf path2.pdf]
@@ -37,7 +37,10 @@ logger.add(
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from src.agents.supervisor import run_cassandra_workflow
+from src.services.workflow_service import WorkflowService
+
+
+_workflow_service = WorkflowService()
 
 
 def print_banner():
@@ -50,8 +53,8 @@ def print_banner():
 ║                                                                           ║
 ║  Powered by:                                                              ║
 ║    • Google Gemini Pro (2M token context)                                 ║
-║    • BioHarvestEngine (PubMed + ClinicalTrials.gov)                       ║
-║    • LangGraph Orchestration                                              ║
+║    • ClinicalTrials.gov condition-matched harvesting                       ║
+║    • Single Disease Report Pipeline                                       ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 """
@@ -63,8 +66,8 @@ def interactive_mode():
     print_banner()
     
     print("\n🔬 Welcome to Cassandra Interactive Mode\n")
-    print("This tool runs a connected biomedical research analysis workflow.")
-    print("It analyzes scientific literature and trial metadata to produce")
+    print("This tool runs the single disease report pipeline.")
+    print("It analyzes condition-matched trial metadata to produce")
     print("a structured disease-oriented report.\n")
     
     # Get user query
@@ -77,7 +80,7 @@ def interactive_mode():
     
     # Get PDF paths (optional)
     print("\n📄 Enter PDF file paths to analyze (comma-separated, or press Enter to skip):")
-    print("   Note: PDFs will also be auto-discovered from PubMed Central links")
+    print("   Note: PDF paths are accepted for compatibility but are not used by the disease report pipeline")
     pdf_input = input("> ")
     
     pdf_paths = []
@@ -99,9 +102,9 @@ def interactive_mode():
     print(f"Query: {user_query}")
     print(f"Pre-loaded PDFs: {len(pdf_paths)}")
     print("\nWorkflow Steps:")
-    print("  1. 🔬 BioHarvest: Search PubMed + ClinicalTrials.gov")
-    print("  2. 🧩 Extension Handoff: Reserve insertion slots for future agents")
-    print("  3. 📝 Report Writer: Generate structured final report")
+    print("  1. 🔬 Harvester: Resolve disease and fetch matching ClinicalTrials.gov records")
+    print("  2. 🧩 Handoff: Build the typed disease report package")
+    print("  3. 📝 Writer: Render Markdown, HTML, PDF, and IR artifacts")
     print("=" * 80)
     
     confirm = input("\nProceed with analysis? (y/n): ")
@@ -128,7 +131,7 @@ def run_workflow(user_query: str, pdf_paths: list = None):
     
     try:
         # Execute workflow
-        final_state = run_cassandra_workflow(user_query, pdf_paths)
+        final_state = _workflow_service.run(user_query=user_query, pdf_paths=pdf_paths)
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()
@@ -142,7 +145,7 @@ def run_workflow(user_query: str, pdf_paths: list = None):
         
         # Save report
         if final_state.get("final_report"):
-            # Report is already saved by ReportWriterAgent
+            # Report artifacts are already saved by the disease renderer adapter.
             logger.success("📄 Report saved to: final_reports/")
             
             # Offer to display preview
