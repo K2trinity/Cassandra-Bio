@@ -17,10 +17,13 @@ test_process_blocking.py
 依赖: requests（已在 requirements.txt 中）
 """
 
-import sys
-import time
-import threading
 import argparse
+import os
+import sys
+import threading
+import time
+
+import pytest
 import requests
 
 # ─────────────────────────────────────────────
@@ -30,6 +33,7 @@ DEFAULT_BASE_URL = "http://localhost:5000"
 CANCEL_GRACE_TIMEOUT = 30   # 取消后等待线程停止的最长秒数
 THREAD_LEAK_CYCLES = 5      # 反复 cancel-restart 的轮次
 DUMMY_QUERY = "test_process_blocking dummy query"
+PYTEST_BASE_URL_ENV = "CASSANDRA_E2E_BASE_URL"
 
 # ─────────────────────────────────────────────
 # 自动探测可用的服务器地址
@@ -88,6 +92,25 @@ def _header(title: str):
     print(f"\n{'─'*55}")
     print(f"  {title}")
     print('─'*55)
+
+
+@pytest.fixture(scope="module")
+def base() -> str:
+    configured = os.getenv(PYTEST_BASE_URL_ENV)
+    if not configured:
+        pytest.skip(
+            f"Set {PYTEST_BASE_URL_ENV}=http://host:port to run Cassandra "
+            "process blocking integration checks."
+        )
+
+    base_url = configured.rstrip("/")
+    try:
+        response = requests.get(f"{base_url}/api/status", timeout=5)
+        response.raise_for_status()
+    except Exception as exc:
+        pytest.skip(f"Cassandra server is not reachable at {base_url}: {exc}")
+
+    return base_url
 
 
 # ─────────────────────────────────────────────

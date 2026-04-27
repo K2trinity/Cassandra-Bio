@@ -8,9 +8,52 @@ These tests validate:
 4. biomedical_normalization.py regression (existing regex rules)
 """
 
+import os
 import re
+import subprocess
+import sys
+from functools import lru_cache
 import pytest
 from unittest.mock import patch, MagicMock
+
+
+RUN_SCISPACY_INTEGRATION_ENV = "CASSANDRA_RUN_SCISPACY_INTEGRATION"
+
+
+@lru_cache(maxsize=1)
+def _probe_scispacy_runtime() -> tuple[bool, str]:
+    script = (
+        "from src.tools.scispacy_ner_service import SciSpacyNERService\n"
+        "svc = SciSpacyNERService.get_instance()\n"
+        "svc.extract_entities('EGFR mutation in NSCLC')\n"
+        "print('scispacy runtime ok')\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "SciSpacy runtime probe timed out after 90 seconds."
+
+    output = (proc.stdout + proc.stderr).strip()
+    return proc.returncode == 0, output[-1200:]
+
+
+@pytest.fixture(scope="module")
+def scispacy_runtime_available() -> None:
+    enabled_values = {"1", "true", "TRUE", "yes", "YES"}
+    if os.getenv(RUN_SCISPACY_INTEGRATION_ENV) not in enabled_values:
+        pytest.skip(
+            f"Set {RUN_SCISPACY_INTEGRATION_ENV}=1 to run optional SciSpacy "
+            "runtime integration tests."
+        )
+
+    ok, output = _probe_scispacy_runtime()
+    if not ok:
+        pytest.skip(f"SciSpacy runtime is unavailable in this environment: {output}")
 
 
 # ============================================================
@@ -29,7 +72,7 @@ class TestSciSpacyNERService:
         b = SciSpacyNERService.get_instance()
         assert a is b, "Singleton must return same instance"
 
-    def test_extract_entities_returns_list(self):
+    def test_extract_entities_returns_list(self, scispacy_runtime_available):
         """extract_entities must return a list (even if empty)."""
         from src.tools.scispacy_ner_service import SciSpacyNERService
         svc = SciSpacyNERService.get_instance()
@@ -38,7 +81,7 @@ class TestSciSpacyNERService:
         # Should find at least 1 entity in this biomedical sentence
         assert len(result) >= 1, f"Expected entities in biomedical text, got {result}"
 
-    def test_extract_entities_labels(self):
+    def test_extract_entities_labels(self, scispacy_runtime_available):
         """Extracted entities should have valid biomedical labels."""
         from src.tools.scispacy_ner_service import SciSpacyNERService
         svc = SciSpacyNERService.get_instance()
@@ -52,14 +95,14 @@ class TestSciSpacyNERService:
         }
         assert labels & expected_labels, f"Expected biomedical labels, got {labels}"
 
-    def test_extract_entities_empty_input(self):
+    def test_extract_entities_empty_input(self, scispacy_runtime_available):
         """Empty input must return empty list, not crash."""
         from src.tools.scispacy_ner_service import SciSpacyNERService
         svc = SciSpacyNERService.get_instance()
         assert svc.extract_entities("") == []
         assert svc.extract_entities("   ") == []
 
-    def test_normalize_entity_gene(self):
+    def test_normalize_entity_gene(self, scispacy_runtime_available):
         """NER-based normalization should recognize gene names."""
         from src.tools.scispacy_ner_service import SciSpacyNERService
         svc = SciSpacyNERService.get_instance()
@@ -67,7 +110,7 @@ class TestSciSpacyNERService:
         # Should return some form of EGFR or related uppercased entity
         assert result != "", f"Should normalize a known gene/protein, got empty"
 
-    def test_split_sentences(self):
+    def test_split_sentences(self, scispacy_runtime_available):
         """Sentence splitter should handle abbreviations correctly."""
         from src.tools.scispacy_ner_service import SciSpacyNERService
         svc = SciSpacyNERService.get_instance()
@@ -176,7 +219,7 @@ class TestSmartContextBuilderV2:
         """Backward-compatible alias used by legacy test names."""
         return self._make_data_items()
 
-    def test_build_scored_context_returns_tuple(self):
+    def test_build_scored_context_returns_tuple(self, scispacy_runtime_available):
         """build_scored_context must return (str, dict)."""
         from src.agents.smart_context_builder import SmartContextBuilder
         builder = SmartContextBuilder(max_chars=120000)
@@ -186,7 +229,7 @@ class TestSmartContextBuilderV2:
         assert "total_chars" in stats
         assert "compression_ratio" in stats
 
-    def test_no_extreme_compression(self):
+    def test_no_extreme_compression(self, scispacy_runtime_available):
         """Compression should NOT exceed 85% (was 91% in v1)."""
         from src.agents.smart_context_builder import SmartContextBuilder
         builder = SmartContextBuilder(max_chars=120000)
@@ -196,7 +239,7 @@ class TestSmartContextBuilderV2:
         # Context should retain meaningful content
         assert stats["total_chars"] > 100, "Context should not be empty"
 
-    def test_statistics_sentences_preserved(self):
+    def test_statistics_sentences_preserved(self, scispacy_runtime_available):
         """Sentences with p-values/HR must survive compression."""
         from src.agents.smart_context_builder import SmartContextBuilder
         builder = SmartContextBuilder(max_chars=120000)

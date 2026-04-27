@@ -21,6 +21,7 @@ Run:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -64,10 +65,22 @@ MODEL_NAMES: List[str] = [
     "en_core_sci_md",
 ]
 
+RUN_SCISPACY_INTEGRATION_ENV = "CASSANDRA_RUN_SCISPACY_INTEGRATION"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module", autouse=True)
+def optional_benchmark_enabled() -> None:
+    enabled_values = {"1", "true", "TRUE", "yes", "YES"}
+    if os.getenv(RUN_SCISPACY_INTEGRATION_ENV) not in enabled_values:
+        pytest.skip(
+            f"Set {RUN_SCISPACY_INTEGRATION_ENV}=1 to run the optional "
+            "multi-model SciSpacy benchmark."
+        )
+
 
 @pytest.fixture(scope="module")
 def pubmed_abstracts() -> List[Dict[str, str]]:
@@ -84,7 +97,10 @@ def pubmed_abstracts() -> List[Dict[str, str]]:
 @pytest.fixture(scope="module")
 def loaded_models() -> Dict[str, Any]:
     """Load all 4 SciSpacy models once and return as {name: nlp}."""
-    import spacy
+    try:
+        import spacy
+    except Exception as exc:
+        pytest.skip(f"SciSpacy runtime is unavailable: {exc}")
 
     models: Dict[str, Any] = {}
     for name in MODEL_NAMES:
