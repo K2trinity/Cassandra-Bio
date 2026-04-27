@@ -107,9 +107,12 @@ class RuleBasedRiskEngine:
 
         if status in TERMINAL_STATUSES:
             return "Low", evidence
-        if age_years > 5:
+
+        high_cutoff = _subtract_years(self.current_date, 5)
+        medium_cutoff = _subtract_years(self.current_date, 2)
+        if record.study_first_posted < high_cutoff:
             return "High", evidence
-        if 2 <= age_years <= 5:
+        if record.study_first_posted <= medium_cutoff:
             return "Medium", evidence
         return "Low", evidence
 
@@ -140,6 +143,13 @@ class RuleBasedRiskEngine:
 def _normalize_intervention_text(interventions: list[str]) -> str:
     text = " ".join(intervention.strip().lower() for intervention in interventions)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _subtract_years(value: date, years: int) -> date:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, day=28)
 
 
 def _has_amyloid_term(text: str) -> bool:

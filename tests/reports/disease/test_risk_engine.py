@@ -76,6 +76,28 @@ def test_completed_old_trial_and_recent_recruiting_trial_yield_low_timeline():
     assert "age 1.0 years" in risks[1].timeline_evidence
 
 
+def test_calendar_year_boundaries_drive_non_terminal_timeline_signal():
+    records = [
+        _trial("NCTEXACT5", posted=date(2021, 4, 27), status="RECRUITING"),
+        _trial("NCTOLDER5", posted=date(2021, 4, 26), status="RECRUITING"),
+        _trial("NCTEXACT2", posted=date(2024, 4, 27), status="RECRUITING"),
+        _trial("NCTRECENT", posted=date(2024, 4, 28), status="RECRUITING"),
+    ]
+
+    risks = RuleBasedRiskEngine(current_date=date(2026, 4, 27)).build(
+        records,
+        "Alzheimer Disease",
+    )
+
+    assert [risk.timeline_signal for risk in risks] == [
+        "Medium",
+        "High",
+        "Medium",
+        "Low",
+    ]
+    assert "age 5.0 years" in risks[0].timeline_evidence
+
+
 def test_missing_first_posted_yields_data_insufficient_timeline():
     record = _trial("NCT00000004", posted=None, status="RECRUITING")
 
