@@ -59,6 +59,22 @@ class _FakePDFRenderer:
         return output_path
 
 
+class _MinimalMarkdownRenderer:
+    def render(self, document_ir):
+        return "# Minimal\n"
+
+
+class _MinimalHTMLRenderer:
+    def render(self, document_ir):
+        return "<html>Minimal</html>"
+
+
+class _MinimalPDFRenderer:
+    def render_to_pdf(self, document_ir, output_path):
+        output_path.write_bytes(b"%PDF-minimal\n")
+        return output_path
+
+
 def _table_block(**overrides):
     block = {
         "type": "table",
@@ -154,6 +170,24 @@ def test_renderer_adapter_writes_all_artifacts_from_same_ir():
         assert pdf_renderer.optimize_layout_values == [True]
 
 
+def test_renderer_adapter_supports_minimal_renderer_signatures():
+    adapter = DiseaseReportRendererAdapter(
+        markdown_renderer=_MinimalMarkdownRenderer(),
+        html_renderer=_MinimalHTMLRenderer(),
+        pdf_renderer=_MinimalPDFRenderer(),
+    )
+    with tempfile.TemporaryDirectory(dir=Path.cwd()) as output_dir:
+        artifacts = adapter.render_all(
+            document_ir={"metadata": {}, "chapters": []},
+            output_dir=output_dir,
+            project_name="minimal renderer",
+        )
+
+        assert Path(artifacts.markdown_path).read_text(encoding="utf-8") == "# Minimal\n"
+        assert Path(artifacts.html_path).read_text(encoding="utf-8") == "<html>Minimal</html>"
+        assert Path(artifacts.pdf_path).read_bytes() == b"%PDF-minimal\n"
+
+
 def test_html_renderer_respects_table_colgroup_and_wide_class():
     html = HTMLRenderer()._render_table(
         _table_block(
@@ -169,6 +203,14 @@ def test_html_renderer_respects_table_colgroup_and_wide_class():
     assert '<table class="clinical-trial-landscape">' in html
     assert '<col style="width: 70%">' in html
     assert '<col style="width: 30%">' in html
+
+
+def test_html_renderer_uses_wide_wrapper_for_layout_hint_without_class_or_colgroup():
+    html = HTMLRenderer()._render_table(_table_block(metadata={"layout": "wide-risk-table"}))
+
+    assert '<div class="table-wrap table-wrap--wide">' in html
+    assert "<colgroup>" not in html
+    assert "<table>" in html
 
 
 def test_html_renderer_plain_table_keeps_backward_compatible_markup():

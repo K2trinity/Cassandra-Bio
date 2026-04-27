@@ -1600,8 +1600,9 @@ document.addEventListener('DOMContentLoaded', function() {
         metadata = block.get("metadata") if isinstance(block.get("metadata"), dict) else {}
         table_class = metadata.get("className") or metadata.get("class") or ""
         table_class = str(table_class).strip() if table_class else ""
+        layout_hint = str(metadata.get("layout") or "").strip()
         colgroup = block.get("colgroup") if isinstance(block.get("colgroup"), list) else []
-        has_layout_hint = bool(table_class or colgroup)
+        has_layout_hint = bool(table_class or layout_hint or colgroup)
 
         rows_html = ""
         for row in rows:

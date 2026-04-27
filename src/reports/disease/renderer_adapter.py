@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import re
 from pathlib import Path
@@ -63,13 +64,22 @@ class DiseaseReportRendererAdapter:
 
         ir_file_path = str(ir_path)
 
-        markdown_content = self.markdown_renderer.render(copy.deepcopy(source_ir), ir_file_path=ir_file_path)
+        markdown_content = _call_with_supported_kwargs(
+            self.markdown_renderer.render,
+            copy.deepcopy(source_ir),
+            ir_file_path=ir_file_path,
+        )
         markdown_path.write_text(markdown_content, encoding="utf-8")
 
-        html_content = self.html_renderer.render(copy.deepcopy(source_ir), ir_file_path=ir_file_path)
+        html_content = _call_with_supported_kwargs(
+            self.html_renderer.render,
+            copy.deepcopy(source_ir),
+            ir_file_path=ir_file_path,
+        )
         html_path.write_text(html_content, encoding="utf-8")
 
-        rendered_pdf_path = self.pdf_renderer.render_to_pdf(
+        rendered_pdf_path = _call_with_supported_kwargs(
+            self.pdf_renderer.render_to_pdf,
             copy.deepcopy(source_ir),
             pdf_path,
             optimize_layout=True,
@@ -92,6 +102,18 @@ class DiseaseReportRendererAdapter:
         if isinstance(document_ir, dict):
             return copy.deepcopy(document_ir)
         raise TypeError("document_ir must be a mapping or expose model_dump()/to_dict()")
+
+
+def _call_with_supported_kwargs(method: Any, *args: Any, **kwargs: Any) -> Any:
+    signature = inspect.signature(method)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return method(*args, **kwargs)
+    supported_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters
+    }
+    return method(*args, **supported_kwargs)
 
 
 __all__ = ["DiseaseReportRendererAdapter", "sanitize_report_filename"]
