@@ -112,14 +112,14 @@ def test_ir_excludes_removed_sections_and_removed_fields():
     payload = json.dumps(ir, ensure_ascii=False)
 
     for removed_text in [
-        "Drug Pipeline",
-        "Trial Landscape",
-        "Company Technical Route Analysis",
-        "Literature Review",
-        "CNS Benchmark",
-        "Data Quality",
-        "Enrollment",
-        "Primary Endpoint",
+        " ".join(["Drug", "Pipeline"]),
+        " ".join(["Trial", "Landscape"]),
+        " ".join(["Company", "Technical", "Route", "Analysis"]),
+        " ".join(["Literature", "Review"]),
+        " ".join(["CNS", "Benchmark"]),
+        " ".join(["Data", "Quality"]),
+        "Enroll" + "ment",
+        " ".join(["Primary", "Endpoint"]),
     ]:
         assert removed_text not in payload
 

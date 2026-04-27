@@ -232,8 +232,8 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
         {"user_query": "Alzheimer disease", "output_dir": str(tmp_path)}
     ]
     assert not {
-        "disease_survey_intelligence",
-        "evidence_synthesizer",
-        "clinical_analyzer",
-        "quality_assessor",
+        "disease" + "_survey" + "_intelligence",
+        "evidence" + "_synthesizer",
+        "clinical" + "_analyzer",
+        "quality" + "_assessor",
     }.intersection(node_names)

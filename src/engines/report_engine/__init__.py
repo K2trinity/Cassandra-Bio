@@ -4,7 +4,6 @@ All report functionality should be imported from this package.
 """
 
 from .core import ChapterStorage, DocumentComposer, TemplateSection, parse_template_sections
-from .agent import ReportWriterAgent, create_report_agent
 from .due_diligence import (
 	ClinicalEvidence,
 	ClinicalTrialRecord,
@@ -73,8 +72,6 @@ __all__ = [
 	"parse_template_sections",
 	"ChapterStorage",
 	"DocumentComposer",
-	"ReportWriterAgent",
-	"create_report_agent",
 	"ClinicalEvidence",
 	"ClinicalTrialRecord",
 	"CompanyProfile",

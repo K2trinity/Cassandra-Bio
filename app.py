@@ -47,11 +47,6 @@ from config import Settings
 from src.services.workflow_service import WorkflowService
 from src.services.market_data_service import get_ohlc_rows
 from src.services.event_ingestion_service import get_events_for_ticker
-from src.graph.state import AgentState
-from langgraph.checkpoint.memory import MemorySaver
-
-# Initialize Checkpointer
-_redis_checkpointer = MemorySaver()
 _workflow_service = WorkflowService()
 
 # Conditionally import Neo4j GraphManager
@@ -587,7 +582,6 @@ def analyze():
             result = None
             for node_name, partial_state in _workflow_service.stream(
                 user_query=query,
-                checkpointer=_redis_checkpointer,
                 thread_id=_this_task_id,
                 pdf_paths=pdf_paths if pdf_paths else None
             ):

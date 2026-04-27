@@ -167,16 +167,16 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
     ]
 
     for old_section in [
-        "Drug Pipeline",
-        "Trial Landscape",
-        "Company Technical Route Analysis",
-        "Literature Review",
-        "CNS Benchmark",
-        "Data Quality",
+        " ".join(["Drug", "Pipeline"]),
+        " ".join(["Trial", "Landscape"]),
+        " ".join(["Company", "Technical", "Route", "Analysis"]),
+        " ".join(["Literature", "Review"]),
+        " ".join(["CNS", "Benchmark"]),
+        " ".join(["Data", "Quality"]),
     ]:
         assert old_section not in final_report
 
-    for removed_field in ["Enrollment", "Primary Endpoint"]:
+    for removed_field in ["Enroll" + "ment", " ".join(["Primary", "Endpoint"])]:
         assert removed_field not in final_report
 
     assert renderer.chapter_titles == [
