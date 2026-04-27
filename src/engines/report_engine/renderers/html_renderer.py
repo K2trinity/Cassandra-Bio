@@ -1635,12 +1635,20 @@ document.addEventListener('DOMContentLoaded', function() {
     def _render_table_colgroup(self, colgroup: List[Any]) -> str:
         cols: List[str] = []
         for column in colgroup:
-            width = column.get("width") if isinstance(column, dict) else None
-            if width is None or width == "":
+            width = self._safe_table_col_width(column.get("width")) if isinstance(column, dict) else ""
+            if not width:
                 cols.append("<col>")
                 continue
             cols.append(f'<col style="width: {self._escape_attr(width)}">')
         return f"<colgroup>{''.join(cols)}</colgroup>" if cols else ""
+
+    def _safe_table_col_width(self, value: Any) -> str:
+        width = str(value or "").strip().lower()
+        if width in {"auto", "0"}:
+            return width
+        if re.fullmatch(r"(?:0|[1-9]\d*)(?:\.\d+)?(?:%|px|em|rem|ch|vw|vh|vmin|vmax)", width):
+            return width
+        return ""
 
     def _render_swot_table(self, block: Dict[str, Any]) -> str:
         """

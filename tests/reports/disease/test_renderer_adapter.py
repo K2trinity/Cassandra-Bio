@@ -213,6 +213,22 @@ def test_html_renderer_uses_wide_wrapper_for_layout_hint_without_class_or_colgro
     assert "<table>" in html
 
 
+def test_html_renderer_rejects_unsafe_colgroup_width_css():
+    html = HTMLRenderer()._render_table(
+        _table_block(
+            colgroup=[
+                {"key": "study", "width": '10%; background-image: url("https://example.test/x")'},
+                {"key": "sponsor", "width": "12rem"},
+            ],
+        )
+    )
+
+    assert '<col style="width: 12rem">' in html
+    assert "background-image" not in html
+    assert "https://example.test" not in html
+    assert '<colgroup><col><col style="width: 12rem"></colgroup>' in html
+
+
 def test_html_renderer_plain_table_keeps_backward_compatible_markup():
     html = HTMLRenderer()._render_table(_table_block(caption=None))
 
