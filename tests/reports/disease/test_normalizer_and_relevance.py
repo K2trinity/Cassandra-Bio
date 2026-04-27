@@ -49,6 +49,7 @@ def test_normalizer_reads_status_aliases_without_losing_source_field():
 
     assert normalize_trial_payload({**base, "status": "RECRUITING"}).status == "RECRUITING"
     assert normalize_trial_payload({**base, "study_status": "COMPLETED"}).status == "COMPLETED"
+    assert normalize_trial_payload({**base, "metadata": {"status": "TERMINATED"}}).status == "TERMINATED"
     assert normalize_trial_payload({**base, "metadata": {"overall_status": "WITHDRAWN"}}).status == "WITHDRAWN"
     assert normalize_trial_payload({**base, "metadata": {"study_status": "SUSPENDED"}}).status == "SUSPENDED"
 
