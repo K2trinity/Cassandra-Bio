@@ -43,16 +43,16 @@ def conditions_full_match(conditions: Iterable[str], profile: DiseaseProfile) ->
         allowed = {normalize_condition_text(term) for term in profile.condition_terms}
     for condition in conditions or []:
         normalized = normalize_condition_text(str(condition))
-        if normalized in BROAD_NON_ANCHOR_TERMS:
-            continue
         if normalized in allowed:
             return True
+        if normalized in BROAD_NON_ANCHOR_TERMS:
+            continue
     return False
 
 
 def _title_case_entity(value: str) -> str:
     text = str(value or "").strip()
-    text = re.sub(r"[^A-Za-z0-9' -]+", " ", text)
+    text = re.sub(r"[^A-Za-z0-9' /-]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip(" .")
     words = []
     lower_words = {"and", "or", "of", "in", "with", "for"}
@@ -60,8 +60,14 @@ def _title_case_entity(value: str) -> str:
         lowered = word.lower()
         if index > 0 and lowered in lower_words:
             words.append(lowered)
-        elif word.isupper() and len(word) <= 6:
-            words.append(word)
         else:
-            words.append(word[:1].upper() + word[1:].lower())
+            words.append(_title_case_token(word))
     return " ".join(words)
+
+
+def _title_case_token(value: str) -> str:
+    if "/" in value:
+        return "/".join(_title_case_token(part) for part in value.split("/"))
+    if value.isupper() and len(value) <= 6:
+        return value
+    return value[:1].upper() + value[1:].lower()

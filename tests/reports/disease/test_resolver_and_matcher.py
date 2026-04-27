@@ -28,6 +28,21 @@ def test_resolver_handles_possessive_user_input():
     }
 
 
+def test_resolver_handles_polite_generate_report_prompt():
+    profile = DiseaseResolver().resolve("Please generate a report for Parkinson disease")
+
+    assert profile.disease_name == "Parkinson Disease"
+    assert profile.canonical_condition == "Parkinson Disease"
+    assert profile.condition_terms == ["Parkinson Disease"]
+
+
+def test_resolver_preserves_slash_containing_disease_name():
+    profile = DiseaseResolver().resolve("HIV/AIDS report")
+
+    assert profile.disease_name == "HIV/AIDS"
+    assert profile.disease_name != "HIV"
+
+
 def test_normalize_condition_text_collapses_possessive_and_punctuation():
     assert normalize_condition_text("Alzheimer's Disease") == "alzheimer disease"
     assert normalize_condition_text("Alzheimers disease") == "alzheimer disease"
@@ -49,6 +64,13 @@ def test_conditions_full_match_rejects_non_target_and_broad_terms():
     assert not conditions_full_match(["Cognitive Impairment"], profile)
     assert not conditions_full_match(["Mild Cognitive Impairment"], profile)
     assert not conditions_full_match(["Caregiver Education"], profile)
+
+
+def test_conditions_full_match_accepts_broad_terms_when_targeted():
+    for disease_name in ["Dementia", "Mild Cognitive Impairment", "Cognitive Impairment"]:
+        profile = DiseaseResolver().resolve(disease_name)
+
+        assert conditions_full_match([disease_name], profile)
 
 
 def test_condition_variants_for_non_ad_disease_are_stable():
