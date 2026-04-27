@@ -35,7 +35,7 @@ class ClinicalTrialsConditionDiscovery:
 
     def discover(self, profile: DiseaseProfile) -> DiseaseProfile:
         topic_html = self._get_text(profile.expert_topic_url)
-        candidates = _extract_full_match_condition_candidates(topic_html)
+        candidates = _extract_condition_candidates(topic_html)
         if not candidates:
             return profile
 
@@ -76,19 +76,28 @@ class ClinicalTrialsDiseaseHarvester:
         self,
         get_json: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         page_size: int = 100,
+        max_pages: int = 10,
     ):
         self._get_json = get_json or self._requests_get_json
         self.page_size = page_size
+        self.max_pages = max(1, int(max_pages))
 
     def fetch_raw_studies(self, profile: DiseaseProfile, max_records: int = 50) -> RawClinicalTrialsResult:
         raw_count = 0
-        retained: list[dict[str, Any]] = []
+        retained_by_nct: dict[str, dict[str, Any]] = {}
+        retained_without_nct: list[dict[str, Any]] = []
         rejected_nct_numbers: list[str] = []
-        seen_nct_numbers: set[str] = set()
+        rejected_seen: set[str] = set()
 
         for condition_term in _query_condition_terms(profile):
             page_token: str | None = None
-            while True:
+            seen_page_tokens: set[str | None] = set()
+            pages_fetched = 0
+            while pages_fetched < self.max_pages:
+                if page_token in seen_page_tokens:
+                    break
+                seen_page_tokens.add(page_token)
+
                 params: dict[str, Any] = {
                     "query.cond": condition_term,
                     "pageSize": self.page_size,
@@ -100,28 +109,32 @@ class ClinicalTrialsDiseaseHarvester:
                 payload = self._get_json(CTGOV_STUDIES_URL, params)
                 studies = _extract_study_rows(payload)
                 raw_count += len(studies)
+                pages_fetched += 1
 
                 for study in studies:
                     nct_number = _extract_nct_number(study)
-                    if nct_number:
-                        if nct_number in seen_nct_numbers:
-                            continue
-                        seen_nct_numbers.add(nct_number)
-
                     if conditions_full_match(_extract_conditions(study), profile):
-                        retained.append(study)
+                        if nct_number:
+                            retained_by_nct.setdefault(nct_number, study)
+                        else:
+                            retained_without_nct.append(study)
                     elif nct_number:
-                        rejected_nct_numbers.append(nct_number)
+                        if nct_number not in retained_by_nct and nct_number not in rejected_seen:
+                            rejected_nct_numbers.append(nct_number)
+                            rejected_seen.add(nct_number)
 
                 page_token = _extract_next_page_token(payload)
                 if not page_token:
                     break
 
+        retained = list(retained_by_nct.values()) + retained_without_nct
         retained.sort(key=_sort_date_key, reverse=True)
         return RawClinicalTrialsResult(
             studies=retained[: max(0, int(max_records))],
             raw_count=raw_count,
-            rejected_nct_numbers=rejected_nct_numbers,
+            rejected_nct_numbers=[
+                nct_number for nct_number in rejected_nct_numbers if nct_number not in retained_by_nct
+            ],
         )
 
     @staticmethod
@@ -131,9 +144,16 @@ class ClinicalTrialsDiseaseHarvester:
         return response.json()
 
 
-def _extract_full_match_condition_candidates(topic_html: str) -> list[str]:
-    candidates: list[str] = []
+def _extract_condition_candidates(topic_html: str) -> list[str]:
     raw_html = html.unescape(str(topic_html or ""))
+    full_match_candidates = _extract_full_match_condition_candidates(raw_html)
+    if full_match_candidates:
+        return full_match_candidates
+    return _extract_visible_anchor_condition_candidates(raw_html)
+
+
+def _extract_full_match_condition_candidates(raw_html: str) -> list[str]:
+    candidates: list[str] = []
 
     for href in _extract_href_values(raw_html):
         for term in parse_qs(urlsplit(href).query).get("term", []):
@@ -141,6 +161,16 @@ def _extract_full_match_condition_candidates(topic_html: str) -> list[str]:
         _append_full_match_candidates(candidates, href)
 
     _append_full_match_candidates(candidates, raw_html)
+    return candidates
+
+
+def _extract_visible_anchor_condition_candidates(raw_html: str) -> list[str]:
+    candidates: list[str] = []
+    for match in re.finditer(r"<a\b[^>]*>(?P<body>.*?)</a>", raw_html, flags=re.IGNORECASE | re.DOTALL):
+        text = re.sub(r"<[^>]+>", " ", match.group("body"))
+        candidate = _clean_condition_candidate(text)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
     return candidates
 
 
@@ -178,13 +208,13 @@ def _clean_condition_candidate(value: str) -> str:
 def _query_condition_terms(profile: DiseaseProfile) -> list[str]:
     terms = list(profile.condition_terms) or [profile.canonical_condition]
     selected: list[str] = []
-    seen_normalized: set[str] = set()
+    seen_terms: set[str] = set()
     for term in terms:
-        normalized = normalize_condition_text(term)
-        if not normalized or normalized in seen_normalized:
+        text = str(term or "").strip()
+        if not text or text in seen_terms:
             continue
-        selected.append(term)
-        seen_normalized.add(normalized)
+        selected.append(text)
+        seen_terms.add(text)
     return selected or [profile.canonical_condition]
 
 
