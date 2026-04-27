@@ -1597,6 +1597,12 @@ document.addEventListener('DOMContentLoaded', function() {
         raw_rows = block.get("rows") or []
         fixed_rows = self._fix_nested_table_rows(raw_rows)
         rows = self._normalize_table_rows(fixed_rows)
+        metadata = block.get("metadata") if isinstance(block.get("metadata"), dict) else {}
+        table_class = metadata.get("className") or metadata.get("class") or ""
+        table_class = str(table_class).strip() if table_class else ""
+        colgroup = block.get("colgroup") if isinstance(block.get("colgroup"), list) else []
+        has_layout_hint = bool(table_class or colgroup)
+
         rows_html = ""
         for row in rows:
             row_cells = ""
@@ -1617,7 +1623,23 @@ document.addEventListener('DOMContentLoaded', function() {
             rows_html += f"<tr>{row_cells}</tr>"
         caption = block.get("caption")
         caption_html = f"<caption>{self._escape_html(caption)}</caption>" if caption else ""
-        return f'<div class="table-wrap"><table>{caption_html}<tbody>{rows_html}</tbody></table></div>'
+        table_attr = f' class="{self._escape_attr(table_class)}"' if table_class else ""
+        colgroup_html = self._render_table_colgroup(colgroup)
+        wrapper_class = "table-wrap table-wrap--wide" if has_layout_hint else "table-wrap"
+        return (
+            f'<div class="{wrapper_class}"><table{table_attr}>'
+            f"{colgroup_html}{caption_html}<tbody>{rows_html}</tbody></table></div>"
+        )
+
+    def _render_table_colgroup(self, colgroup: List[Any]) -> str:
+        cols: List[str] = []
+        for column in colgroup:
+            width = column.get("width") if isinstance(column, dict) else None
+            if width is None or width == "":
+                cols.append("<col>")
+                continue
+            cols.append(f'<col style="width: {self._escape_attr(width)}">')
+        return f"<colgroup>{''.join(cols)}</colgroup>" if cols else ""
 
     def _render_swot_table(self, block: Dict[str, Any]) -> str:
         """
