@@ -23,8 +23,8 @@ BROAD_NON_ANCHOR_TERMS = {
 def normalize_condition_text(value: str) -> str:
     text = str(value or "").strip().lower()
     text = text.replace("\u2019", "'").replace("\u2018", "'")
-    text = re.sub(r"\b([a-z0-9]+)(?:'s|\s+s)\b", r"\1", text)
-    text = re.sub(r"\balzheimers\b", "alzheimer", text)
+    text = re.sub(r"\b([a-z0-9]+)(?:'s|\s+s)(?=\s+disease\b)", r"\1", text)
+    text = re.sub(r"\balzheimers(?=\s+disease\b)", "alzheimer", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text

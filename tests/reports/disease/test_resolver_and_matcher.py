@@ -28,6 +28,17 @@ def test_resolver_handles_possessive_user_input():
     }
 
 
+def test_resolver_canonicalizes_general_possessive_disease_input():
+    profile = DiseaseResolver().resolve("Parkinson's disease pipeline")
+
+    assert profile.disease_name == "Parkinson Disease"
+    assert profile.canonical_condition == "Parkinson Disease"
+    assert "Parkinson Disease" in profile.condition_terms
+    assert "Parkinson's Disease" in profile.condition_terms
+    assert profile.normalized_terms == ["parkinson disease"]
+    assert "FullMatch%5BParkinson%20Disease%5D" in profile.expert_full_match_url
+
+
 def test_resolver_handles_polite_generate_report_prompt():
     profile = DiseaseResolver().resolve("Please generate a report for Parkinson disease")
 
@@ -40,7 +51,9 @@ def test_resolver_handles_common_request_prompts():
     expected = "Parkinson Disease"
 
     assert DiseaseResolver().resolve("Can you generate a report for Parkinson disease").disease_name == expected
+    assert DiseaseResolver().resolve("Can you please generate a report for Parkinson disease").disease_name == expected
     assert DiseaseResolver().resolve("I need a report on Parkinson disease").disease_name == expected
+    assert DiseaseResolver().resolve("Generate a Parkinson disease report").disease_name == expected
 
 
 def test_resolver_preserves_slash_containing_disease_name():
