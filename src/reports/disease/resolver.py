@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-from .condition_matcher import condition_variants, normalize_condition_text
+from .condition_matcher import (
+    APOSTROPHELESS_POSSESSIVE_EPONYMS,
+    condition_variants,
+    normalize_condition_text,
+)
 from .models import DiseaseProfile
 
 
@@ -79,7 +83,6 @@ def _strip_request_verb(value: str) -> str:
 
 def _clean_candidate(value: str) -> str:
     text = str(value or "").strip()
-    text = re.split(r"\s+(?:with|using|based on|from)\s+", text, maxsplit=1, flags=re.IGNORECASE)[0]
     text = re.split(r"[,;:|]", text, maxsplit=1)[0]
     text = re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip(" .")
@@ -90,14 +93,14 @@ def _canonical_condition(value: str) -> str:
     normalized = normalize_condition_text(value)
     if normalized == "alzheimer disease":
         return "Alzheimer Disease"
-    if _has_explicit_possessive_disease(value):
+    if _has_explicit_possessive_disease(value) or _has_apostropheless_eponym_disease(value):
         return _title_case_condition(normalized)
     return _title_case_condition(value)
 
 
 def _condition_terms(canonical: str, disease_name: str) -> list[str]:
     variants = condition_variants(canonical)
-    if _has_explicit_possessive_disease(disease_name):
+    if _has_explicit_possessive_disease(disease_name) or _has_apostropheless_eponym_disease(disease_name):
         possessive_variant = _title_case_condition(_normalize_spaced_possessive(disease_name))
         if (
             normalize_condition_text(possessive_variant) == normalize_condition_text(canonical)
@@ -112,6 +115,11 @@ def _has_explicit_possessive_disease(value: str) -> bool:
     return bool(re.search(r"\b[A-Za-z0-9]+(?:'s|\s+s)\s+disease\b", text, flags=re.IGNORECASE))
 
 
+def _has_apostropheless_eponym_disease(value: str) -> bool:
+    aliases = "|".join(re.escape(alias) for alias in APOSTROPHELESS_POSSESSIVE_EPONYMS)
+    return bool(re.search(rf"\b(?:{aliases})\s+disease\b", str(value or ""), flags=re.IGNORECASE))
+
+
 def _normalize_spaced_possessive(value: str) -> str:
     text = str(value or "").replace("\u2019", "'").replace("\u2018", "'")
     return re.sub(r"\b([A-Za-z0-9]+)\s+s(?=\s+disease\b)", r"\1's", text, flags=re.IGNORECASE)
@@ -119,8 +127,13 @@ def _normalize_spaced_possessive(value: str) -> str:
 
 def _title_case_condition(value: str) -> str:
     words = []
-    for word in _clean_candidate(value).split():
-        words.append(_title_case_condition_token(word))
+    lower_words = {"and", "or", "of", "in", "with", "for", "from"}
+    for index, word in enumerate(_clean_candidate(value).split()):
+        lowered = word.lower()
+        if index > 0 and lowered in lower_words:
+            words.append(lowered)
+        else:
+            words.append(_title_case_condition_token(word))
     return " ".join(words)
 
 

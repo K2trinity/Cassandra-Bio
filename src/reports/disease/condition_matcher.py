@@ -19,12 +19,20 @@ BROAD_NON_ANCHOR_TERMS = {
     "nursing career",
 }
 
+APOSTROPHELESS_POSSESSIVE_EPONYMS = {
+    "alzheimers": "alzheimer",
+    "crohns": "crohn",
+    "huntingtons": "huntington",
+    "parkinsons": "parkinson",
+}
+
 
 def normalize_condition_text(value: str) -> str:
     text = str(value or "").strip().lower()
     text = text.replace("\u2019", "'").replace("\u2018", "'")
     text = re.sub(r"\b([a-z0-9]+)(?:'s|\s+s)(?=\s+disease\b)", r"\1", text)
-    text = re.sub(r"\balzheimers(?=\s+disease\b)", "alzheimer", text)
+    for alias, stem in APOSTROPHELESS_POSSESSIVE_EPONYMS.items():
+        text = re.sub(rf"\b{alias}(?=\s+disease\b)", stem, text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text

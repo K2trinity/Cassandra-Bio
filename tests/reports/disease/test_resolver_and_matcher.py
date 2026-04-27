@@ -39,6 +39,17 @@ def test_resolver_canonicalizes_general_possessive_disease_input():
     assert "FullMatch%5BParkinson%20Disease%5D" in profile.expert_full_match_url
 
 
+def test_resolver_canonicalizes_apostropheless_common_eponyms():
+    assert DiseaseResolver().resolve("Parkinsons disease pipeline").disease_name == "Parkinson Disease"
+    assert DiseaseResolver().resolve("Crohns disease pipeline").disease_name == "Crohn Disease"
+    assert DiseaseResolver().resolve("Huntingtons disease pipeline").disease_name == "Huntington Disease"
+
+
+def test_resolver_preserves_non_possessive_s_eponyms():
+    assert DiseaseResolver().resolve("Graves Disease").disease_name == "Graves Disease"
+    assert DiseaseResolver().resolve("Legionnaires Disease").disease_name == "Legionnaires Disease"
+
+
 def test_resolver_handles_polite_generate_report_prompt():
     profile = DiseaseResolver().resolve("Please generate a report for Parkinson disease")
 
@@ -63,6 +74,14 @@ def test_resolver_preserves_slash_containing_disease_name():
     assert profile.disease_name != "HIV"
 
 
+def test_resolver_preserves_connector_words_inside_condition_names():
+    assert DiseaseResolver().resolve("Cancer with unknown primary report").disease_name == "Cancer with Unknown Primary"
+    assert (
+        DiseaseResolver().resolve("Bleeding from esophageal varices report").disease_name
+        == "Bleeding from Esophageal Varices"
+    )
+
+
 def test_normalize_condition_text_collapses_possessive_and_punctuation():
     assert normalize_condition_text("Alzheimer's Disease") == "alzheimer disease"
     assert normalize_condition_text("Alzheimers disease") == "alzheimer disease"
@@ -82,7 +101,15 @@ def test_conditions_full_match_accepts_general_possessive_disease_terms():
     crohn_profile = DiseaseResolver().resolve("Crohn disease")
 
     assert conditions_full_match(["Parkinson's Disease"], parkinson_profile)
+    assert conditions_full_match(["Parkinsons Disease"], parkinson_profile)
     assert conditions_full_match(["Crohn's Disease"], crohn_profile)
+    assert conditions_full_match(["Crohns Disease"], crohn_profile)
+    assert conditions_full_match(["Huntingtons Disease"], DiseaseResolver().resolve("Huntington disease"))
+
+
+def test_conditions_full_match_preserves_non_possessive_s_eponyms():
+    assert not conditions_full_match(["Grave Disease"], DiseaseResolver().resolve("Graves Disease"))
+    assert not conditions_full_match(["Legionnaire Disease"], DiseaseResolver().resolve("Legionnaires Disease"))
 
 
 def test_conditions_full_match_rejects_non_target_and_broad_terms():
