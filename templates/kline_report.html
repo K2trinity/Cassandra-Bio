@@ -1,8 +1,7 @@
 {% extends "base.html" %}
-{% block title %}K-Line + Report · {{ symbol }}{% endblock %}
+{% block title %}K-Line Workspace · {{ symbol }}{% endblock %}
 
 {% block head %}
-{% include "partials/kline_chart_assets.html" %}
 <style>
   .kline-report-container {
     --panel-height: clamp(260px, 30vh, 360px);
@@ -70,7 +69,67 @@
   }
 
   #kline-container .chart-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
     min-height: clamp(320px, 48vh, 520px);
+    background: #0d1117;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #1f2937;
+  }
+
+  #kline-container .chart-container svg,
+  #kline-container .chart-container .particle-layer {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  #kline-container .chart-container svg {
+    z-index: 1;
+  }
+
+  #kline-container .chart-container .particle-layer {
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  #kline-container .chart-container .particle-tooltip {
+    position: absolute;
+    z-index: 4;
+    width: 280px;
+    max-width: calc(100% - 8px);
+    padding: 10px 12px;
+    background: rgba(6, 10, 18, 0.95);
+    border: 1px solid #334155;
+    border-radius: 8px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+    color: #e2e8f0;
+    pointer-events: none;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.3;
+  }
+
+  #kline-container .chart-container .pt-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    word-break: break-word;
+  }
+
+  #kline-container .chart-container .pt-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  #kline-container .chart-container .pt-sentiment,
+  #kline-container .chart-container .pt-ret {
+    white-space: nowrap;
   }
 
   .chart-empty-state {
@@ -582,7 +641,31 @@
   </section>
 </div>
 
-{% include "partials/kline_chart_runtime.html" %}
+<script src="/static/vendor/pokie-chart.umd.js"></script>
+<script>
+  window.CassandraKline = window.CassandraKline || {};
+  window.CassandraKline.renderChart = function(options) {
+    if (!window.PokieChart || typeof window.PokieChart.render !== 'function') {
+      throw new Error('K-line renderer is unavailable.');
+    }
+
+    const container = document.getElementById(options.containerId);
+    if (!container) {
+      throw new Error('K-line chart container was not found.');
+    }
+
+    return window.PokieChart.render(container, {
+      ohlcData: options.ohlcData || [],
+      events: options.events || [],
+      onEventClick: options.onEventClick,
+      onAnomalyDetected: options.onAnomalyDetected,
+      onHover: options.onHover,
+      onRangeSelect: options.onRangeSelect,
+      highlightedEventId: options.highlightedEventId,
+      equityCurve: options.equityCurve || [],
+    });
+  };
+</script>
 <script>
   const ticker = '{{ symbol }}';
   const ohlcData = {{ ohlc_json | tojson }};

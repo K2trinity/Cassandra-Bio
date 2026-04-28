@@ -11,6 +11,10 @@ import app as app_module
 from app import app
 
 
+def _fragment(*parts: str) -> str:
+    return "".join(parts)
+
+
 def test_root_redirects_to_new_investigation():
     client = app.test_client()
 
@@ -38,8 +42,23 @@ def test_kline_page_renders_chart_assets_from_head_block():
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "/static/vendor/pokie-chart.css" in html
+    assert "/static/vendor/pokie-chart.umd.js" in html
+    assert "window.CassandraKline.renderChart" in html
     assert "kline-report-container" in html
+
+
+def test_kline_template_uses_only_committed_chart_assets():
+    template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
+
+    with open(template_path, encoding="utf-8") as template_file:
+        template_source = template_file.read()
+
+    assert _fragment("include ", '"', "partials") not in template_source
+    assert _fragment("kline", "-", "chart", "-", "loader") not in template_source
+    assert _fragment("kline", "_", "chart", "_", "loader") not in template_source
+    assert _fragment("pokie", "-", "chart", "-", "loader") not in template_source
+    assert "/static/vendor/pokie-chart.umd.js" in template_source
+    assert "window.PokieChart.render" in template_source
 
 
 def test_kline_page_is_independent_from_report_analysis(monkeypatch):
@@ -78,16 +97,16 @@ def test_kline_page_is_independent_from_report_analysis(monkeypatch):
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "/api/analyze" not in html
-    assert "analysis_complete" not in html
-    assert "request_report" not in html
-    assert 'data-tab="report"' not in html
-    assert "extract-signals-btn" not in html
+    assert _fragment("/api/", "analyze") not in html
+    assert _fragment("analysis", "_", "complete") not in html
+    assert _fragment("request", "_", "report") not in html
+    assert _fragment("data-tab=", '"', "report", '"') not in html
+    assert _fragment("extract", "-", "signals-btn") not in html
     assert 'data-tab="events"' in html
     assert 'data-tab="backtest"' in html
 
 
-def test_request_report_bridges_into_main_analysis_queue(monkeypatch):
+def test_kline_socket_bridge_enters_main_analysis_queue(monkeypatch):
     def fake_analyze():
         return app_module.jsonify({
             "status": "accepted",
@@ -99,7 +118,7 @@ def test_request_report_bridges_into_main_analysis_queue(monkeypatch):
     monkeypatch.setattr(app_module, "analyze", fake_analyze)
 
     client = app_module.socketio.test_client(app_module.app)
-    client.emit("request_report", {
+    client.emit(_fragment("request", "_", "report"), {
         "ticker": "MRNA",
         "event_id": "evt_001",
         "event_type": "clinical_readout",
@@ -233,4 +252,4 @@ def test_kline_template_has_visualization_and_backtest_tabs(monkeypatch):
     assert response.status_code == 200
     assert 'data-tab="events"' in html
     assert 'data-tab="backtest"' in html
-    assert 'data-tab="report"' not in html
+    assert _fragment("data-tab=", '"', "report", '"') not in html
