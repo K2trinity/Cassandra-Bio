@@ -175,6 +175,58 @@ def test_normalize_openfda_recall(openfda_recall_payload):
     assert len(event["date"]) == 10
 
 
+def test_normalize_openfda_legacy_no_brand_uses_sponsor_without_uppercasing():
+    """Legacy openFDA fallback should preserve sponsor casing when no brand exists."""
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "ANDA001",
+                "sponsor_name": "mixedCase pharma",
+                "openfda": {"brand_name": []},
+                "products": [{"brand_name": ""}],
+                "action_type": "APPROVAL",
+                "approval_date": "20240115",
+            }
+        ]
+    }
+
+    events = normalize_biotech_events(payload, source="openfda")
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "mixedCase pharma"
+
+
+def test_normalize_openfda_legacy_no_brand_null_or_missing_sponsor_uses_unknown():
+    """Legacy openFDA fallback should use UNKNOWN for null or missing sponsor."""
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "ANDA002",
+                "sponsor_name": None,
+                "openfda": {"brand_name": []},
+                "products": [{"brand_name": ""}],
+                "action_type": "APPROVAL",
+                "approval_date": "20240116",
+            },
+            {
+                "application_number": "ANDA003",
+                "openfda": {"brand_name": []},
+                "products": [{"brand_name": ""}],
+                "action_type": "APPROVAL",
+                "approval_date": "20240117",
+            },
+        ]
+    }
+
+    events = normalize_biotech_events(payload, source="openfda")
+
+    assert [event["ticker"] for event in events] == ["UNKNOWN", "UNKNOWN"]
+
+
 def test_normalize_clinical_trials_completed(clinical_trials_completed_payload):
     """Test normalization of completed ClinicalTrials into clinical_readout event."""
     from src.tools.clinical_trials_client import normalize_biotech_events

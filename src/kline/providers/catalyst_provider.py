@@ -10,16 +10,23 @@ from typing import Any
 from src.kline.models import KlineDataStatus, KlineEvent
 
 
+_OMITTED = object()
+
+
 class CatalystEventProvider:
     def __init__(
         self,
         fetch_events: Callable[[str, int], list[dict[str, Any]]] | None = None,
-        fetch_statuses: Callable[..., Any] | None = None,
+        fetch_statuses: Callable[..., Any] | None | object = _OMITTED,
     ):
         if fetch_events is None:
             from src.services.event_ingestion_service import get_events_for_ticker
 
             fetch_events = get_events_for_ticker
+        if fetch_statuses is _OMITTED:
+            from src.services.event_ingestion_service import get_source_statuses_for_ticker
+
+            fetch_statuses = get_source_statuses_for_ticker
         self.fetch_events = fetch_events
         self.fetch_statuses = fetch_statuses
 

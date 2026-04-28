@@ -180,7 +180,8 @@ def test_catalyst_provider_preserves_requested_ticker():
                 "source_entity": "ModernaTX, Inc.",
                 "source_ids": ["NCT00000001"],
             }
-        ]
+        ],
+        fetch_statuses=None,
     )
 
     events, statuses = provider.load("MRNA")
@@ -207,7 +208,8 @@ def test_catalyst_provider_uses_raw_impact_when_score_fields_are_missing():
                 "impact": "high",
                 "metadata": {"note": "keep"},
             }
-        ]
+        ],
+        fetch_statuses=None,
     )
 
     events, _statuses = provider.load("MRNA")
@@ -258,6 +260,67 @@ def test_catalyst_provider_uses_injected_status_rows():
             "source": "clinicaltrials",
             "status": "ready",
             "item_count": 3,
+            "last_fetch_at": "2026-04-20T10:05:00",
+            "message": None,
+        },
+    ]
+
+
+def test_catalyst_provider_default_fetch_statuses_uses_fetch_log_helper(monkeypatch):
+    contracts = _contracts()
+    from src.services import event_ingestion_service
+
+    calls = []
+
+    def fake_events(ticker, max_age_hours=6):
+        return [
+            {
+                "id": "raw-1",
+                "date": "2026-04-20",
+                "type": "clinical_readout",
+                "ticker": ticker,
+                "catalyst": "Phase 3 readout",
+                "source": "clinicaltrials",
+            }
+        ]
+
+    def fake_statuses(ticker):
+        calls.append(ticker)
+        return [
+            {
+                "source": "openfda",
+                "item_count": 0,
+                "last_fetch_at": "2026-04-20T10:00:00",
+            },
+            {
+                "source": "clinicaltrials",
+                "item_count": 1,
+                "last_fetch_at": "2026-04-20T10:05:00",
+            },
+        ]
+
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "get_source_statuses_for_ticker",
+        fake_statuses,
+    )
+    provider = contracts.CatalystEventProvider(fetch_events=fake_events)
+
+    _events, statuses = provider.load(" mrna ")
+
+    assert calls == ["MRNA"]
+    assert [status.to_dict() for status in statuses] == [
+        {
+            "source": "openfda",
+            "status": "empty",
+            "item_count": 0,
+            "last_fetch_at": "2026-04-20T10:00:00",
+            "message": None,
+        },
+        {
+            "source": "clinicaltrials",
+            "status": "ready",
+            "item_count": 1,
             "last_fetch_at": "2026-04-20T10:05:00",
             "message": None,
         },

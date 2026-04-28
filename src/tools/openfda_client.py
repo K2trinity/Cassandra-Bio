@@ -143,7 +143,7 @@ def normalize_biotech_events(
             if requested_ticker is not None:
                 ticker = requested_ticker.strip().upper()
             else:
-                ticker = brand_names[0] if brand_names else result.get("sponsor_name", "UNKNOWN")
+                ticker = brand_names[0] if brand_names else (sponsor_name or "UNKNOWN")
             raw_ticker = brand_names[0] if brand_names else sponsor_name
             application_number = result.get("application_number")
             recall_number = result.get("recall_number")
