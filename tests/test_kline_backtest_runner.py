@@ -255,8 +255,39 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, 
             "size": 0.2,
             "entry_price": 103.0,
             "exit_price": 105.0,
-            "pnl_pct": 0.019417,
+            "pnl_pct": 0.05,
         }
     ]
     saved_payload = runner.load_saved_run(payload["run_id"])
     assert saved_payload == payload
+
+
+def test_derive_trades_prefers_strategy_daily_return_for_pnl_pct():
+    from src.backtest.runner import _derive_trades
+
+    price_window = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "open": 100.0, "close": 101.0},
+        ]
+    )
+    results = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2026-04-20"),
+                "position": 0.2,
+                "daily_return": 0.001798,
+            },
+        ]
+    )
+
+    assert _derive_trades(price_window, results) == [
+        {
+            "entry_date": "2026-04-20",
+            "exit_date": "2026-04-20",
+            "direction": "long",
+            "size": 0.2,
+            "entry_price": 100.0,
+            "exit_price": 101.0,
+            "pnl_pct": 0.00899,
+        }
+    ]

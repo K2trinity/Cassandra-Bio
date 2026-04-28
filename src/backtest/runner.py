@@ -178,7 +178,10 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
 
     prices = price_window[["date", "open", "close"]].copy()
     prices["date"] = pd.to_datetime(prices["date"])
-    positions = results[["date", "position"]].copy()
+    result_columns = ["date", "position"]
+    if "daily_return" in results.columns:
+        result_columns.append("daily_return")
+    positions = results[result_columns].copy()
     positions["date"] = pd.to_datetime(positions["date"])
     rows = prices.merge(positions, on="date", how="inner").sort_values("date").reset_index(drop=True)
     if rows.empty:
@@ -196,7 +199,11 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
             continue
 
         direction = "long" if position > 0 else "short"
-        pnl_pct = _trade_pnl_pct(direction, entry_price, exit_price)
+        daily_return = _json_safe_number(row.get("daily_return")) if "daily_return" in rows.columns else None
+        if daily_return is not None:
+            pnl_pct = daily_return / abs(position)
+        else:
+            pnl_pct = _trade_pnl_pct(direction, entry_price, exit_price)
         trades.append(
             {
                 "entry_date": _to_iso_date(row["date"]),
