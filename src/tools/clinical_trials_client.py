@@ -15,7 +15,7 @@ https://clinicaltrials.gov/data-api/api
 import requests
 import time
 import uuid
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 from loguru import logger
 
@@ -746,13 +746,18 @@ if __name__ == "__main__":
             print(f"\n  Full data: {results['results_url']}")
 
 
-def normalize_biotech_events(trials: List[Dict[str, str]], source: str = "clinicaltrials") -> List[Dict[str, any]]:
+def normalize_biotech_events(
+    trials: List[Dict[str, str]],
+    source: str = "clinicaltrials",
+    requested_ticker: str | None = None,
+) -> List[Dict[str, Any]]:
     """
     Normalize ClinicalTrials.gov payloads into consistent biotech_events schema.
 
     Args:
         trials: List of trial dictionaries from search_trials() or similar
         source: Data source identifier (default: "clinicaltrials")
+        requested_ticker: Chart ticker requested by the user; source sponsor remains metadata.
 
     Returns:
         List of normalized event dictionaries with schema:
@@ -805,9 +810,10 @@ def normalize_biotech_events(trials: List[Dict[str, str]], source: str = "clinic
                 sentiment = "neutral"
                 priority = 2
 
-            # Extract ticker from sponsor
-            sponsor = trial.get("sponsor", "UNKNOWN")
-            ticker = sponsor.split()[0] if sponsor else "UNKNOWN"
+            # Requested ticker owns the chart event; sponsor remains source attribution.
+            sponsor = trial.get("sponsor") or "UNKNOWN"
+            raw_ticker = sponsor.split()[0] if sponsor else None
+            ticker = (requested_ticker or raw_ticker or "UNKNOWN").upper()
 
             # Extract disease area from conditions
             conditions = trial.get("conditions", "")
@@ -818,6 +824,20 @@ def normalize_biotech_events(trials: List[Dict[str, str]], source: str = "clinic
             phase = trial.get("phase", "")
             phase_str = f" ({phase})" if phase and phase != "Not specified" else ""
             catalyst = f"Clinical Trial: {trial_title}{phase_str}"
+            nct_id = trial.get("nct_id") or trial.get("nct_number")
+            valid_nct_id = nct_id if nct_id and nct_id not in {"Unknown", "N/A"} else None
+            source_url = trial.get("url") or trial.get("study_url")
+            if not source_url and valid_nct_id:
+                source_url = f"https://clinicaltrials.gov/study/{valid_nct_id}"
+            metadata = {
+                "phase": phase,
+                "status": trial.get("status"),
+                "raw_ticker": raw_ticker,
+                "has_results": _to_bool(trial.get("has_results")),
+            }
+            why_stopped = trial.get("why_stopped")
+            if why_stopped and why_stopped not in {"Reason not provided", "N/A"}:
+                metadata["why_stopped"] = why_stopped
 
             event = {
                 "id": str(uuid.uuid4()),
@@ -830,6 +850,11 @@ def normalize_biotech_events(trials: List[Dict[str, str]], source: str = "clinic
                 "sentiment": sentiment,
                 "price_impact": None,
                 "source": source,
+                "source_entity": sponsor,
+                "source_url": source_url,
+                "source_ids": [valid_nct_id] if valid_nct_id else [],
+                "confidence": "high" if valid_nct_id else "medium",
+                "metadata": metadata,
             }
 
             events.append(event)

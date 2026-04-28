@@ -11,6 +11,7 @@ from src.backtest.events_db import (
     get_events_for_chart,
     record_fetch_attempt,
     get_last_fetch_at,
+    get_fetch_log_entries,
 )
 from src.tools.openfda_client import OpenFDAClient, normalize_biotech_events as normalize_openfda
 from src.tools.clinical_trials_client import search_trials, normalize_biotech_events as normalize_clinical_trials
@@ -27,6 +28,12 @@ def _is_cache_stale(last_fetch_at: Optional[str], max_age_hours: int) -> bool:
         return age > timedelta(hours=max_age_hours)
     except (ValueError, TypeError):
         return True
+
+
+def get_source_statuses_for_ticker(ticker: str) -> list[dict]:
+    """Return cached source fetch statuses for a ticker."""
+    init_fetch_log_table()
+    return get_fetch_log_entries(ticker)
 
 
 def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
@@ -73,7 +80,13 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 for slice_name in ["label", "event", "drugsfda"]:
                     slice_payload = payload.get(slice_name, {})
                     if slice_payload and slice_payload.get("results"):
-                        events.extend(normalize_openfda(slice_payload, source="openfda"))
+                        events.extend(
+                            normalize_openfda(
+                                slice_payload,
+                                source="openfda",
+                                requested_ticker=ticker,
+                            )
+                        )
 
                 item_count = len(events)
                 if events:
@@ -84,7 +97,11 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
 
             elif source == "clinicaltrials":
                 trials = search_trials(ticker, max_results=50)
-                events = normalize_clinical_trials(trials, source="clinicaltrials")
+                events = normalize_clinical_trials(
+                    trials,
+                    source="clinicaltrials",
+                    requested_ticker=ticker,
+                )
 
                 item_count = len(events)
                 if events:

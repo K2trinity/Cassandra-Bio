@@ -72,13 +72,18 @@ class OpenFDAClient:
         }
 
 
-def normalize_biotech_events(payload: Dict[str, Any], source: str = "openfda") -> List[Dict[str, Any]]:
+def normalize_biotech_events(
+    payload: Dict[str, Any],
+    source: str = "openfda",
+    requested_ticker: str | None = None,
+) -> List[Dict[str, Any]]:
     """
     Normalize openFDA payloads into consistent biotech_events schema.
 
     Args:
         payload: Raw openFDA API response
         source: Data source identifier (default: "openfda")
+        requested_ticker: Chart ticker requested by the user; FDA entity data remains metadata.
 
     Returns:
         List of normalized event dictionaries with schema:
@@ -131,10 +136,23 @@ def normalize_biotech_events(payload: Dict[str, Any], source: str = "openfda") -
                 logger.debug(f"Skipping unknown action type: {action_type}")
                 continue
 
-            # Extract ticker/brand name
             openfda = result.get("openfda", {})
             brand_names = openfda.get("brand_name", [])
-            ticker = brand_names[0] if brand_names else result.get("sponsor_name", "UNKNOWN")
+            generic_names = openfda.get("generic_name", [])
+            sponsor_name = result.get("sponsor_name")
+            ticker = (
+                requested_ticker
+                or sponsor_name
+                or (brand_names[0] if brand_names else "UNKNOWN")
+            ).upper()
+            raw_ticker = brand_names[0] if brand_names else sponsor_name
+            application_number = result.get("application_number")
+            recall_number = result.get("recall_number")
+            source_ids = []
+            if application_number:
+                source_ids.append(application_number)
+            elif recall_number:
+                source_ids.append(recall_number)
 
             # Extract catalyst description
             if action_type == "APPROVAL":
@@ -156,6 +174,17 @@ def normalize_biotech_events(payload: Dict[str, Any], source: str = "openfda") -
                 "sentiment": sentiment,
                 "price_impact": None,
                 "source": source,
+                "source_entity": sponsor_name,
+                "source_url": None,
+                "source_ids": source_ids,
+                "confidence": "medium",
+                "metadata": {
+                    "brand_names": brand_names,
+                    "generic_names": generic_names,
+                    "application_number": application_number,
+                    "recall_number": recall_number,
+                    "raw_ticker": raw_ticker,
+                },
             }
 
             events.append(event)

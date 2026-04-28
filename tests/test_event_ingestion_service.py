@@ -511,3 +511,104 @@ def test_ingestion_service_cache_hit():
         # Verify APIs were NOT called
         mock_fda_instance.collect.assert_not_called()
         mock_trials.assert_not_called()
+
+
+def test_event_db_roundtrips_source_ids_and_metadata():
+    """Event DB should persist structured attribution fields as decoded objects."""
+    from src.backtest.events_db import init_db, insert_event, get_events_for_chart, _get_conn
+
+    init_db()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'ROUNDTRIP'")
+    conn.commit()
+    conn.close()
+
+    insert_event(
+        {
+            "id": "roundtrip-event-1",
+            "date": "2026-04-20",
+            "type": "clinical_readout",
+            "priority": 4,
+            "ticker": "ROUNDTRIP",
+            "disease_area": "Oncology",
+            "catalyst": "Clinical Trial: Phase 3 readout",
+            "sentiment": "positive",
+            "price_impact": None,
+            "source": "clinicaltrials",
+            "source_entity": "ModernaTX, Inc.",
+            "source_url": "https://clinicaltrials.gov/study/NCT00000001",
+            "source_ids": ["NCT00000001"],
+            "confidence": "high",
+            "metadata": {"phase": "Phase 3", "has_results": True},
+        }
+    )
+
+    rows = get_events_for_chart("ROUNDTRIP")
+
+    assert len(rows) == 1
+    assert rows[0]["source_entity"] == "ModernaTX, Inc."
+    assert rows[0]["source_url"] == "https://clinicaltrials.gov/study/NCT00000001"
+    assert rows[0]["source_ids"] == ["NCT00000001"]
+    assert rows[0]["confidence"] == "high"
+    assert rows[0]["metadata"] == {"phase": "Phase 3", "has_results": True}
+
+
+def test_event_db_decodes_legacy_rows_with_default_attribution_fields():
+    """Existing rows without structured metadata should still decode safely."""
+    from src.backtest.events_db import init_db, get_events_for_chart, _get_conn
+
+    init_db()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'LEGACYROW'")
+    conn.execute(
+        """
+        INSERT INTO biotech_events
+        (id, date, type, priority, ticker, disease_area, catalyst, sentiment, price_impact, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-row-1",
+            "2026-04-21",
+            "fda_decision",
+            5,
+            "LEGACYROW",
+            "",
+            "FDA Approval: LegacyDrug",
+            "positive",
+            None,
+            "openfda",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    rows = get_events_for_chart("LEGACYROW")
+
+    assert len(rows) == 1
+    assert rows[0]["source_ids"] == []
+    assert rows[0]["metadata"] == {}
+    assert rows[0]["confidence"] == "medium"
+
+
+def test_get_source_statuses_for_ticker_returns_fetch_log_rows():
+    """Status helper should expose fetch attempts for the requested ticker."""
+    from src.backtest.events_db import init_fetch_log_table, record_fetch_attempt, _get_conn
+    from src.services.event_ingestion_service import get_source_statuses_for_ticker
+
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'STATUS'")
+    conn.commit()
+    conn.close()
+
+    record_fetch_attempt("STATUS", "clinicaltrials", 2)
+    record_fetch_attempt("STATUS", "openfda", 1)
+
+    rows = get_source_statuses_for_ticker("STATUS")
+
+    assert [row["source"] for row in rows] == ["clinicaltrials", "openfda"]
+    assert [row["item_count"] for row in rows] == [2, 1]
+    assert all(row["last_fetch_at"] for row in rows)
