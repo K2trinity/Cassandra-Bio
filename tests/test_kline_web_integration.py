@@ -296,6 +296,47 @@ def test_kline_template_has_visualization_and_backtest_tabs(monkeypatch):
     assert _fragment("data-tab=", '"', "report", '"') not in html
 
 
+def test_kline_template_renders_event_summary_and_legend(monkeypatch):
+    def fake_get_ohlc_rows(ticker: str, max_age_hours: int = 24):
+        return [
+            {
+                "date": "2026-04-20",
+                "open": 101.0,
+                "high": 104.0,
+                "low": 100.0,
+                "close": 103.0,
+                "volume": 1200000,
+            }
+        ]
+
+    def fake_get_events_for_ticker(ticker: str, max_age_hours: int = 6):
+        return [
+            {
+                "id": "evt_001",
+                "date": "2026-04-20",
+                "type": "clinical_readout",
+                "priority": 1,
+                "ticker": ticker,
+                "disease_area": "Alzheimer Disease",
+                "catalyst": "Phase 3 readout",
+                "sentiment": "positive",
+                "source": "clinicaltrials",
+            }
+        ]
+
+    monkeypatch.setattr(app_module, "get_ohlc_rows", fake_get_ohlc_rows)
+    monkeypatch.setattr(app_module, "get_events_for_ticker", fake_get_events_for_ticker)
+
+    client = app.test_client()
+    response = client.get("/kline/MRNA")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="event-summary-bar"' in html
+    assert 'id="event-legend"' in html
+    assert "renderEventSummary" in html
+
+
 def test_backtest_run_api_returns_runner_payload(monkeypatch):
     def fake_run_kline_backtest(**kwargs):
         return {

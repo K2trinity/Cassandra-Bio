@@ -291,6 +291,55 @@
     font-size: 0.8rem;
   }
 
+  .event-summary-bar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .event-summary-item {
+    border: 1px solid #243244;
+    background: #0b1220;
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+
+  .event-summary-label {
+    color: #94a3b8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+  }
+
+  .event-summary-value {
+    color: #e5e7eb;
+    font-size: 1rem;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+
+  .event-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 2px 0;
+  }
+
+  .legend-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+  }
+
+  .legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    display: inline-block;
+  }
+
   .events-list {
     overflow-y: auto;
     padding-right: 4px;
@@ -606,6 +655,8 @@
           <input id="event-end-date" type="date" />
           <button id="event-filter-reset" type="button">Reset Filters</button>
         </div>
+        <div id="event-summary-bar" class="event-summary-bar"></div>
+        <div id="event-legend" class="event-legend"></div>
         <div id="events-list" class="events-list"></div>
       </section>
 
@@ -676,6 +727,8 @@
   const workspacePanel = document.getElementById('workspace-panel');
   const collapseButton = document.getElementById('workspace-collapse-btn');
   const resizeHandle = document.getElementById('workspace-resize-handle');
+  const eventSummaryBar = document.getElementById('event-summary-bar');
+  const eventLegend = document.getElementById('event-legend');
   const eventsList = document.getElementById('events-list');
   const backtestForm = document.getElementById('backtest-form');
   const backtestRunButton = document.getElementById('backtest-run-btn');
@@ -819,6 +872,7 @@
           ensurePanelExpanded();
           setActiveTab('events');
           renderEventsList();
+          renderEventSummary();
           renderChart();
           scrollToEventCard(eventItem.id);
         },
@@ -888,6 +942,7 @@
         const eventId = card.dataset.eventId;
         pageState.highlightedEventId = eventId;
         renderEventsList();
+        renderEventSummary();
         renderChart();
       });
     });
@@ -906,10 +961,64 @@
 
         pageState.highlightedEventId = targetEvent.id;
         renderEventsList();
+        renderEventSummary();
         renderChart();
         scrollToEventCard(targetEvent.id);
       });
     });
+  }
+
+  function countEventsBy(fieldName) {
+    const counts = {};
+    pageState.events.forEach(function(eventItem) {
+      const key = safeEventText(eventItem && eventItem[fieldName], 'unknown');
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return counts;
+  }
+
+  function renderEventSummary() {
+    const events = pageState.events;
+    const positive = events.filter(function(item) { return item.sentiment === 'positive'; }).length;
+    const negative = events.filter(function(item) { return item.sentiment === 'negative'; }).length;
+    const highPriority = events.filter(function(item) { return Number(item.priority || 3) === 1; }).length;
+
+    eventSummaryBar.innerHTML = [
+      ['Total Events', events.length],
+      ['Positive', positive],
+      ['Negative', negative],
+      ['Priority 1', highPriority]
+    ].map(function(item) {
+      return '<div class="event-summary-item">' +
+        '<div class="event-summary-label">' + escapeHtml(item[0]) + '</div>' +
+        '<div class="event-summary-value">' + escapeHtml(String(item[1])) + '</div>' +
+        '</div>';
+    }).join('');
+
+    const typeCounts = countEventsBy('type');
+    eventLegend.innerHTML = Object.keys(typeCounts).sort().map(function(typeName) {
+      return '<span class="legend-pill">' +
+        '<span class="legend-dot" style="background:' + escapeHtml(eventColor(typeName)) + '"></span>' +
+        escapeHtml(formatEventType(typeName)) + ' (' + escapeHtml(String(typeCounts[typeName])) + ')' +
+        '</span>';
+    }).join('');
+  }
+
+  function eventColor(typeName) {
+    const colors = {
+      fda_decision: '#00e676',
+      clinical_readout: '#00e5ff',
+      partnership: '#667eea',
+      financing: '#ffd700',
+      patent: '#ff9800',
+      competitor: '#ff5252',
+      geopolitical: '#a78bfa',
+      trade_policy: '#38bdf8',
+      sanctions: '#fb7185',
+      regulatory_change: '#f59e0b',
+      macro_economic: '#94a3b8'
+    };
+    return colors[typeName] || '#64748b';
   }
 
   function scrollToEventCard(eventId) {
@@ -952,7 +1061,10 @@
 
   function attachFilterHandlers() {
     [typeFilter, sourceFilter, startDateFilter, endDateFilter].forEach(function(node) {
-      node.addEventListener('change', renderEventsList);
+      node.addEventListener('change', function() {
+        renderEventsList();
+        renderEventSummary();
+      });
     });
 
     resetFilterButton.addEventListener('click', function() {
@@ -961,6 +1073,7 @@
       startDateFilter.value = '';
       endDateFilter.value = '';
       renderEventsList();
+      renderEventSummary();
     });
   }
 
@@ -1182,6 +1295,7 @@
   populateFilterOptions();
   attachFilterHandlers();
   renderEventsList();
+  renderEventSummary();
   renderChart();
   setActiveTab('events');
 
