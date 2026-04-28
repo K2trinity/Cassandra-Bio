@@ -32,37 +32,57 @@ def _run_workspace_script(body: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_workspace_js_rejects_unsafe_source_urls():
+def test_workspace_js_rejects_non_absolute_web_source_urls():
     result = _run_workspace_script(
         r"""
-        const workspace = makeWorkspace({
+        const unsafeUrls = [
+          'javascript:alert(1)',
+          'data:text/html,<h1>x</h1>',
+          'file:///C:/secret.txt',
+          'http://[',
+          '/internal',
+          'not a url',
+          '',
+          '   '
+        ];
+
+        for (const sourceUrl of unsafeUrls) {
+          resetDocument();
+          installWorkspace(makeWorkspace({
+            panels: { selected_event_id: 'evt-1' },
+            layers: [catalystLayerWithSourceUrl(sourceUrl)]
+          }));
+          runWorkspace();
+
+          const details = document.querySelector('[data-panel="details"]');
+          const links = details.children.filter((child) => child.tagName === 'A');
+          if (links.length !== 0) {
+            throw new Error('unsafe source_url produced a clickable link: ' + sourceUrl + ' -> ' + links[0].href);
+          }
+        }
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_allows_absolute_web_source_url():
+    result = _run_workspace_script(
+        r"""
+        const expected = 'https://clinicaltrials.gov/study/NCT00000001';
+        installWorkspace(makeWorkspace({
           panels: { selected_event_id: 'evt-1' },
-          layers: [{
-            kind: 'catalysts',
-            label: 'Catalysts',
-            visible_by_default: true,
-            points: [{
-              id: 'evt-1',
-              ticker: 'MRNA',
-              date: '2026-04-20',
-              type: 'clinical_readout',
-              category: 'clinical',
-              title: 'Malicious source',
-              summary: 'Should not link.',
-              sentiment: 'unknown',
-              priority: 1,
-              source: 'clinicaltrials',
-              source_url: 'javascript:alert(1)'
-            }]
-          }]
-        });
-        installWorkspace(workspace);
+          layers: [catalystLayerWithSourceUrl(expected)]
+        }));
         runWorkspace();
 
         const details = document.querySelector('[data-panel="details"]');
         const links = details.children.filter((child) => child.tagName === 'A');
-        if (links.length !== 0) {
-          throw new Error('unsafe source_url produced a clickable link: ' + links[0].href);
+        if (links.length !== 1) {
+          throw new Error('valid absolute source_url did not produce exactly one link');
+        }
+        if (links[0].href !== expected) {
+          throw new Error('valid source_url changed unexpectedly: ' + links[0].href);
         }
         """
     )
@@ -348,6 +368,13 @@ def _dom_harness() -> str:
           return node;
         }
 
+        function resetDocument() {
+          document.byId = new Map();
+          document.body = new Element('body', document);
+          document.listeners = {};
+          chartConfigs.length = 0;
+        }
+
         function installWorkspace(workspace) {
           const script = addNode('kline-workspace-data', 'script');
           script.textContent = JSON.stringify(workspace);
@@ -374,6 +401,27 @@ def _dom_harness() -> str:
             panel.dataset.panel = name;
             document.body.appendChild(panel);
           });
+        }
+
+        function catalystLayerWithSourceUrl(sourceUrl) {
+          return {
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{
+              id: 'evt-1',
+              ticker: 'MRNA',
+              date: '2026-04-20',
+              type: 'clinical_readout',
+              category: 'clinical',
+              title: 'Source event',
+              summary: 'Source link test.',
+              sentiment: 'unknown',
+              priority: 1,
+              source: 'clinicaltrials',
+              source_url: sourceUrl
+            }]
+          };
         }
 
         function makeWorkspace(overrides = {}) {

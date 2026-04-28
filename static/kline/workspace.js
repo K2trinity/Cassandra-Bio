@@ -70,7 +70,7 @@
       return null;
     }
     try {
-      var parsed = new URL(String(value), window.location.href);
+      var parsed = new URL(String(value).trim());
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
         return parsed.href;
       }
