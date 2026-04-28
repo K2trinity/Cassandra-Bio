@@ -156,3 +156,21 @@ def test_narrative_service_falls_back_to_empty_on_missing_fields():
     assert narratives.executive_summary == ""
     assert narratives.clinical_trial_and_pipeline_landscape == ""
     assert narratives.pipeline_timeline_and_competition_risk == ""
+
+
+def test_narrative_service_falls_back_to_empty_on_non_string_fields():
+    client = FakeClient(
+        {
+            "executive_summary": {"text": "Not a string."},
+            "clinical_trial_and_pipeline_landscape": "Valid landscape.",
+            "pipeline_timeline_and_competition_risk": "Valid risk.",
+        }
+    )
+    service = DiseaseReportNarrativeService(client_factory=lambda: client)
+
+    narratives = service.generate(_package(), language="zh")
+
+    assert narratives.language == "zh"
+    assert narratives.executive_summary == ""
+    assert narratives.clinical_trial_and_pipeline_landscape == ""
+    assert narratives.pipeline_timeline_and_competition_risk == ""

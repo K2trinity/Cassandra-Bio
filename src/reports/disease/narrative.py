@@ -58,6 +58,8 @@ class DiseaseReportNarrativeService:
         required_keys = set(NARRATIVE_SCHEMA["required"])
         if not required_keys.issubset(response):
             return DiseaseChapterNarratives(language=selected_language)
+        if not all(isinstance(response[key], str) for key in required_keys):
+            return DiseaseChapterNarratives(language=selected_language)
 
         values = {
             "executive_summary": _clean_text(response.get("executive_summary")),
