@@ -61,6 +61,34 @@ def test_kline_template_uses_only_committed_chart_assets():
     assert "window.PokieChart.render" in template_source
 
 
+def test_kline_template_uses_best_effort_local_storage_helpers():
+    template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
+
+    with open(template_path, encoding="utf-8") as template_file:
+        template_source = template_file.read()
+
+    assert "function safeLocalStorageGet" in template_source
+    assert "function safeLocalStorageSet" in template_source
+    assert "safeLocalStorageGet('kline-last-run-' + ticker)" in template_source
+    assert "safeLocalStorageSet('kline-last-run-' + ticker, pageState.lastRunId)" in template_source
+    assert template_source.count("window.localStorage.getItem") == 1
+    assert template_source.count("window.localStorage.setItem") == 1
+
+
+def test_kline_template_scrolls_to_event_cards_without_raw_css_selector():
+    template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
+
+    with open(template_path, encoding="utf-8") as template_file:
+        template_source = template_file.read()
+
+    scroll_function = template_source.split("function scrollToEventCard(eventId)", 1)[1]
+    scroll_function = scroll_function.split("function populateFilterOptions()", 1)[0]
+
+    assert "String(eventId)" in scroll_function
+    assert "card.dataset.eventId === targetId" in scroll_function
+    assert "querySelector('[data-event-id=\"" not in scroll_function
+
+
 def test_kline_page_is_independent_from_report_analysis(monkeypatch):
     def fake_get_ohlc_rows(ticker: str, max_age_hours: int = 24):
         return [

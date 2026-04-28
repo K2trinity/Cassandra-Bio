@@ -728,6 +728,23 @@
     return Number(value).toFixed(4);
   }
 
+  function safeLocalStorageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      console.warn('Unable to read K-line saved run:', error);
+      return null;
+    }
+  }
+
+  function safeLocalStorageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('Unable to persist K-line saved run:', error);
+    }
+  }
+
   function ensurePanelExpanded() {
     if (workspacePanel.dataset.collapsed === 'true') {
       workspacePanel.dataset.collapsed = 'false';
@@ -895,7 +912,11 @@
   }
 
   function scrollToEventCard(eventId) {
-    const node = eventsList.querySelector('[data-event-id="' + eventId + '"]');
+    const targetId = String(eventId);
+    const node = Array.from(eventsList.querySelectorAll('.event-card')).find(function(card) {
+      return card.dataset.eventId === targetId;
+    });
+
     if (node) {
       node.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -1052,7 +1073,7 @@
 
       pageState.lastRunId = body.run_id || null;
       if (pageState.lastRunId) {
-        localStorage.setItem('kline-last-run-' + ticker, pageState.lastRunId);
+        safeLocalStorageSet('kline-last-run-' + ticker, pageState.lastRunId);
       }
 
       pageState.equityCurve = Array.isArray(body.equity_curve) ? body.equity_curve : [];
@@ -1143,7 +1164,7 @@
   renderChart();
   setActiveTab('events');
 
-  const savedRun = localStorage.getItem('kline-last-run-' + ticker);
+  const savedRun = safeLocalStorageGet('kline-last-run-' + ticker);
   if (savedRun) {
     hydrateBacktestRun(savedRun);
   }
