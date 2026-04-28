@@ -54,7 +54,7 @@ def test_serialize_signals_preserves_zero_signal_days_and_attaches_event_ids():
     ]
 
 
-def test_derive_trades_handles_exits_flips_and_open_trade_closeout():
+def test_derive_trades_serializes_daily_exposure_overlays():
     from src.backtest.runner import _derive_trades
 
     price_window = pd.DataFrame(
@@ -78,7 +78,10 @@ def test_derive_trades_handles_exits_flips_and_open_trade_closeout():
         ]
     )
 
-    assert _derive_trades(price_window, results) == [
+    trades = _derive_trades(price_window, results)
+
+    assert all("position" not in trade for trade in trades)
+    assert trades == [
         {
             "entry_date": "2026-04-21",
             "exit_date": "2026-04-21",
