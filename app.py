@@ -16,7 +16,6 @@ Architecture:
 import os
 import sys
 import json
-import math
 import threading
 import time
 from collections import deque
@@ -46,9 +45,6 @@ from config import Settings
 
 # Import the core LangGraph workflow
 from src.services.workflow_service import WorkflowService
-from src.services.market_data_service import get_ohlc_rows
-from src.services.event_ingestion_service import get_events_for_ticker
-from src.backtest.runner import run_kline_backtest, load_saved_run, normalize_kline_ticker
 _workflow_service = WorkflowService()
 
 # Conditionally import Neo4j GraphManager
@@ -81,6 +77,10 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Initialize SocketIO with CORS support
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+from src.kline.routes import kline_bp
+
+app.register_blueprint(kline_bp)
 
 
 # Global state for tracking active analysis
@@ -356,36 +356,10 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/kline')
-def kline_default():
-    """Default K-line route with optional symbol query parameter."""
-    symbol = (request.args.get('symbol') or 'MRNA').strip().upper()
-    if not symbol:
-        symbol = 'MRNA'
-    return redirect(url_for('kline_view', symbol=symbol))
-
-
 @app.route('/graph')
 def graph_view():
     """Knowledge Graph Visualization Page"""
     return render_template('graph_view.html')
-
-
-@app.route("/kline/<symbol>")
-def kline_view(symbol: str):
-    """Render K-line chart with Cassandra report integration."""
-    # Fetch real OHLC data from market_data_service
-    ohlc_rows = get_ohlc_rows(symbol.upper())
-
-    # Fetch real events from event_ingestion_service
-    events_list = get_events_for_ticker(symbol.upper())
-
-    return render_template(
-        "kline_report.html",
-        symbol=symbol.upper(),
-        ohlc_json=ohlc_rows,
-        events_json=events_list,
-    )
 
 
 @app.route('/graph-debug')
@@ -1007,96 +981,6 @@ def analyze():
         "query": query,
         "task_id": active_analysis.get("task_id"),
     }), 202
-
-
-@app.route('/api/backtest/run', methods=['POST'])
-def api_backtest_run():
-    """Run a single ticker backtest for K-line workflow."""
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({
-            "error": "request body must be a JSON object",
-        }), 400
-
-    raw_ticker = data.get('ticker')
-    ticker = normalize_kline_ticker(raw_ticker)
-    start_date = str(data.get('start_date') or '').strip()
-    end_date = str(data.get('end_date') or '').strip()
-
-    if not str(raw_ticker or "").strip() or not start_date or not end_date:
-        return jsonify({
-            "error": "ticker, start_date, and end_date are required",
-        }), 400
-
-    if ticker is None:
-        return jsonify({
-            "error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens",
-        }), 400
-
-    try:
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-    except ValueError:
-        return jsonify({
-            "error": "start_date and end_date must be in YYYY-MM-DD format",
-        }), 400
-
-    if start_dt > end_dt:
-        return jsonify({
-            "error": "invalid date range: start_date must be <= end_date",
-        }), 400
-
-    try:
-        stop_loss_pct = float(data.get('stop_loss_pct', -0.08))
-        max_position_pct = float(data.get('max_position_pct', 0.2))
-        slippage_pct = float(data.get('slippage_pct', 0.001))
-    except (TypeError, ValueError):
-        return jsonify({
-            "error": "risk parameters must be numeric",
-        }), 400
-
-    if not all(math.isfinite(value) for value in (stop_loss_pct, max_position_pct, slippage_pct)):
-        return jsonify({
-            "error": "risk parameters must be finite numbers",
-        }), 400
-
-    if not (-1.0 < stop_loss_pct < 0):
-        return jsonify({
-            "error": "stop_loss_pct must be greater than -1 and less than 0",
-        }), 400
-
-    if not (0 < max_position_pct <= 1):
-        return jsonify({
-            "error": "max_position_pct must be greater than 0 and less than or equal to 1",
-        }), 400
-
-    if not (0 <= slippage_pct <= 0.2):
-        return jsonify({
-            "error": "slippage_pct must be between 0 and 0.2",
-        }), 400
-
-    result = run_kline_backtest(
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-        stop_loss_pct=stop_loss_pct,
-        max_position_pct=max_position_pct,
-        slippage_pct=slippage_pct,
-    )
-
-    if isinstance(result, dict) and result.get("error"):
-        return jsonify({"error": result.get("error")}), 400
-
-    return jsonify(result)
-
-
-@app.route('/api/backtest/results/<run_id>', methods=['GET'])
-def api_backtest_result(run_id: str):
-    """Load a saved backtest run by run_id."""
-    payload = load_saved_run(run_id)
-    if payload is None:
-        return jsonify({"error": "backtest run not found"}), 404
-    return jsonify(payload)
 
 
 @app.route('/api/reset', methods=['POST'])

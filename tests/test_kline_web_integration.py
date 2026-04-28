@@ -8,8 +8,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 
-import app as app_module
 from app import app
+import src.kline.routes as kline_routes
 
 
 def _install_fake_workspace_service(monkeypatch):
@@ -110,7 +110,7 @@ def test_backtest_run_api_returns_runner_payload(monkeypatch):
             "event_car": [],
         }
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fake_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fake_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -171,7 +171,7 @@ def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
     def fake_run_kline_backtest(**kwargs):
         return runner_payload
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fake_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fake_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -194,7 +194,7 @@ def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for invalid ticker")
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fail_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -215,7 +215,7 @@ def test_backtest_run_api_rejects_non_object_json_without_runner(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for non-object JSON")
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fail_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -233,7 +233,7 @@ def test_backtest_run_api_rejects_non_finite_risk_parameters(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for invalid risk parameters")
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fail_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -254,7 +254,7 @@ def test_backtest_run_api_rejects_out_of_range_risk_parameters(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for invalid risk parameters")
 
-    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+    monkeypatch.setattr(kline_routes, "run_kline_backtest", fail_run_kline_backtest)
 
     client = app.test_client()
     response = client.post(
@@ -282,7 +282,7 @@ def test_backtest_result_api_returns_saved_payload(monkeypatch):
             "event_car": [],
         }
 
-    monkeypatch.setattr(app_module, "load_saved_run", fake_load_saved_run)
+    monkeypatch.setattr(kline_routes, "load_saved_run", fake_load_saved_run)
 
     client = app.test_client()
     response = client.get("/api/backtest/results/run-123")
