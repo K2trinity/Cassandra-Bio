@@ -11,15 +11,6 @@ export default defineConfig({
       name: 'PokieChart',
       fileName: (format) => `pokie-chart.${format === 'es' ? 'mjs' : 'umd.js'}`,
     },
-    rollupOptions: {
-      external: ['react', 'react-dom'],
-      output: {
-        globals: {
-          react: 'React',
-          'react-dom': 'ReactDOM',
-        },
-      },
-    },
     outDir: 'dist',
   },
 });

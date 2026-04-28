@@ -4,7 +4,7 @@ import CandlestickChart from './CandlestickChart';
 import type { ChartConfig } from './types';
 
 export { default as CandlestickChart } from './CandlestickChart';
-export type { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, EquityPoint, ChartConfig } from './types';
+export type { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, EquityPoint, SignalMarker, TradeMarker, ChartConfig } from './types';
 
 function render(container: HTMLElement, config: ChartConfig): () => void {
   const root = createRoot(container);
@@ -18,6 +18,8 @@ function render(container: HTMLElement, config: ChartConfig): () => void {
       onRangeSelect={config.onRangeSelect}
       highlightedEventId={config.highlightedEventId}
       equityCurve={config.equityCurve}
+      signals={config.signals}
+      trades={config.trades}
     />
   );
   return () => root.unmount();

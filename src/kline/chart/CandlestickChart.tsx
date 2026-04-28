@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
-import { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal } from './types';
+import { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, SignalMarker, TradeMarker } from './types';
 
 interface PlacedEvent extends BiotechEvent {
   px: number; // canvas x
@@ -19,6 +19,8 @@ interface Props {
   onRangeSelect?: (range: RangeSelection | null) => void;
   highlightedEventId?: string;
   equityCurve?: Array<{ date: string; equity: number }>;
+  signals?: SignalMarker[];
+  trades?: TradeMarker[];
 }
 
 // Event type → color mapping
@@ -61,6 +63,10 @@ export default function CandlestickChart({
   onAnomalyDetected,
   onHover,
   onRangeSelect,
+  highlightedEventId,
+  equityCurve,
+  signals,
+  trades,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -85,17 +91,18 @@ export default function CandlestickChart({
     const placed = placedRef.current;
     for (const p of placed) {
       const isHover = p === highlight;
+      const isHighlighted = highlightedEventId && p.id === highlightedEventId;
 
       let alpha = p.alpha;
-      if (isHover) alpha = 1;
+      if (isHover || isHighlighted) alpha = 1;
       ctx.globalAlpha = alpha;
 
       let radius = p.radius;
-      if (isHover) radius = Math.max(p.radius, 3.5);
+      if (isHover || isHighlighted) radius = Math.max(p.radius, 3.5);
 
       ctx.fillStyle = p.color;
 
-      if (isHover) {
+      if (isHover || isHighlighted) {
         ctx.shadowColor = p.color;
         ctx.shadowBlur = 14 * dpr;
       } else {
@@ -107,7 +114,7 @@ export default function CandlestickChart({
       ctx.arc(p.px * dpr, p.py * dpr, radius * dpr, 0, Math.PI * 2);
       ctx.fill();
 
-      if (isHover) {
+      if (isHover || isHighlighted) {
         ctx.shadowColor = p.color;
         ctx.shadowBlur = 10 * dpr;
         ctx.strokeStyle = p.color;
@@ -121,12 +128,12 @@ export default function CandlestickChart({
     ctx.globalAlpha = 1;
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
-  }, []);
+  }, [highlightedEventId]);
 
   useEffect(() => {
     if (!ohlcData || ohlcData.length === 0) return;
     drawChart(ohlcData, events || []);
-  }, [ohlcData, events]);
+  }, [ohlcData, events, highlightedEventId, equityCurve, signals, trades]);
 
   function drawChart(rawData: OHLCRow[], eventList: BiotechEvent[]) {
     const svg = d3.select(svgRef.current);
@@ -198,6 +205,38 @@ export default function CandlestickChart({
       .style('font-size', '12px')
       .style('fill', '#555');
 
+    // Right Y-axis and equity curve (only if equityCurve has data)
+    if (equityCurve && equityCurve.length > 0) {
+      const equityDomain = d3.extent(equityCurve, (d) => d.equity) as [number, number];
+      const yEquity = d3.scaleLinear()
+        .domain([equityDomain[0] * 0.95, equityDomain[1] * 1.05])
+        .range([height, 0]);
+
+      // Right Y-axis
+      g.append('g')
+        .attr('transform', `translate(${width},0)`)
+        .call(d3.axisRight(yEquity).ticks(6).tickFormat((d) => `$${Number(d).toFixed(0)}`))
+        .selectAll('text')
+        .style('font-size', '12px')
+        .style('fill', '#ff9800');
+
+      // Equity curve line
+      const equityLine = d3.line<typeof equityCurve[0]>()
+        .x((d) => {
+          const ohlc = dateToOhlc.get(d.date);
+          return ohlc ? x(ohlc.date) : 0;
+        })
+        .y((d) => yEquity(d.equity));
+
+      g.append('path')
+        .datum(equityCurve)
+        .attr('fill', 'none')
+        .attr('stroke', '#ff9800')
+        .attr('stroke-width', 2)
+        .attr('opacity', 0.6)
+        .attr('d', equityLine);
+    }
+
     g.selectAll('.domain').style('stroke', '#1a2030');
     g.selectAll('.tick line').style('stroke', '#1a2030');
 
@@ -220,6 +259,54 @@ export default function CandlestickChart({
       .attr('width', candleWidth)
       .attr('height', (d) => Math.max(1, Math.abs(y(d.open) - y(d.close))))
       .attr('fill', (d) => (d.close >= d.open ? '#00e676' : '#ff5252'));
+
+    if (trades && trades.length > 0) {
+      const tradeLayer = g.insert('g', '.candle').attr('class', 'trade-layer');
+      trades.forEach((trade) => {
+        const entry = dateToOhlc.get(trade.entry_date);
+        const exit = dateToOhlc.get(trade.exit_date);
+        if (!entry || !exit) return;
+
+        const x0 = x(entry.date);
+        const x1 = x(exit.date);
+        const left = Math.min(x0, x1);
+        const widthSpan = Math.max(2, Math.abs(x1 - x0) || candleWidth);
+        const color = trade.pnl_pct >= 0 ? '#22c55e' : '#ef4444';
+
+        tradeLayer.append('rect')
+          .attr('x', left - candleWidth / 2)
+          .attr('y', 0)
+          .attr('width', widthSpan + candleWidth)
+          .attr('height', height)
+          .attr('fill', color)
+          .attr('opacity', 0.055);
+      });
+    }
+
+    if (signals && signals.length > 0) {
+      const signalLayer = g.append('g').attr('class', 'signal-layer');
+      signals.forEach((signalItem) => {
+        if (signalItem.signal === 0) return;
+        const ohlc = dateToOhlc.get(signalItem.date);
+        if (!ohlc) return;
+
+        const cx = x(ohlc.date);
+        const isLong = signalItem.signal > 0;
+        const cy = isLong ? y(ohlc.low) + 16 : y(ohlc.high) - 16;
+        const color = isLong ? '#22c55e' : '#ef4444';
+        const points = isLong
+          ? `${cx},${cy - 7} ${cx - 6},${cy + 5} ${cx + 6},${cy + 5}`
+          : `${cx},${cy + 7} ${cx - 6},${cy - 5} ${cx + 6},${cy - 5}`;
+        const opacity = Math.max(0.45, Math.min(1, Number(signalItem.signal_strength) || 0.45));
+
+        signalLayer.append('polygon')
+          .attr('points', points)
+          .attr('fill', color)
+          .attr('stroke', '#0f172a')
+          .attr('stroke-width', 1.2)
+          .attr('opacity', opacity);
+      });
+    }
 
     // Place events overlaid on K-line
     const eventsByDate = new Map<string, BiotechEvent[]>();

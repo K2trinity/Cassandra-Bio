@@ -429,6 +429,21 @@ def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
     assert response.get_json() == runner_payload
 
 
+def test_kline_template_passes_backtest_overlays_to_chart(monkeypatch):
+    monkeypatch.setattr(app_module, "get_ohlc_rows", lambda ticker, max_age_hours=24: [])
+    monkeypatch.setattr(app_module, "get_events_for_ticker", lambda ticker, max_age_hours=6: [])
+
+    client = app.test_client()
+    response = client.get("/kline/BIIB")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "pageState.signals" in html
+    assert "pageState.trades" in html
+    assert "signals: pageState.signals" in html
+    assert "trades: pageState.trades" in html
+
+
 def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for invalid ticker")

@@ -714,6 +714,8 @@
       onRangeSelect: options.onRangeSelect,
       highlightedEventId: options.highlightedEventId,
       equityCurve: options.equityCurve || [],
+      signals: options.signals || [],
+      trades: options.trades || [],
     });
   };
 </script>
@@ -746,6 +748,8 @@
     activeTab: 'events',
     highlightedEventId: null,
     equityCurve: [],
+    signals: [],
+    trades: [],
     events: Array.isArray(eventsData) ? eventsData : [],
     chartCleanup: null,
     lastRunId: null,
@@ -863,6 +867,8 @@
         events: pageState.events,
         highlightedEventId: pageState.highlightedEventId,
         equityCurve: pageState.equityCurve,
+        signals: pageState.signals,
+        trades: pageState.trades,
         onEventClick: function(eventItem) {
           if (!eventItem || !eventItem.id) {
             return;
@@ -1148,6 +1154,8 @@
 
       pageState.lastRunId = payload.run_id || runId;
       pageState.equityCurve = Array.isArray(payload.equity_curve) ? payload.equity_curve : [];
+      pageState.signals = Array.isArray(payload.signals) ? payload.signals : [];
+      pageState.trades = Array.isArray(payload.trades) ? payload.trades : [];
       renderBacktestResults(payload);
       renderBacktestStatus('Loaded run ' + (payload.run_id || runId) + '.', null);
       renderChart();
@@ -1206,6 +1214,8 @@
       }
 
       pageState.equityCurve = Array.isArray(body.equity_curve) ? body.equity_curve : [];
+      pageState.signals = Array.isArray(body.signals) ? body.signals : [];
+      pageState.trades = Array.isArray(body.trades) ? body.trades : [];
       renderBacktestResults(body);
       renderBacktestStatus('Backtest completed: ' + safeEventText(body.run_id, 'latest run') + '.', null);
       renderChart();

@@ -51,6 +51,23 @@ export interface EquityPoint {
   equity: number;
 }
 
+export interface SignalMarker {
+  date: string;
+  signal: -1 | 0 | 1;
+  signal_strength: number;
+  source_event_ids?: string[];
+}
+
+export interface TradeMarker {
+  entry_date: string;
+  exit_date: string;
+  direction: 'long' | 'short';
+  size: number;
+  entry_price: number;
+  exit_price: number;
+  pnl_pct: number;
+}
+
 export interface ChartConfig {
   ohlcData: OHLCRow[];
   events: BiotechEvent[];
@@ -60,4 +77,6 @@ export interface ChartConfig {
   onRangeSelect?: (range: RangeSelection | null) => void;
   highlightedEventId?: string;
   equityCurve?: EquityPoint[];
+  signals?: SignalMarker[];
+  trades?: TradeMarker[];
 }
