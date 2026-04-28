@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}K-Line Workspace · {{ symbol }}{% endblock %}
 
-{% block head %}
+{% block extra_head %}
 <style>
   .kline-report-container {
     --panel-height: clamp(260px, 30vh, 360px);
@@ -667,7 +667,7 @@
   };
 </script>
 <script>
-  const ticker = '{{ symbol }}';
+  const ticker = {{ symbol | tojson }};
   const ohlcData = {{ ohlc_json | tojson }};
   const eventsData = {{ events_json | tojson }};
 

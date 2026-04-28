@@ -3,20 +3,23 @@
 
 import json
 from datetime import datetime
+import math
 from pathlib import Path
+import re
 from typing import Optional
 import uuid
 
 import pandas as pd
 
 from src.backtest.data_loader import DATA_DIR, load_ohlc
-from src.backtest.events_db import get_events
+from src.backtest.events_db import get_events, init_db
 from src.backtest.features_v2 import build_features_v2
 from src.backtest.signals import generate_signals
 from src.backtest.strategy import apply_strategy
 from src.backtest.metrics import compute_metrics, compute_event_car
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "backtest_results"
+RUN_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{8}$")
 
 
 POOLS = {
@@ -91,6 +94,16 @@ def _ohlc_cache_path(ticker: str) -> Path:
     return DATA_DIR / f"{ticker}.parquet"
 
 
+def _json_safe_number(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 def run_kline_backtest(
     ticker: str,
     start_date: str,
@@ -137,6 +150,7 @@ def run_kline_backtest(
     if len(price_window) < 2:
         return {"error": "insufficient OHLC data in date range"}
 
+    init_db()
     events = get_events(ticker, start_date=start_date, end_date=end_date)
     signals = generate_signals(price_window, events, report_confidence=report_confidence)
     results = apply_strategy(
@@ -150,20 +164,24 @@ def run_kline_backtest(
     raw_metrics = compute_metrics(results)
     strategy_metrics = raw_metrics.get("layer3_strategy", {}) if isinstance(raw_metrics, dict) else {}
     metrics = {
-        "sharpe": strategy_metrics.get("sharpe_ratio"),
-        "annualized_return": strategy_metrics.get("annualized_return"),
-        "max_drawdown": strategy_metrics.get("max_drawdown"),
-        "win_rate": strategy_metrics.get("win_rate"),
-        "profit_factor": strategy_metrics.get("profit_factor"),
+        "sharpe": _json_safe_number(strategy_metrics.get("sharpe_ratio")),
+        "annualized_return": _json_safe_number(strategy_metrics.get("annualized_return")),
+        "max_drawdown": _json_safe_number(strategy_metrics.get("max_drawdown")),
+        "win_rate": _json_safe_number(strategy_metrics.get("win_rate")),
+        "profit_factor": _json_safe_number(strategy_metrics.get("profit_factor")),
     }
 
-    equity_curve = [
-        {
-            "date": _to_iso_date(row.date),
-            "equity": float(row.equity),
-        }
-        for row in results.itertuples(index=False)
-    ]
+    equity_curve = []
+    for row in results.itertuples(index=False):
+        equity = _json_safe_number(row.equity)
+        if equity is None:
+            continue
+        equity_curve.append(
+            {
+                "date": _to_iso_date(row.date),
+                "equity": equity,
+            }
+        )
 
     car_df = compute_event_car(price_window, events)
     event_car = []
@@ -174,8 +192,8 @@ def run_kline_backtest(
                     "event_id": str(getattr(row, "event_id", "")),
                     "type": str(getattr(row, "event_type", "")),
                     "date": _to_iso_date(getattr(row, "date")),
-                    "car": float(getattr(row, "car", 0.0)),
-                    "t_stat": float(getattr(row, "t_stat", 0.0)),
+                    "car": _json_safe_number(getattr(row, "car", 0.0)),
+                    "t_stat": _json_safe_number(getattr(row, "t_stat", 0.0)),
                 }
             )
 
@@ -192,13 +210,16 @@ def run_kline_backtest(
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_DIR / f"{run_id}.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
 
     return payload
 
 
 def load_saved_run(run_id: str) -> dict | None:
     """Load a persisted single-run backtest payload by run_id."""
+    if not RUN_ID_PATTERN.fullmatch(str(run_id or "")):
+        return None
+
     path = RESULTS_DIR / f"{run_id}.json"
     if not path.exists():
         return None

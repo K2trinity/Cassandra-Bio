@@ -45,6 +45,9 @@ def test_kline_page_renders_chart_assets_from_head_block():
     assert "/static/vendor/pokie-chart.umd.js" in html
     assert "window.CassandraKline.renderChart" in html
     assert "kline-report-container" in html
+    assert "--panel-height:" in html
+    assert ".kline-chart-shell" in html
+    assert 'const ticker = "MRNA";' in html
 
 
 def test_kline_template_uses_only_committed_chart_assets():
