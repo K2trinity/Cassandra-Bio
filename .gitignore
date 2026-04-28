@@ -330,6 +330,7 @@ scripts/dev_checks/_outputs/
 # ==== 版本控制 ====
 # Git
 .git/
+.worktrees/
 *.orig
 
 # SVN
