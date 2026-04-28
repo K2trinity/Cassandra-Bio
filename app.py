@@ -474,13 +474,16 @@ def analyze():
     
     # Parse request data - handle both JSON and FormData
     if request.is_json:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         query = data.get('query', '').strip()
         pdf_paths = data.get('pdfs', [])
+        requested_narrative_language = data.get("narrative_language")
     else:
         # Handle FormData (multipart/form-data with file uploads)
+        data = {}
         query = request.form.get('query', '').strip()
         pdf_files = request.files.getlist('files')
+        requested_narrative_language = request.form.get("narrative_language")
         
         # Save uploaded PDFs temporarily
         pdf_paths = []
@@ -496,6 +499,13 @@ def analyze():
                     file.save(file_path)
                     pdf_paths.append(str(file_path))
                     logger.info(f"📄 Saved uploaded PDF: {file_path}")
+
+    narrative_language = str(
+        requested_narrative_language
+        or getattr(config, "REPORT_NARRATIVE_LANGUAGE", "zh")
+    ).strip().lower()
+    if narrative_language not in {"zh", "en"}:
+        narrative_language = "zh"
     
     # Validate query
     if not query:
@@ -583,7 +593,8 @@ def analyze():
             for node_name, partial_state in _workflow_service.stream(
                 user_query=query,
                 thread_id=_this_task_id,
-                pdf_paths=pdf_paths if pdf_paths else None
+                pdf_paths=pdf_paths if pdf_paths else None,
+                narrative_language=narrative_language,
             ):
                 # Check for cancellation signal from /api/reset or page refresh.
                 # Guard with task_id to avoid cancelling a NEW analysis that
@@ -626,7 +637,8 @@ def analyze():
                 _emit_progress("writing", "active", 78, "✍️  Re-running writer (stream fallback)...")
                 result = _workflow_service.run(
                     user_query=query,
-                    pdf_paths=pdf_paths if pdf_paths else None
+                    pdf_paths=pdf_paths if pdf_paths else None,
+                    narrative_language=narrative_language,
                 )
             
             # Store result
@@ -911,6 +923,7 @@ def analyze():
                 'success': True,
                 'task_id': active_analysis.get("task_id"),
                 'query': query,
+                'narrative_language': narrative_language,
                 'report_path': pdf_report_path_v2 or report_path,
                 'html_report_path': html_report_path,
                 'full_report_markdown': full_report_markdown,

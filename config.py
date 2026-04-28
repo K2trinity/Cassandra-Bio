@@ -144,6 +144,10 @@ class Settings(BaseSettings):
         8192,
         description="Report maximum output tokens (supports long-form reports)"
     )
+    REPORT_NARRATIVE_LANGUAGE: str = Field(
+        "zh",
+        description="Disease report narrative language: zh or en. Affects only Gemini-generated descriptive paragraphs."
+    )
     
     # ================== Section 4: External Tools ====================
     # Tavily Web Search API
