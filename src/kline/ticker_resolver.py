@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 
 from src.kline.models import KlineCompany
@@ -99,9 +100,13 @@ class TickerResolver:
 
         company = _UNIVERSE.get(ticker)
         if company is not None:
-            return company
+            return _copy_company(company)
 
         return KlineCompany(ticker=ticker, name=ticker)
 
     def list_universe(self) -> list[KlineCompany]:
-        return [_UNIVERSE[ticker] for ticker in sorted(_UNIVERSE)]
+        return [_copy_company(_UNIVERSE[ticker]) for ticker in sorted(_UNIVERSE)]
+
+
+def _copy_company(company: KlineCompany) -> KlineCompany:
+    return replace(company, aliases=list(company.aliases))

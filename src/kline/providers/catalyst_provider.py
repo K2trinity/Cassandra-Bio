@@ -45,6 +45,9 @@ class CatalystEventProvider:
             for index, raw_event in enumerate(raw_events)
             if isinstance(raw_event, dict)
         ]
+        statuses = _statuses_from_fetcher(self.fetch_statuses, requested_ticker)
+        if statuses is not None:
+            return events, statuses
         return events, _statuses_for_events(events)
 
 
@@ -114,6 +117,40 @@ def _statuses_for_events(events: list[KlineEvent]) -> list[KlineDataStatus]:
         KlineDataStatus(source=source, status="ready", item_count=count)
         for source, count in counts.items()
     ]
+
+
+def _statuses_from_fetcher(
+    fetch_statuses: Callable[..., Any] | None,
+    ticker: str,
+) -> list[KlineDataStatus] | None:
+    if fetch_statuses is None:
+        return None
+    try:
+        raw_statuses = fetch_statuses(ticker)
+    except Exception:  # noqa: BLE001 - status metadata must not fail event loading.
+        return None
+
+    try:
+        status_rows = list(raw_statuses or [])
+    except TypeError:
+        return None
+
+    statuses = [_status_from_row(row) for row in status_rows if _valid_status_row(row)]
+    return statuses or None
+
+
+def _valid_status_row(row: object) -> bool:
+    return isinstance(row, dict) and bool(row.get("source"))
+
+
+def _status_from_row(row: dict[str, Any]) -> KlineDataStatus:
+    item_count = _int_value(row.get("item_count"), default=0)
+    return KlineDataStatus(
+        source=_string_value(row.get("source")),
+        status="ready" if item_count > 0 else "empty",
+        item_count=item_count,
+        last_fetch_at=_optional_string(row.get("last_fetch_at")),
+    )
 
 
 def _category_for(raw: dict[str, Any]) -> str:

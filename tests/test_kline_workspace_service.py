@@ -4,6 +4,7 @@ from types import SimpleNamespace
 def _contracts():
     from src.kline.models import KlineDataStatus, KlineEvent, KlinePriceSeries
     from src.kline.providers.catalyst_provider import CatalystEventProvider
+    from src.kline.providers.ohlc_provider import OHLCProvider
     from src.kline.ticker_resolver import TickerResolver
     from src.kline.workspace_service import KlineWorkspaceService
 
@@ -13,6 +14,7 @@ def _contracts():
         KlineEvent=KlineEvent,
         KlinePriceSeries=KlinePriceSeries,
         KlineWorkspaceService=KlineWorkspaceService,
+        OHLCProvider=OHLCProvider,
         TickerResolver=TickerResolver,
     )
 
@@ -129,6 +131,38 @@ def test_ticker_resolver_rejects_path_like_symbols():
     assert resolver.normalize("../MRNA") is None
 
 
+def test_ticker_resolver_returns_copies_for_known_symbols():
+    contracts = _contracts()
+    resolver = contracts.TickerResolver()
+
+    company = resolver.resolve("MRNA")
+    company.aliases.append("mutated alias")
+
+    assert "mutated alias" not in resolver.resolve("MRNA").aliases
+    assert "mutated alias" not in [
+        alias
+        for universe_company in resolver.list_universe()
+        if universe_company.ticker == "MRNA"
+        for alias in universe_company.aliases
+    ]
+
+
+def test_ohlc_provider_returns_error_status_for_malformed_rows():
+    contracts = _contracts()
+    provider = contracts.OHLCProvider(
+        fetch_rows=lambda ticker, max_age_hours=24: ["bad-row"]
+    )
+
+    price, statuses = provider.load("MRNA")
+
+    assert price.rows == []
+    assert price.cache_status == "error"
+    assert statuses[0].source == "ohlc"
+    assert statuses[0].status == "error"
+    assert statuses[0].item_count == 0
+    assert statuses[0].message
+
+
 def test_catalyst_provider_preserves_requested_ticker():
     contracts = _contracts()
     provider = contracts.CatalystEventProvider(
@@ -181,6 +215,53 @@ def test_catalyst_provider_uses_raw_impact_when_score_fields_are_missing():
     assert events[0].impact_score == "high"
     assert events[0].metadata["impact"] == "high"
     assert events[0].metadata["note"] == "keep"
+
+
+def test_catalyst_provider_uses_injected_status_rows():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "raw-1",
+                "date": "2026-04-20",
+                "type": "clinical_readout",
+                "ticker": "MRNA",
+                "catalyst": "Phase 3 readout",
+                "source": "clinicaltrials",
+            }
+        ],
+        fetch_statuses=lambda ticker: [
+            {
+                "source": "openfda",
+                "item_count": 0,
+                "last_fetch_at": "2026-04-20T10:00:00",
+            },
+            {
+                "source": "clinicaltrials",
+                "item_count": 3,
+                "last_fetch_at": "2026-04-20T10:05:00",
+            },
+        ],
+    )
+
+    _events, statuses = provider.load("MRNA")
+
+    assert [status.to_dict() for status in statuses] == [
+        {
+            "source": "openfda",
+            "status": "empty",
+            "item_count": 0,
+            "last_fetch_at": "2026-04-20T10:00:00",
+            "message": None,
+        },
+        {
+            "source": "clinicaltrials",
+            "status": "ready",
+            "item_count": 3,
+            "last_fetch_at": "2026-04-20T10:05:00",
+            "message": None,
+        },
+    ]
 
 
 def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabilities():
