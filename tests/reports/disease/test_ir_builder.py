@@ -10,6 +10,7 @@ from src.reports.disease.ir_builder import (
 )
 from src.reports.disease.models import (
     ClinicalTrialRecord,
+    DiseaseChapterNarratives,
     DiseaseProfile,
     DiseaseReportPackage,
     PipelineRiskRecord,
@@ -165,3 +166,30 @@ def test_risk_table_consumes_pipeline_risk_record_values():
         "High",
         "Multiple retained records share the amyloid antibody category.",
     ]
+
+
+def test_ir_builder_inserts_narrative_paragraphs_without_changing_tables():
+    narratives = DiseaseChapterNarratives(
+        executive_summary="中文执行摘要段落。",
+        clinical_trial_and_pipeline_landscape="中文管线格局段落。",
+        pipeline_timeline_and_competition_risk="中文风险段落。",
+        language="zh",
+    )
+
+    ir = DiseaseReportIRBuilder().build(_package(), narratives=narratives)
+
+    chapters = {chapter["chapterId"]: chapter for chapter in ir["chapters"]}
+    assert chapters["executive_summary"]["blocks"][1]["inlines"][0]["text"] == "中文执行摘要段落。"
+    assert (
+        chapters["clinical_trial_and_pipeline_landscape"]["blocks"][1]["inlines"][0]["text"]
+        == "中文管线格局段落。"
+    )
+    assert (
+        chapters["pipeline_timeline_and_competition_risk"]["blocks"][1]["inlines"][0]["text"]
+        == "中文风险段落。"
+    )
+
+    landscape_table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
+    risk_table = _find_table(ir, "pipeline_timeline_and_competition_risk")
+    assert _table_headers(landscape_table) == LANDSCAPE_COLUMNS
+    assert _table_headers(risk_table) == RISK_COLUMNS

@@ -5,7 +5,12 @@ from typing import Any
 
 from src.engines.report_engine.core import DocumentComposer
 
-from .models import ClinicalTrialRecord, DiseaseReportPackage, PipelineRiskRecord
+from .models import (
+    ClinicalTrialRecord,
+    DiseaseChapterNarratives,
+    DiseaseReportPackage,
+    PipelineRiskRecord,
+)
 
 LANDSCAPE_COLUMNS = [
     "Study Title",
@@ -53,7 +58,12 @@ RISK_COLGROUP = [
 
 
 class DiseaseReportIRBuilder:
-    def build(self, package: DiseaseReportPackage) -> dict:
+    def build(
+        self,
+        package: DiseaseReportPackage,
+        narratives: DiseaseChapterNarratives | None = None,
+    ) -> dict:
+        narratives = narratives or DiseaseChapterNarratives()
         disease_name = package.disease_profile.disease_name
         metadata = {
             "title": f"{disease_name} Disease Report",
@@ -84,9 +94,9 @@ class DiseaseReportIRBuilder:
             },
         }
         chapters = [
-            self._executive_summary_chapter(package),
-            self._landscape_chapter(package.clinical_trials),
-            self._risk_chapter(package.risk_records),
+            self._executive_summary_chapter(package, narratives),
+            self._landscape_chapter(package.clinical_trials, narratives),
+            self._risk_chapter(package.risk_records, narratives),
         ]
 
         return DocumentComposer().build_document(
@@ -95,7 +105,11 @@ class DiseaseReportIRBuilder:
             chapters=chapters,
         )
 
-    def _executive_summary_chapter(self, package: DiseaseReportPackage) -> dict:
+    def _executive_summary_chapter(
+        self,
+        package: DiseaseReportPackage,
+        narratives: DiseaseChapterNarratives,
+    ) -> dict:
         audit = package.source_audit
         latest_posted = _latest_study_first_posted(package.clinical_trials)
         summary = (
@@ -113,6 +127,7 @@ class DiseaseReportIRBuilder:
             "order": 10,
             "blocks": [
                 _heading("Executive Summary", "executive-summary"),
+                _paragraph(narratives.executive_summary or summary),
                 {
                     "type": "kpiGrid",
                     "cols": 3,
@@ -122,11 +137,14 @@ class DiseaseReportIRBuilder:
                         {"label": "Risk Records", "value": str(len(package.risk_records))},
                     ],
                 },
-                _paragraph(summary),
             ],
         }
 
-    def _landscape_chapter(self, trials: list[ClinicalTrialRecord]) -> dict:
+    def _landscape_chapter(
+        self,
+        trials: list[ClinicalTrialRecord],
+        narratives: DiseaseChapterNarratives,
+    ) -> dict:
         rows = [
             [
                 trial.study_title,
@@ -150,7 +168,8 @@ class DiseaseReportIRBuilder:
                     "clinical-trial-and-pipeline-landscape",
                 ),
                 _paragraph(
-                    f"Structured clinical landscape contains {len(trials)} retained records."
+                    narratives.clinical_trial_and_pipeline_landscape
+                    or f"Structured clinical landscape contains {len(trials)} retained records."
                 ),
                 _table(
                     LANDSCAPE_COLUMNS,
@@ -165,7 +184,11 @@ class DiseaseReportIRBuilder:
             ],
         }
 
-    def _risk_chapter(self, risk_records: list[PipelineRiskRecord]) -> dict:
+    def _risk_chapter(
+        self,
+        risk_records: list[PipelineRiskRecord],
+        narratives: DiseaseChapterNarratives,
+    ) -> dict:
         rows = [
             [
                 record.study_title,
@@ -191,7 +214,8 @@ class DiseaseReportIRBuilder:
                     "pipeline-timeline-and-competition-risk",
                 ),
                 _paragraph(
-                    f"Timeline and competition assessment uses {len(risk_records)} deterministic risk records."
+                    narratives.pipeline_timeline_and_competition_risk
+                    or f"Timeline and competition assessment uses {len(risk_records)} deterministic risk records."
                 ),
                 _table(
                     RISK_COLUMNS,
