@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  var rangeContextRequestId = 0;
+
   function byId(id) {
     return document.getElementById(id);
   }
@@ -61,6 +63,21 @@
 
   function formatPercent(value) {
     return Number.isFinite(Number(value)) ? Number(value).toFixed(2) + "%" : "-";
+  }
+
+  function safeExternalUrl(value) {
+    if (!value) {
+      return null;
+    }
+    try {
+      var parsed = new URL(String(value), window.location.href);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.href;
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
   }
 
   function activatePanel(name) {
@@ -262,9 +279,10 @@
     appendDefinition(list, "Impact score", selected.impact_score);
     panel.appendChild(list);
 
-    if (selected.source_url) {
+    var sourceUrl = safeExternalUrl(selected.source_url);
+    if (sourceUrl) {
       var link = makeElement("a", { className: "source-link", text: "Open source" });
-      link.href = selected.source_url;
+      link.href = sourceUrl;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       panel.appendChild(link);
@@ -358,6 +376,8 @@
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      state.backtestRequestId = (state.backtestRequestId || 0) + 1;
+      var requestId = state.backtestRequestId;
       status.textContent = "Running backtest.";
       results.replaceChildren();
 
@@ -377,6 +397,9 @@
           return { ok: response.ok, body: body };
         });
       }).then(function (result) {
+        if (requestId !== state.backtestRequestId) {
+          return;
+        }
         var body = result.body || {};
         if (!result.ok) {
           status.textContent = body.error || "Backtest failed.";
@@ -389,6 +412,9 @@
         renderMetrics(results, body.metrics || {});
         renderChart(workspace, state);
       }).catch(function () {
+        if (requestId !== state.backtestRequestId) {
+          return;
+        }
         status.textContent = "Backtest failed.";
       });
     });
@@ -401,6 +427,7 @@
     }
     node.hidden = false;
     node.textContent = "Loading range context.";
+    var requestId = ++rangeContextRequestId;
 
     var url = "/api/kline/range-context/" + encodeURIComponent(ticker) +
       "?start=" + encodeURIComponent(startDate) +
@@ -410,6 +437,9 @@
         return { ok: response.ok, body: body };
       });
     }).then(function (result) {
+      if (requestId !== rangeContextRequestId) {
+        return;
+      }
       var body = result.body || {};
       if (!result.ok) {
         node.textContent = body.error || "Range context unavailable.";
@@ -421,6 +451,9 @@
         ": " + body.catalyst_count + " catalysts, price change " + formatPercent(body.price_change_pct)
       ));
     }).catch(function () {
+      if (requestId !== rangeContextRequestId) {
+        return;
+      }
       node.textContent = "Range context unavailable.";
     });
   }
@@ -444,6 +477,7 @@
       equityCurve: [],
       signals: [],
       trades: [],
+      backtestRequestId: 0,
       chartCleanup: null
     };
 
