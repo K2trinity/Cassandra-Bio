@@ -108,7 +108,7 @@
         }
     </style>
     
-    {% block extra_head %}{% endblock %}
+    {% block head %}{% block extra_head %}{% endblock %}{% endblock %}
 </head>
 <body class="bg-slate-900 text-gray-100 font-sans antialiased">
     
