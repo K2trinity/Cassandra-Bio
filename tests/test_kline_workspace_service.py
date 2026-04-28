@@ -158,6 +158,31 @@ def test_catalyst_provider_preserves_requested_ticker():
     assert statuses[0].status == "ready"
 
 
+def test_catalyst_provider_uses_raw_impact_when_score_fields_are_missing():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "raw-impact-1",
+                "date": "2026-04-21",
+                "type": "clinical_readout",
+                "ticker": "MRNA",
+                "catalyst": "Durable response update",
+                "sentiment": "positive",
+                "source": "clinicaltrials",
+                "impact": "high",
+                "metadata": {"note": "keep"},
+            }
+        ]
+    )
+
+    events, _statuses = provider.load("MRNA")
+
+    assert events[0].impact_score == "high"
+    assert events[0].metadata["impact"] == "high"
+    assert events[0].metadata["note"] == "keep"
+
+
 def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabilities():
     contracts = _contracts()
     service = _service(contracts)

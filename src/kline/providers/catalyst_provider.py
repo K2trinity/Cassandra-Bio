@@ -57,6 +57,12 @@ def _normalize_event(ticker: str, raw: dict[str, Any], index: int) -> KlineEvent
     price_impact = raw.get("price_impact")
     if price_impact is not None:
         metadata.setdefault("price_impact", price_impact)
+    raw_impact = raw.get("impact")
+    if raw_impact is not None:
+        if "impact" in metadata and metadata["impact"] != raw_impact:
+            metadata.setdefault("raw_impact", raw_impact)
+        else:
+            metadata.setdefault("impact", raw_impact)
 
     event_type = _string_value(
         raw.get("type")
@@ -91,7 +97,7 @@ def _normalize_event(ticker: str, raw: dict[str, Any], index: int) -> KlineEvent
         source_entity=_optional_string(raw.get("source_entity")),
         disease_area=_optional_string(raw.get("disease_area")),
         drug_name=_optional_string(raw.get("drug_name") or raw.get("drug")),
-        impact_score=raw.get("impact_score", price_impact),
+        impact_score=_impact_score(raw),
         metadata=metadata,
     )
 
@@ -162,6 +168,14 @@ def _decode_json_if_string(value: object) -> object:
         return json.loads(value)
     except json.JSONDecodeError:
         return value
+
+
+def _impact_score(raw: dict[str, Any]) -> object:
+    for key in ("impact_score", "price_impact", "impact"):
+        value = raw.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _int_value(value: object, default: int) -> int:
