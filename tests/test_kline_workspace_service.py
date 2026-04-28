@@ -2,14 +2,10 @@ from types import SimpleNamespace
 
 
 def _contracts():
-    from src.services.kline_workspace_service import (
-        CatalystEventProvider,
-        KlineDataStatus,
-        KlineEvent,
-        KlinePriceSeries,
-        KlineWorkspaceService,
-        TickerResolver,
-    )
+    from src.kline.models import KlineDataStatus, KlineEvent, KlinePriceSeries
+    from src.kline.providers.catalyst_provider import CatalystEventProvider
+    from src.kline.ticker_resolver import TickerResolver
+    from src.kline.workspace_service import KlineWorkspaceService
 
     return SimpleNamespace(
         CatalystEventProvider=CatalystEventProvider,
@@ -21,172 +17,178 @@ def _contracts():
     )
 
 
-class FakeRawCatalystProvider:
-    def __init__(self, events):
-        self.events = events
+class FakeOHLCProvider:
+    def __init__(self, KlineDataStatus, KlinePriceSeries):
+        self.KlineDataStatus = KlineDataStatus
+        self.KlinePriceSeries = KlinePriceSeries
         self.requests = []
 
-    def get_events_for_ticker(self, ticker, start_date=None, end_date=None):
-        self.requests.append(
-            {
-                "ticker": ticker,
-                "start_date": start_date,
-                "end_date": end_date,
-            }
-        )
-        return list(self.events)
-
-
-class FakePriceProvider:
-    def __init__(self, price_series):
-        self.price_series = price_series
-        self.requests = []
-
-    def get_series(self, ticker):
+    def load(self, ticker: str):
         self.requests.append(ticker)
-        return self.price_series
+        return (
+            self.KlinePriceSeries(
+                rows=[
+                    {
+                        "date": "2026-04-20",
+                        "open": 101.0,
+                        "high": 104.0,
+                        "low": 100.0,
+                        "close": 103.0,
+                        "volume": 1200000,
+                    }
+                ],
+                date_range={"start": "2026-04-20", "end": "2026-04-20"},
+                last_close=103.0,
+                cache_status="ready",
+                last_updated=None,
+            ),
+            [self.KlineDataStatus(source="ohlc", status="ready", item_count=1)],
+        )
 
 
 class FakeCatalystProvider:
-    def __init__(self, events):
-        self.events = events
+    def __init__(self, KlineDataStatus, KlineEvent):
+        self.KlineDataStatus = KlineDataStatus
+        self.KlineEvent = KlineEvent
         self.requests = []
 
-    def get_events(self, ticker, start_date=None, end_date=None):
-        self.requests.append(
-            {
-                "ticker": ticker,
-                "start_date": start_date,
-                "end_date": end_date,
-            }
+    def load(self, ticker: str):
+        self.requests.append(ticker)
+        return (
+            [
+                self.KlineEvent(
+                    id="evt-1",
+                    ticker=ticker,
+                    date="2026-04-20",
+                    type="clinical_readout",
+                    category="clinical",
+                    title="Phase 3 readout",
+                    summary="Phase 3 readout",
+                    sentiment="positive",
+                    priority=1,
+                    confidence="high",
+                    source="clinicaltrials",
+                    source_url="https://clinicaltrials.gov/study/NCT00000001",
+                    source_ids=["NCT00000001"],
+                    source_entity="ModernaTX, Inc.",
+                    disease_area="Melanoma",
+                    drug_name=None,
+                    impact_score=None,
+                    metadata={},
+                )
+            ],
+            [
+                self.KlineDataStatus(
+                    source="clinicaltrials",
+                    status="ready",
+                    item_count=1,
+                )
+            ],
         )
-        events = list(self.events)
-        if start_date is not None:
-            events = [event for event in events if event.date >= start_date]
-        if end_date is not None:
-            events = [event for event in events if event.date <= end_date]
-        return events
 
 
-def _sample_event(KlineEvent, ticker="MRNA"):
-    return KlineEvent(
-        id="clinicaltrials:NCT00000001",
-        date="2026-04-20",
-        type="clinical_readout",
-        priority=4,
-        ticker=ticker,
-        disease_area="Respiratory Syncytial Virus",
-        catalyst="Phase 3 readout posted",
-        sentiment="positive",
-        source="clinicaltrials",
-        source_entity="ModernaTX, Inc.",
-        source_ids=["NCT00000001"],
-        metadata={"phase": "Phase 3"},
+class FakeBacktestProvider:
+    def __init__(self):
+        self.requests = []
+
+    def load_last_run(self, ticker: str):
+        self.requests.append(ticker)
+        return None
+
+
+def _service(contracts):
+    return contracts.KlineWorkspaceService(
+        resolver=contracts.TickerResolver(),
+        ohlc_provider=FakeOHLCProvider(
+            contracts.KlineDataStatus,
+            contracts.KlinePriceSeries,
+        ),
+        catalyst_provider=FakeCatalystProvider(
+            contracts.KlineDataStatus,
+            contracts.KlineEvent,
+        ),
+        backtest_provider=FakeBacktestProvider(),
     )
 
 
-def _sample_price_series(KlineDataStatus, KlinePriceSeries):
-    return KlinePriceSeries(
-        ticker="MRNA",
-        status=KlineDataStatus.READY,
-        candles=[
-            {
-                "date": "2026-04-20",
-                "open": 101.0,
-                "high": 104.0,
-                "low": 100.0,
-                "close": 103.0,
-                "volume": 1200000,
-            }
-        ],
-        source="fake-market-data",
-    )
-
-
-def test_ticker_resolver_resolves_biotech_ticker_contract():
+def test_ticker_resolver_normalizes_known_symbol():
     contracts = _contracts()
+    resolver = contracts.TickerResolver()
 
-    resolved = contracts.TickerResolver.resolve(" mrna ")
+    company = resolver.resolve(" mrna ")
 
-    assert resolved.ticker == "MRNA"
-    assert resolved.name == "Moderna, Inc."
-    assert resolved.is_biotech is True
+    assert company.ticker == "MRNA"
+    assert company.name == "Moderna, Inc."
+    assert company.is_biotech is True
 
 
 def test_ticker_resolver_rejects_path_like_symbols():
     contracts = _contracts()
+    resolver = contracts.TickerResolver()
 
-    assert contracts.TickerResolver.normalize("../MRNA") is None
+    assert resolver.normalize("../MRNA") is None
 
 
-def test_catalyst_event_provider_preserves_requested_ticker_ownership():
+def test_catalyst_provider_preserves_requested_ticker():
     contracts = _contracts()
-    raw_events = [
-        {
-            "id": "clinicaltrials:NCT00000001",
-            "date": "2026-04-20",
-            "type": "clinical_readout",
-            "priority": 4,
-            "ticker": "ModernaTX,",
-            "disease_area": "Respiratory Syncytial Virus",
-            "catalyst": "Phase 3 readout posted",
-            "sentiment": "positive",
-            "source": "clinicaltrials",
-            "source_entity": "ModernaTX, Inc.",
-            "source_ids": ["NCT00000001"],
-        }
-    ]
-    raw_provider = FakeRawCatalystProvider(raw_events)
-    provider = contracts.CatalystEventProvider(raw_provider)
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "raw-1",
+                "date": "2026-04-20",
+                "type": "clinical_readout",
+                "priority": 1,
+                "ticker": "ModernaTX,",
+                "disease_area": "Melanoma",
+                "catalyst": "Phase 3 readout",
+                "sentiment": "positive",
+                "source": "clinicaltrials",
+                "source_entity": "ModernaTX, Inc.",
+                "source_ids": ["NCT00000001"],
+            }
+        ]
+    )
 
-    events = provider.get_events("MRNA")
+    events, statuses = provider.load("MRNA")
 
-    assert raw_provider.requests == [
-        {"ticker": "MRNA", "start_date": None, "end_date": None}
-    ]
-    assert len(events) == 1
     assert events[0].ticker == "MRNA"
     assert events[0].source_entity == "ModernaTX, Inc."
     assert events[0].source_ids == ["NCT00000001"]
+    assert statuses[0].source == "clinicaltrials"
+    assert statuses[0].status == "ready"
 
 
-def test_kline_workspace_service_builds_phase1_workspace_payload():
+def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabilities():
     contracts = _contracts()
-    price_series = _sample_price_series(
-        contracts.KlineDataStatus,
-        contracts.KlinePriceSeries,
-    )
-    catalyst_event = _sample_event(contracts.KlineEvent)
-    service = contracts.KlineWorkspaceService(
-        ticker_resolver=contracts.TickerResolver,
-        price_provider=FakePriceProvider(price_series),
-        catalyst_provider=FakeCatalystProvider([catalyst_event]),
-    )
+    service = _service(contracts)
 
     payload = service.build_workspace("MRNA").to_dict()
 
     assert payload["ticker"] == "MRNA"
-    assert payload["company"] == "Moderna, Inc."
-    assert payload["layers"] == ["candles", "catalysts", "backtest"]
-    assert payload["catalysts"]["events"][0]["ticker"] == "MRNA"
-    assert payload["capabilities"]["news"]["enabled"] is False
-    assert payload["capabilities"]["news"]["phase"] == 2
-    assert payload["capabilities"]["range_analysis"]["enabled"] is False
-    assert payload["capabilities"]["range_analysis"]["phase"] == 3
+    assert payload["company"]["name"] == "Moderna, Inc."
+    assert [layer["kind"] for layer in payload["layers"]] == [
+        "candles",
+        "catalysts",
+        "backtest",
+    ]
+    assert payload["layers"][1]["points"][0]["ticker"] == "MRNA"
+    assert {
+        "id": "news",
+        "enabled": False,
+        "phase": 2,
+        "label": "News",
+    } in payload["capabilities"]
+    assert {
+        "id": "range_analysis",
+        "enabled": False,
+        "phase": 3,
+        "label": "Range Analysis",
+    } in payload["capabilities"]
 
 
-def test_kline_workspace_service_builds_phase3_range_context():
+def test_range_context_returns_phase1_price_and_catalyst_summary():
     contracts = _contracts()
-    price_series = _sample_price_series(
-        contracts.KlineDataStatus,
-        contracts.KlinePriceSeries,
-    )
-    catalyst_event = _sample_event(contracts.KlineEvent)
-    service = contracts.KlineWorkspaceService(
-        ticker_resolver=contracts.TickerResolver,
-        price_provider=FakePriceProvider(price_series),
-        catalyst_provider=FakeCatalystProvider([catalyst_event]),
-    )
+    service = _service(contracts)
 
     context = service.build_range_context(
         "MRNA",
