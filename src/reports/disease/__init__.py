@@ -2,6 +2,7 @@
 
 from .models import (
     ClinicalTrialRecord,
+    DiseaseChapterNarratives,
     DiseaseProfile,
     DiseaseReportArtifacts,
     DiseaseReportPackage,
@@ -12,6 +13,7 @@ from .orchestrator import DiseaseReportOrchestrator
 
 __all__ = [
     "ClinicalTrialRecord",
+    "DiseaseChapterNarratives",
     "DiseaseProfile",
     "DiseaseReportOrchestrator",
     "DiseaseReportArtifacts",

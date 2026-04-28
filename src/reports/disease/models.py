@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -72,6 +72,15 @@ class DiseaseReportPackage(BaseModel):
     risk_records: list[PipelineRiskRecord] = Field(default_factory=list)
     source_audit: SourceAudit
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class DiseaseChapterNarratives(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    executive_summary: str = ""
+    clinical_trial_and_pipeline_landscape: str = ""
+    pipeline_timeline_and_competition_risk: str = ""
+    language: Literal["zh", "en"] = "zh"
 
 
 class DiseaseReportArtifacts(BaseModel):

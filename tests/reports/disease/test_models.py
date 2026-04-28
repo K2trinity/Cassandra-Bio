@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.reports.disease.models import (
     ClinicalTrialRecord,
+    DiseaseChapterNarratives,
     DiseaseProfile,
     DiseaseReportPackage,
     PipelineRiskRecord,
@@ -105,3 +106,24 @@ def test_disease_report_package_carries_handoff_contract():
     assert package.disease_profile.disease_name == "Alzheimer Disease"
     assert package.clinical_trials[0].status == "COMPLETED"
     assert package.source_audit.retained_count == 1
+
+
+def test_disease_chapter_narratives_defaults_to_chinese_empty_strings():
+    narratives = DiseaseChapterNarratives()
+
+    assert narratives.language == "zh"
+    assert narratives.executive_summary == ""
+    assert narratives.clinical_trial_and_pipeline_landscape == ""
+    assert narratives.pipeline_timeline_and_competition_risk == ""
+
+
+def test_disease_chapter_narratives_accepts_english():
+    narratives = DiseaseChapterNarratives(
+        executive_summary="English executive summary.",
+        clinical_trial_and_pipeline_landscape="English landscape summary.",
+        pipeline_timeline_and_competition_risk="English risk summary.",
+        language="en",
+    )
+
+    assert narratives.language == "en"
+    assert narratives.executive_summary == "English executive summary."
