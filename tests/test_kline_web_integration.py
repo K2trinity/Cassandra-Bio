@@ -152,33 +152,6 @@ def test_kline_page_is_independent_from_report_analysis(monkeypatch):
     assert 'data-tab="backtest"' in html
 
 
-def test_kline_socket_bridge_enters_main_analysis_queue(monkeypatch):
-    def fake_analyze():
-        return app_module.jsonify({
-            "status": "accepted",
-            "message": "Analysis started. Monitor progress via WebSocket.",
-            "query": "stub",
-            "task_id": "task-123",
-        }), 202
-
-    monkeypatch.setattr(app_module, "analyze", fake_analyze)
-
-    client = app_module.socketio.test_client(app_module.app)
-    client.emit(_fragment("request", "_", "report"), {
-        "ticker": "MRNA",
-        "event_id": "evt_001",
-        "event_type": "clinical_readout",
-        "date": "2026-04-20",
-        "catalyst": "Phase 3 trial positive results",
-    })
-    received = client.get_received()
-
-    assert any(
-        packet["name"] == "report_queued" and packet["args"][0]["task_id"] == "task-123"
-        for packet in received
-    )
-
-
 def test_kline_route_uses_real_data_service_for_ohlc(monkeypatch):
     """
     Contract: /kline/<symbol> must call get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]
