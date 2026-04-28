@@ -12,6 +12,7 @@ from .clinicaltrials_harvester import (
 from .company_routes import NoopCompanyRouteProvider
 from .ir_builder import DiseaseReportIRBuilder
 from .models import ClinicalTrialRecord
+from .narrative import DiseaseReportNarrativeService
 from .normalizer import normalize_trial_payload
 from .package_builder import DiseaseReportPackageBuilder
 from .relevance import DiseaseRelevanceGate
@@ -33,6 +34,7 @@ class DiseaseReportOrchestrator:
         max_workers: int = 4,
         current_date_for_tests: str | None = None,
         company_route_provider: Any | None = None,
+        narrative_service: Any | None = None,
     ) -> None:
         self.max_workers = max(1, int(max_workers))
         self.resolver = DiseaseResolver()
@@ -47,6 +49,7 @@ class DiseaseReportOrchestrator:
         self.package_builder = DiseaseReportPackageBuilder()
         self.relevance_gate = DiseaseRelevanceGate()
         self.company_route_provider = company_route_provider or NoopCompanyRouteProvider()
+        self.narrative_service = narrative_service or DiseaseReportNarrativeService()
         self.ir_builder = DiseaseReportIRBuilder()
         self.renderer_adapter = renderer_adapter or DiseaseReportRendererAdapter()
 
@@ -55,12 +58,14 @@ class DiseaseReportOrchestrator:
         user_query: str,
         output_dir: str = "final_reports",
         max_trials: int = 50,
+        narrative_language: str = "zh",
     ) -> dict[str, Any]:
         final_state: dict[str, Any] | None = None
         for _node_name, state in self.stream(
             user_query=user_query,
             output_dir=output_dir,
             max_trials=max_trials,
+            narrative_language=narrative_language,
         ):
             final_state = state
         if final_state is None:
@@ -77,6 +82,7 @@ class DiseaseReportOrchestrator:
         user_query: str,
         output_dir: str = "final_reports",
         max_trials: int = 50,
+        narrative_language: str = "zh",
     ) -> Iterator[tuple[str, dict[str, Any]]]:
         profile = self.condition_discovery.discover(self.resolver.resolve(user_query))
         raw_result = self.harvester.fetch_raw_studies(profile, max_records=max_trials)
@@ -108,15 +114,20 @@ class DiseaseReportOrchestrator:
             max_records=max_trials,
         )
         package = self.company_route_provider.enrich(package)
+        narratives = self.narrative_service.generate(
+            package,
+            language="en" if narrative_language == "en" else "zh",
+        )
         handoff_state = {
             **harvest_state,
             "status": "handoff_complete",
             "handoff_complete": True,
             "disease_report_package": package.model_dump(mode="json"),
+            "disease_report_narratives": narratives.model_dump(mode="json"),
         }
         yield "extension_handoff", handoff_state
 
-        report_ir = self.ir_builder.build(package)
+        report_ir = self.ir_builder.build(package, narratives=narratives)
         artifacts = self.renderer_adapter.render_all(
             document_ir=report_ir,
             output_dir=output_dir,

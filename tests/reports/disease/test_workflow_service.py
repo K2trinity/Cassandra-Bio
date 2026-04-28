@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.reports.disease.models import DiseaseReportArtifacts
+from src.reports.disease.models import DiseaseChapterNarratives, DiseaseReportArtifacts
 from src.reports.disease.orchestrator import DiseaseReportOrchestrator
 from src.services.workflow_service import WorkflowService
 
@@ -63,21 +63,65 @@ class FakeRendererAdapter:
         )
 
 
+class EmptyNarrativeService:
+    def generate(self, package, language: str = "zh"):
+        _ = package
+        return DiseaseChapterNarratives(language="en" if language == "en" else "zh")
+
+
+class FakeNarrativeService:
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, package, language: str = "zh"):
+        self.calls.append({"package": package, "language": language})
+        return DiseaseChapterNarratives(
+            executive_summary="English narrative.",
+            clinical_trial_and_pipeline_landscape="English landscape.",
+            pipeline_timeline_and_competition_risk="English risk.",
+            language="en" if language == "en" else "zh",
+        )
+
+
 class FakeOrchestrator:
     def __init__(self) -> None:
         self.run_calls: list[dict[str, Any]] = []
         self.stream_calls: list[dict[str, Any]] = []
 
-    def run(self, *, user_query: str, output_dir: str) -> dict[str, Any]:
-        self.run_calls.append({"user_query": user_query, "output_dir": output_dir})
+    def run(
+        self,
+        *,
+        user_query: str,
+        output_dir: str,
+        narrative_language: str = "zh",
+    ) -> dict[str, Any]:
+        self.run_calls.append(
+            {
+                "user_query": user_query,
+                "output_dir": output_dir,
+                "narrative_language": narrative_language,
+            }
+        )
         return {
             "status": "writer_complete",
             "user_query": user_query,
             "output_dir": output_dir,
         }
 
-    def stream(self, *, user_query: str, output_dir: str):
-        self.stream_calls.append({"user_query": user_query, "output_dir": output_dir})
+    def stream(
+        self,
+        *,
+        user_query: str,
+        output_dir: str,
+        narrative_language: str = "zh",
+    ):
+        self.stream_calls.append(
+            {
+                "user_query": user_query,
+                "output_dir": output_dir,
+                "narrative_language": narrative_language,
+            }
+        )
         for node_name in ["harvester", "extension_handoff", "writer"]:
             yield node_name, {
                 "status": f"{node_name}_complete",
@@ -99,6 +143,7 @@ def test_orchestrator_run_returns_app_state_keys(tmp_path):
         clinicaltrials_get_json=fake_get_json,
         clinicaltrials_get_text=lambda url: "",
         renderer_adapter=FakeRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
         current_date_for_tests="2026-04-27",
     )
 
@@ -160,6 +205,7 @@ def test_orchestrator_stream_yields_harvest_handoff_writer_nodes(tmp_path):
         clinicaltrials_get_json=fake_get_json,
         clinicaltrials_get_text=lambda url: "",
         renderer_adapter=FakeRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
         current_date_for_tests="2026-04-27",
     )
 
@@ -201,7 +247,11 @@ def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
     assert state["user_query"] == "Alzheimer disease"
     assert state["output_dir"] == str(tmp_path)
     assert orchestrator.run_calls == [
-        {"user_query": "Alzheimer disease", "output_dir": str(tmp_path)}
+        {
+            "user_query": "Alzheimer disease",
+            "output_dir": str(tmp_path),
+            "narrative_language": "zh",
+        }
     ]
 
 
@@ -229,7 +279,11 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
     assert node_names == ["harvester", "extension_handoff", "writer"]
     assert progress_events == events
     assert orchestrator.stream_calls == [
-        {"user_query": "Alzheimer disease", "output_dir": str(tmp_path)}
+        {
+            "user_query": "Alzheimer disease",
+            "output_dir": str(tmp_path),
+            "narrative_language": "zh",
+        }
     ]
     assert not {
         "disease" + "_survey" + "_intelligence",
@@ -237,3 +291,53 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
         "clinical" + "_analyzer",
         "quality" + "_assessor",
     }.intersection(node_names)
+
+
+def test_orchestrator_passes_narrative_language_to_service(tmp_path):
+    narrative_service = FakeNarrativeService()
+
+    def fake_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {"studies": [_study("NCT_ALZHEIMER", "Alzheimer Disease")]}
+
+    orchestrator = DiseaseReportOrchestrator(
+        clinicaltrials_get_json=fake_get_json,
+        clinicaltrials_get_text=lambda url: "",
+        renderer_adapter=FakeRendererAdapter(),
+        narrative_service=narrative_service,
+        current_date_for_tests="2026-04-27",
+    )
+
+    state = orchestrator.run(
+        "Alzheimer disease",
+        output_dir=tmp_path,
+        max_trials=50,
+        narrative_language="en",
+    )
+
+    assert narrative_service.calls[0]["language"] == "en"
+    assert state["disease_report_narratives"]["language"] == "en"
+    assert state["report_ir"]["chapters"][0]["blocks"][1]["inlines"][0]["text"] == "English narrative."
+
+
+def test_workflow_service_forwards_narrative_language(tmp_path):
+    class LanguageOrchestrator(FakeOrchestrator):
+        def run(
+            self,
+            *,
+            user_query: str,
+            output_dir: str,
+            narrative_language: str = "zh",
+        ) -> dict[str, Any]:
+            return {
+                "status": "writer_complete",
+                "user_query": user_query,
+                "output_dir": output_dir,
+                "narrative_language": narrative_language,
+            }
+
+    orchestrator = LanguageOrchestrator()
+    service = WorkflowService(orchestrator_factory=lambda: orchestrator, output_dir=tmp_path)
+
+    state = service.run("Alzheimer disease", narrative_language="en")
+
+    assert state["narrative_language"] == "en"

@@ -23,12 +23,14 @@ class WorkflowService:
         pdf_paths: Optional[list] = None,
         checkpointer: Any = None,
         thread_id: Optional[str] = None,
+        narrative_language: str = "zh",
     ) -> Dict[str, Any]:
         _ = (pdf_paths, checkpointer, thread_id)
         orchestrator = self.orchestrator_factory()
         return orchestrator.run(
             user_query=user_query,
             output_dir=str(self.output_dir),
+            narrative_language=narrative_language,
         )
 
     def stream(
@@ -40,12 +42,14 @@ class WorkflowService:
         thread_id: Optional[str] = None,
         interrupt_before: Optional[list] = None,
         allow_interrupts: bool = False,
+        narrative_language: str = "zh",
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         _ = (pdf_paths, checkpointer, thread_id, interrupt_before, allow_interrupts)
         orchestrator = self.orchestrator_factory()
         for node_name, state in orchestrator.stream(
             user_query=user_query,
             output_dir=str(self.output_dir),
+            narrative_language=narrative_language,
         ):
             if progress_callback is not None:
                 progress_callback(node_name, state)
