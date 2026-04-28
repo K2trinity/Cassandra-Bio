@@ -75,6 +75,24 @@ def test_kline_template_uses_best_effort_local_storage_helpers():
     assert template_source.count("window.localStorage.setItem") == 1
 
 
+def test_kline_template_guards_saved_run_hydration_from_newer_backtests():
+    template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
+
+    with open(template_path, encoding="utf-8") as template_file:
+        template_source = template_file.read()
+
+    hydrate_function = template_source.split("async function hydrateBacktestRun(runId)", 1)[1]
+    hydrate_function = hydrate_function.split("async function handleBacktestSubmit(event)", 1)[0]
+    submit_function = template_source.split("async function handleBacktestSubmit(event)", 1)[1]
+    submit_function = submit_function.split("function initializeBacktestDefaults()", 1)[0]
+
+    assert "backtestRequestVersion: 0" in template_source
+    assert "const hydrateVersion = pageState.backtestRequestVersion" in hydrate_function
+    assert "hydrateVersion !== pageState.backtestRequestVersion" in hydrate_function
+    assert "pageState.backtestRequestVersion += 1" in submit_function
+    assert submit_function.find("pageState.backtestRequestVersion += 1") < submit_function.find("fetch('/api/backtest/run'")
+
+
 def test_kline_template_scrolls_to_event_cards_without_raw_css_selector():
     template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
 

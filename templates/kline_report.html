@@ -696,6 +696,7 @@
     events: Array.isArray(eventsData) ? eventsData : [],
     chartCleanup: null,
     lastRunId: null,
+    backtestRequestVersion: 0,
   };
 
   function escapeHtml(value) {
@@ -1012,6 +1013,8 @@
       return;
     }
 
+    const hydrateVersion = pageState.backtestRequestVersion;
+
     try {
       const response = await fetch('/api/backtest/results/' + encodeURIComponent(runId), {
         headers: { 'Accept': 'application/json' }
@@ -1022,6 +1025,10 @@
       }
 
       const payload = await response.json();
+      if (hydrateVersion !== pageState.backtestRequestVersion) {
+        return;
+      }
+
       pageState.lastRunId = payload.run_id || runId;
       pageState.equityCurve = Array.isArray(payload.equity_curve) ? payload.equity_curve : [];
       renderBacktestResults(payload);
@@ -1034,6 +1041,7 @@
 
   async function handleBacktestSubmit(event) {
     event.preventDefault();
+    pageState.backtestRequestVersion += 1;
     setActiveTab('backtest');
 
     const formData = new FormData(backtestForm);
