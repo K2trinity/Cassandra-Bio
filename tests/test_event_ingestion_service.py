@@ -12,6 +12,14 @@ from typing import Dict, Any
 
 # ========== Test Fixtures ==========
 
+@pytest.fixture(autouse=True)
+def isolated_events_db(tmp_path, monkeypatch):
+    """Keep DB-touching tests away from the repo's persistent event store."""
+    from src.backtest import events_db
+
+    monkeypatch.setattr(events_db, "DB_PATH", tmp_path / "events.db")
+
+
 @pytest.fixture
 def openfda_approval_payload() -> Dict[str, Any]:
     """Realistic openFDA approval payload."""
@@ -252,6 +260,33 @@ def test_normalize_clinical_trials_completed(clinical_trials_completed_payload):
     # Verify date format
     assert len(event["date"]) == 10
     assert event["date"].count("-") == 2
+
+
+def test_normalize_clinical_trials_coerces_public_metadata_shapes():
+    """Public normalizer inputs should tolerate non-string sponsor and list conditions."""
+    from src.tools.clinical_trials_client import normalize_biotech_events
+
+    payload = [
+        {
+            "nct_id": "NCT12345678",
+            "title": "Phase 2 Study of Drug Q",
+            "status": "COMPLETED",
+            "completion_date": "2026-04-20",
+            "results_first_posted": "2026-04-21",
+            "sponsor": 12345,
+            "has_results": True,
+            "conditions": ["Melanoma", "Solid Tumor"],
+            "phase": "Phase 2",
+        }
+    ]
+
+    events = normalize_biotech_events(payload, source="clinicaltrials")
+
+    assert len(events) == 1
+    assert events[0]["ticker"] == "12345"
+    assert events[0]["source_entity"] == "12345"
+    assert events[0]["disease_area"] == "Melanoma"
+    assert events[0]["metadata"]["raw_ticker"] == "12345"
 
 
 def test_normalize_clinical_trials_preserves_requested_ticker_attribution():
@@ -639,6 +674,53 @@ def test_event_db_insert_applies_optional_field_defaults():
     assert rows[0]["priority"] == 3
     assert rows[0]["sentiment"] == "neutral"
     assert pd.isna(rows[0]["price_impact"])
+    assert rows[0]["source_ids"] == []
+    assert rows[0]["metadata"] == {}
+    assert rows[0]["confidence"] == "medium"
+
+
+def test_event_db_insert_migrates_old_shape_table_without_init_db():
+    """Insert paths should migrate an existing old-shape table before binding new columns."""
+    from src.backtest.events_db import insert_event, get_events_for_chart, _get_conn
+
+    conn = _get_conn()
+    conn.execute(
+        """
+        CREATE TABLE biotech_events (
+            id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            type TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 3,
+            ticker TEXT NOT NULL,
+            disease_area TEXT,
+            catalyst TEXT,
+            sentiment TEXT DEFAULT 'neutral',
+            price_impact REAL,
+            source TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    insert_event(
+        {
+            "id": "old-shape-event-1",
+            "date": "2026-04-23",
+            "type": "clinical_readout",
+            "ticker": "OLDSHAPE",
+            "disease_area": "Oncology",
+            "catalyst": "Clinical Trial: migrated table",
+            "source": "clinicaltrials",
+        }
+    )
+
+    rows = get_events_for_chart("OLDSHAPE")
+
+    assert len(rows) == 1
+    assert rows[0]["priority"] == 3
+    assert rows[0]["sentiment"] == "neutral"
     assert rows[0]["source_ids"] == []
     assert rows[0]["metadata"] == {}
     assert rows[0]["confidence"] == "medium"

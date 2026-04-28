@@ -19,6 +19,22 @@ EVENT_COLUMN_DEFINITIONS = {
     "metadata": "TEXT",
 }
 
+EVENT_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS biotech_events (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 3,
+        ticker TEXT NOT NULL,
+        disease_area TEXT,
+        catalyst TEXT,
+        sentiment TEXT DEFAULT 'neutral',
+        price_impact REAL,
+        source TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )
+"""
+
 
 def _get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -31,28 +47,19 @@ def _get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     """Create events table if not exists."""
     conn = _get_conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS biotech_events (
-            id TEXT PRIMARY KEY,
-            date TEXT NOT NULL,
-            type TEXT NOT NULL,
-            priority INTEGER NOT NULL DEFAULT 3,
-            ticker TEXT NOT NULL,
-            disease_area TEXT,
-            catalyst TEXT,
-            sentiment TEXT DEFAULT 'neutral',
-            price_impact REAL,
-            source TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    _ensure_columns(conn)
+    _ensure_event_table(conn)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_events_ticker_date
         ON biotech_events(ticker, date)
     """)
     conn.commit()
     conn.close()
+
+
+def _ensure_event_table(conn: sqlite3.Connection) -> None:
+    """Create or migrate the biotech event table without dropping existing data."""
+    conn.execute(EVENT_TABLE_SQL)
+    _ensure_columns(conn)
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
@@ -91,6 +98,7 @@ def _serialize_event(event: dict) -> dict:
 def insert_event(event: dict) -> None:
     """Insert a single event. Ignores duplicates by id."""
     conn = _get_conn()
+    _ensure_event_table(conn)
     serialized = _serialize_event(event)
     conn.execute("""
         INSERT OR IGNORE INTO biotech_events
@@ -110,6 +118,7 @@ def insert_event(event: dict) -> None:
 def insert_events(events: list[dict]) -> int:
     """Batch insert events. Returns count of inserted rows."""
     conn = _get_conn()
+    _ensure_event_table(conn)
     serialized_events = [_serialize_event(event) for event in events]
     cur = conn.executemany("""
         INSERT OR IGNORE INTO biotech_events

@@ -746,8 +746,16 @@ if __name__ == "__main__":
             print(f"\n  Full data: {results['results_url']}")
 
 
+def _coerce_text(value: object, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value if item is not None) or default
+    return str(value)
+
+
 def normalize_biotech_events(
-    trials: List[Dict[str, str]],
+    trials: List[Dict[str, Any]],
     source: str = "clinicaltrials",
     requested_ticker: str | None = None,
 ) -> List[Dict[str, Any]]:
@@ -811,7 +819,7 @@ def normalize_biotech_events(
                 priority = 2
 
             # Requested ticker owns the chart event; sponsor remains source attribution.
-            sponsor = trial.get("sponsor") or "UNKNOWN"
+            sponsor = _coerce_text(trial.get("sponsor"), "UNKNOWN")
             raw_ticker = sponsor.split()[0] if sponsor else None
             if requested_ticker is not None:
                 ticker = requested_ticker.strip().upper()
@@ -819,7 +827,7 @@ def normalize_biotech_events(
                 ticker = sponsor.split()[0] if sponsor else "UNKNOWN"
 
             # Extract disease area from conditions
-            conditions = trial.get("conditions", "")
+            conditions = _coerce_text(trial.get("conditions"), "")
             disease_area = conditions.split(",")[0] if conditions else ""
 
             # Build catalyst description
