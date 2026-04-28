@@ -18,10 +18,13 @@ def _legacy_literal(*parts):
 
 
 LEGACY_KLINE_TEMPLATE_REFERENCES = (
+    _legacy_literal("kline", ".html"),
     _legacy_literal("kline_", "report.html"),
     _legacy_literal("kline_chart_", "runtime.html"),
     _legacy_literal("kline_chart_", "assets.html"),
 )
+
+LEGACY_KLINE_ANALYSIS_ENDPOINT = _legacy_literal("/api/", "analyze")
 
 LEGACY_KLINE_BRIDGE_REFERENCES = (
     _legacy_literal("request", "_report"),
@@ -92,7 +95,7 @@ def test_kline_page_renders_phase1_workspace(monkeypatch):
     assert "/static/kline/workspace.css" in html
     assert "/static/vendor/pokie-chart.umd.js" in html
     assert "/static/kline/workspace.js" in html
-    assert "/api/analyze" not in html
+    assert LEGACY_KLINE_ANALYSIS_ENDPOINT not in html
     for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
         assert reference not in html
 
@@ -138,7 +141,7 @@ def test_kline_workspace_static_js_uses_phase1_contracts_only():
     assert "/api/backtest/run" in workspace_js
     assert "/api/kline/range-context/" in workspace_js
     assert "PokieChart.render" in workspace_js
-    assert "/api/analyze" not in workspace_js
+    assert LEGACY_KLINE_ANALYSIS_ENDPOINT not in workspace_js
     for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
         assert reference not in workspace_js
     assert "Socket.IO" not in workspace_js
@@ -151,7 +154,7 @@ def test_kline_workspace_template_omits_legacy_report_bridge_references():
 
     for reference in LEGACY_KLINE_TEMPLATE_REFERENCES:
         assert reference not in template_source
-    assert "/api/analyze" not in template_source
+    assert LEGACY_KLINE_ANALYSIS_ENDPOINT not in template_source
     for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
         assert reference not in template_source
 
@@ -170,7 +173,7 @@ def test_kline_workspace_api_returns_workspace_json(monkeypatch):
 
 def test_obsolete_kline_surface_files_are_removed():
     obsolete_paths = (
-        Path(PROJECT_ROOT) / "templates" / "kline.html",
+        Path(PROJECT_ROOT) / "templates" / _legacy_literal("kline", ".html"),
         Path(PROJECT_ROOT) / "templates" / _legacy_literal("kline_", "report.html"),
         Path(PROJECT_ROOT)
         / "templates"
