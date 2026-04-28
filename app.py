@@ -999,7 +999,11 @@ def analyze():
 @app.route('/api/backtest/run', methods=['POST'])
 def api_backtest_run():
     """Run a single ticker backtest for K-line workflow."""
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "error": "request body must be a JSON object",
+        }), 400
 
     raw_ticker = data.get('ticker')
     ticker = normalize_kline_ticker(raw_ticker)

@@ -620,15 +620,15 @@
             <input id="bt-end-date" name="end_date" type="date" required>
           </div>
           <div class="backtest-field">
-            <label for="bt-stop-loss">Stop Loss %</label>
+            <label for="bt-stop-loss">Stop Loss Fraction</label>
             <input id="bt-stop-loss" name="stop_loss_pct" type="number" step="0.01" value="-0.08">
           </div>
           <div class="backtest-field">
-            <label for="bt-max-position">Max Position %</label>
+            <label for="bt-max-position">Max Position Fraction</label>
             <input id="bt-max-position" name="max_position_pct" type="number" step="0.01" value="0.2">
           </div>
           <div class="backtest-field">
-            <label for="bt-slippage">Slippage %</label>
+            <label for="bt-slippage">Slippage Fraction</label>
             <input id="bt-slippage" name="slippage_pct" type="number" step="0.0001" value="0.001">
           </div>
           <button id="backtest-run-btn" class="backtest-run" type="submit">Run Backtest</button>
@@ -1026,6 +1026,10 @@
 
       const payload = await response.json();
       if (hydrateVersion !== pageState.backtestRequestVersion) {
+        return;
+      }
+
+      if (payload.ticker && String(payload.ticker).toUpperCase() !== ticker) {
         return;
       }
 

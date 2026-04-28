@@ -97,6 +97,18 @@ def test_kline_template_guards_saved_run_hydration_from_newer_backtests():
     assert "requestVersion !== pageState.backtestRequestVersion" in submit_function
     assert "requestVersion === pageState.backtestRequestVersion" in submit_function
     assert submit_function.find("pageState.backtestRequestVersion += 1") < submit_function.find("fetch('/api/backtest/run'")
+    assert "String(payload.ticker).toUpperCase() !== ticker" in hydrate_function
+
+
+def test_kline_template_labels_backtest_inputs_as_fractions():
+    template_path = os.path.join(PROJECT_ROOT, "templates", "kline_report.html")
+
+    with open(template_path, encoding="utf-8") as template_file:
+        template_source = template_file.read()
+
+    assert "Stop Loss Fraction" in template_source
+    assert "Max Position Fraction" in template_source
+    assert "Slippage Fraction" in template_source
 
 
 def test_kline_template_scrolls_to_event_cards_without_raw_css_selector():
@@ -337,6 +349,24 @@ def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
 
     assert response.status_code == 400
     assert body["error"] == "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+
+
+def test_backtest_run_api_rejects_non_object_json_without_runner(monkeypatch):
+    def fail_run_kline_backtest(**kwargs):
+        raise AssertionError("runner should not be called for non-object JSON")
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        data="[1]",
+        content_type="application/json",
+    )
+    body = response.get_json()
+
+    assert response.status_code == 400
+    assert body["error"] == "request body must be a JSON object"
 
 
 def test_backtest_run_api_rejects_non_finite_risk_parameters(monkeypatch):
