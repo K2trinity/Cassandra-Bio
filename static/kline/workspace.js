@@ -69,8 +69,12 @@
     if (!value) {
       return null;
     }
+    var trimmed = String(value).trim();
+    if (!/^https?:\/\/[^/?#\s]+(?:[/?#]|$)/i.test(trimmed)) {
+      return null;
+    }
     try {
-      var parsed = new URL(String(value).trim());
+      var parsed = new URL(trimmed);
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
         return parsed.href;
       }
