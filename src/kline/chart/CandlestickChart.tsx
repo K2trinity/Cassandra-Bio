@@ -206,10 +206,19 @@ export default function CandlestickChart({
       .style('fill', '#555');
 
     // Right Y-axis and equity curve (only if equityCurve has data)
-    if (equityCurve && equityCurve.length > 0) {
-      const equityDomain = d3.extent(equityCurve, (d) => d.equity) as [number, number];
+    const mappedEquityCurve = (equityCurve || [])
+      .filter((point) => dateToOhlc.has(point.date) && Number.isFinite(point.equity));
+
+    if (mappedEquityCurve.length > 0) {
+      const equityDomain = d3.extent(mappedEquityCurve, (d) => d.equity) as [number, number];
+      const equityMin = equityDomain[0];
+      const equityMax = equityDomain[1];
+      const equityPadding = equityMin === equityMax ? Math.max(Math.abs(equityMin) * 0.05, 1) : 0;
       const yEquity = d3.scaleLinear()
-        .domain([equityDomain[0] * 0.95, equityDomain[1] * 1.05])
+        .domain([
+          equityMin === equityMax ? equityMin - equityPadding : equityMin * 0.95,
+          equityMin === equityMax ? equityMax + equityPadding : equityMax * 1.05,
+        ])
         .range([height, 0]);
 
       // Right Y-axis
@@ -221,15 +230,14 @@ export default function CandlestickChart({
         .style('fill', '#ff9800');
 
       // Equity curve line
-      const equityLine = d3.line<typeof equityCurve[0]>()
+      const equityLine = d3.line<typeof mappedEquityCurve[0]>()
         .x((d) => {
-          const ohlc = dateToOhlc.get(d.date);
-          return ohlc ? x(ohlc.date) : 0;
+          return x(dateToOhlc.get(d.date)!.date);
         })
         .y((d) => yEquity(d.equity));
 
       g.append('path')
-        .datum(equityCurve)
+        .datum(mappedEquityCurve)
         .attr('fill', 'none')
         .attr('stroke', '#ff9800')
         .attr('stroke-width', 2)
