@@ -1042,6 +1042,7 @@
   async function handleBacktestSubmit(event) {
     event.preventDefault();
     pageState.backtestRequestVersion += 1;
+    const requestVersion = pageState.backtestRequestVersion;
     setActiveTab('backtest');
 
     const formData = new FormData(backtestForm);
@@ -1073,6 +1074,9 @@
       });
 
       const body = await response.json().catch(function() { return {}; });
+      if (requestVersion !== pageState.backtestRequestVersion) {
+        return;
+      }
 
       if (!response.ok) {
         renderBacktestStatus(body.error || body.message || 'Backtest API returned an error.', 'is-error');
@@ -1089,9 +1093,13 @@
       renderBacktestStatus('Backtest completed: ' + safeEventText(body.run_id, 'latest run') + '.', null);
       renderChart();
     } catch (error) {
-      renderBacktestStatus(error.message || 'Backtest request failed.', 'is-error');
+      if (requestVersion === pageState.backtestRequestVersion) {
+        renderBacktestStatus(error.message || 'Backtest request failed.', 'is-error');
+      }
     } finally {
-      backtestRunButton.disabled = false;
+      if (requestVersion === pageState.backtestRequestVersion) {
+        backtestRunButton.disabled = false;
+      }
     }
   }
 

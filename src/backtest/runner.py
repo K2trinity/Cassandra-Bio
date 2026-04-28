@@ -5,10 +5,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import uuid
 
 import pandas as pd
 
-from src.backtest.data_loader import load_ohlc
+from src.backtest.data_loader import DATA_DIR, load_ohlc
 from src.backtest.events_db import get_events
 from src.backtest.features_v2 import build_features_v2
 from src.backtest.signals import generate_signals
@@ -80,6 +81,130 @@ def run_single_ticker(
             "significant_events": int((car_df["t_stat"].abs() > 1.96).sum()) if not car_df.empty else 0,
         },
     }
+
+
+def _to_iso_date(value: pd.Timestamp) -> str:
+    return pd.to_datetime(value).strftime("%Y-%m-%d")
+
+
+def _ohlc_cache_path(ticker: str) -> Path:
+    return DATA_DIR / f"{ticker}.parquet"
+
+
+def run_kline_backtest(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    stop_loss_pct: float = -0.08,
+    max_position_pct: float = 0.2,
+    slippage_pct: float = 0.001,
+    report_confidence: float = 0.5,
+) -> dict:
+    """Run a single-ticker backtest and persist result as JSON.
+
+    This API is intended for the K-line web workflow and keeps the response
+    chart-ready with a flat payload shape.
+    """
+    ticker = ticker.upper().strip()
+    cache_path = _ohlc_cache_path(ticker)
+
+    try:
+        ohlc = load_ohlc(ticker)
+    except ModuleNotFoundError as exc:
+        return {
+            "error": (
+                f"failed to load OHLC: {exc}. "
+                "Use the Python 3.11 project interpreter and install requirements.txt "
+                "in that environment."
+            )
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"failed to load OHLC: {exc}"}
+
+    if ohlc.empty:
+        if not cache_path.exists():
+            return {
+                "error": (
+                    "no OHLC data. No local cache exists and the online fetch returned "
+                    "no rows. Check network access to Yahoo Finance or preload data/ohlc."
+                )
+            }
+        return {"error": "no OHLC data"}
+
+    ohlc = ohlc.copy()
+    ohlc["date"] = pd.to_datetime(ohlc["date"])
+    price_window = ohlc[(ohlc["date"] >= start_date) & (ohlc["date"] <= end_date)].copy()
+    if len(price_window) < 2:
+        return {"error": "insufficient OHLC data in date range"}
+
+    events = get_events(ticker, start_date=start_date, end_date=end_date)
+    signals = generate_signals(price_window, events, report_confidence=report_confidence)
+    results = apply_strategy(
+        price_window,
+        signals,
+        max_position_pct=max_position_pct,
+        stop_loss_pct=stop_loss_pct,
+        slippage_pct=slippage_pct,
+    )
+
+    raw_metrics = compute_metrics(results)
+    strategy_metrics = raw_metrics.get("layer3_strategy", {}) if isinstance(raw_metrics, dict) else {}
+    metrics = {
+        "sharpe": strategy_metrics.get("sharpe_ratio"),
+        "annualized_return": strategy_metrics.get("annualized_return"),
+        "max_drawdown": strategy_metrics.get("max_drawdown"),
+        "win_rate": strategy_metrics.get("win_rate"),
+        "profit_factor": strategy_metrics.get("profit_factor"),
+    }
+
+    equity_curve = [
+        {
+            "date": _to_iso_date(row.date),
+            "equity": float(row.equity),
+        }
+        for row in results.itertuples(index=False)
+    ]
+
+    car_df = compute_event_car(price_window, events)
+    event_car = []
+    if not car_df.empty:
+        for row in car_df.itertuples(index=False):
+            event_car.append(
+                {
+                    "event_id": str(getattr(row, "event_id", "")),
+                    "type": str(getattr(row, "event_type", "")),
+                    "date": _to_iso_date(getattr(row, "date")),
+                    "car": float(getattr(row, "car", 0.0)),
+                    "t_stat": float(getattr(row, "t_stat", 0.0)),
+                }
+            )
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    payload = {
+        "run_id": run_id,
+        "ticker": ticker,
+        "start_date": start_date,
+        "end_date": end_date,
+        "metrics": metrics,
+        "equity_curve": equity_curve,
+        "event_car": event_car,
+    }
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(RESULTS_DIR / f"{run_id}.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return payload
+
+
+def load_saved_run(run_id: str) -> dict | None:
+    """Load a persisted single-run backtest payload by run_id."""
+    path = RESULTS_DIR / f"{run_id}.json"
+    if not path.exists():
+        return None
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def run_walk_forward(

@@ -90,6 +90,9 @@ def test_kline_template_guards_saved_run_hydration_from_newer_backtests():
     assert "const hydrateVersion = pageState.backtestRequestVersion" in hydrate_function
     assert "hydrateVersion !== pageState.backtestRequestVersion" in hydrate_function
     assert "pageState.backtestRequestVersion += 1" in submit_function
+    assert "const requestVersion = pageState.backtestRequestVersion" in submit_function
+    assert "requestVersion !== pageState.backtestRequestVersion" in submit_function
+    assert "requestVersion === pageState.backtestRequestVersion" in submit_function
     assert submit_function.find("pageState.backtestRequestVersion += 1") < submit_function.find("fetch('/api/backtest/run'")
 
 
@@ -188,6 +191,8 @@ def test_kline_route_uses_real_data_service_for_ohlc(monkeypatch):
     assert response.status_code == 200
     assert "101.5" in html  # Verify service-returned data is in the response
     assert "102.0" in html
+    assert "const ohlcData = [" in html
+    assert "const ohlcData = \"[" not in html
 
 
 def test_kline_route_uses_real_data_service_for_events(monkeypatch):
@@ -230,6 +235,8 @@ def test_kline_route_uses_real_data_service_for_events(monkeypatch):
 
     assert response.status_code == 200
     assert "Real Phase 3 data from service" in html
+    assert "const eventsData = [" in html
+    assert "const eventsData = \"[" not in html
 
 
 def test_kline_route_handles_empty_ohlc_and_events(monkeypatch):
@@ -272,3 +279,57 @@ def test_kline_template_has_visualization_and_backtest_tabs(monkeypatch):
     assert 'data-tab="events"' in html
     assert 'data-tab="backtest"' in html
     assert _fragment("data-tab=", '"', "report", '"') not in html
+
+
+def test_backtest_run_api_returns_runner_payload(monkeypatch):
+    def fake_run_kline_backtest(**kwargs):
+        return {
+            "run_id": "run-123",
+            "ticker": kwargs["ticker"],
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "metrics": {"sharpe": 1.2},
+            "equity_curve": [{"date": kwargs["start_date"], "equity": 1.0}],
+            "event_car": [],
+        }
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fake_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "biib",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-21",
+            "stop_loss_pct": -0.08,
+            "max_position_pct": 0.2,
+            "slippage_pct": 0.001,
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["run_id"] == "run-123"
+    assert body["ticker"] == "BIIB"
+    assert body["equity_curve"][0]["date"] == "2026-04-20"
+
+
+def test_backtest_result_api_returns_saved_payload(monkeypatch):
+    def fake_load_saved_run(run_id: str):
+        return {
+            "run_id": run_id,
+            "ticker": "BIIB",
+            "metrics": {},
+            "equity_curve": [],
+            "event_car": [],
+        }
+
+    monkeypatch.setattr(app_module, "load_saved_run", fake_load_saved_run)
+
+    client = app.test_client()
+    response = client.get("/api/backtest/results/run-123")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["run_id"] == "run-123"
