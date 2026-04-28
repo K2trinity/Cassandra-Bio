@@ -58,15 +58,84 @@ def test_kline_page_renders_phase1_workspace(monkeypatch):
     assert response.status_code == 200
     assert fake_service.requested_symbols == ["MRNA"]
     assert 'id="kline-workspace"' in html
+    assert 'data-ticker="MRNA"' in html
+    assert 'id="kline-workspace-data" type="application/json"' in html
     assert 'data-role="ticker-selector"' in html
+    assert 'id="source-strip"' in html
+    assert 'id="company-name"' in html
+    assert 'id="last-close"' in html
+    assert 'id="coverage-range"' in html
+    assert 'id="hover-readout"' in html
+    assert 'id="layer-bar"' in html
+    assert 'id="kline-container"' in html
+    assert 'id="range-context"' in html
     assert 'data-panel="catalysts"' in html
     assert 'data-panel="details"' in html
     assert 'data-panel="backtest"' in html
     assert 'data-panel="status"' in html
+    assert "/static/kline/workspace.css" in html
     assert "/static/vendor/pokie-chart.umd.js" in html
     assert "/static/kline/workspace.js" in html
     assert "/api/analyze" not in html
     assert "request_report" not in html
+
+
+def test_kline_workspace_renders_disabled_future_capability_contracts(monkeypatch):
+    _install_fake_workspace_service(monkeypatch)
+    client = app.test_client()
+
+    response = client.get("/kline/MRNA")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '"id": "news"' in html
+    assert '"enabled": false' in html
+    assert '"phase": 2' in html
+    assert '"id": "range_analysis"' in html
+    assert '"phase": 3' in html
+
+
+def test_kline_workspace_invalid_ticker_has_recovery_link(monkeypatch):
+    class FailingWorkspaceService:
+        def build_workspace(self, symbol: str):
+            raise ValueError("invalid ticker: use 1-16 letters, numbers, dots, or hyphens")
+
+    monkeypatch.setattr(kline_routes, "workspace_service", FailingWorkspaceService())
+    client = app.test_client()
+
+    response = client.get("/kline/BAD!")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert "Invalid ticker" in html
+    assert "invalid ticker: use 1-16 letters, numbers, dots, or hyphens" in html
+    assert 'href="/kline"' in html
+    assert 'id="kline-workspace-data"' not in html
+
+
+def test_kline_workspace_static_js_uses_phase1_contracts_only():
+    workspace_js = (Path(PROJECT_ROOT) / "static" / "kline" / "workspace.js").read_text(
+        encoding="utf-8",
+    )
+
+    assert "/api/backtest/run" in workspace_js
+    assert "/api/kline/range-context/" in workspace_js
+    assert "PokieChart.render" in workspace_js
+    assert "/api/analyze" not in workspace_js
+    assert "request_report" not in workspace_js
+    assert "Socket.IO" not in workspace_js
+
+
+def test_kline_workspace_template_omits_legacy_report_bridge_references():
+    template_source = (
+        Path(PROJECT_ROOT) / "templates" / "kline_workspace.html"
+    ).read_text(encoding="utf-8")
+
+    assert "kline_report.html" not in template_source
+    assert "kline_chart_runtime.html" not in template_source
+    assert "kline_chart_assets.html" not in template_source
+    assert "/api/analyze" not in template_source
+    assert "request_report" not in template_source
 
 
 def test_kline_workspace_api_returns_workspace_json(monkeypatch):

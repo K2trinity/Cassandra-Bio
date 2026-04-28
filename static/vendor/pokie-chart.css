@@ -1,0 +1,48 @@
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+}
+
+.chart-container svg,
+.chart-container canvas {
+  display: block;
+}
+
+.chart-container svg {
+  width: 100%;
+  height: 100%;
+}
+
+.particle-layer {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.particle-tooltip {
+  background: #0b1120;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  color: #e5e7eb;
+  font-size: 12px;
+  max-width: 280px;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 5;
+}
+
+.pt-title {
+  color: #f8fafc;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.pt-meta {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}

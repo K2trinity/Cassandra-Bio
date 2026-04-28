@@ -11,15 +11,24 @@ export interface OHLCRow {
 
 export interface BiotechEvent {
   id: string;
-  date: string;
-  type: 'fda_decision' | 'clinical_readout' | 'partnership' | 'financing' | 'patent' | 'competitor' | 'geopolitical' | 'trade_policy' | 'sanctions' | 'regulatory_change' | 'macro_economic';
-  priority: 1 | 2 | 3;
   ticker: string;
-  disease_area: string;
-  catalyst: string;
-  sentiment: 'positive' | 'negative' | 'neutral';
+  date: string;
+  type: string;
+  category?: 'clinical' | 'regulatory' | 'corporate' | 'macro' | 'report';
+  title?: string;
+  summary?: string;
+  priority: 1 | 2 | 3 | 4 | 5;
+  disease_area?: string;
+  catalyst?: string;
+  sentiment: 'positive' | 'negative' | 'neutral' | 'unknown';
+  confidence?: 'high' | 'medium' | 'low';
   price_impact?: number;
-  source?: 'openfda' | 'clinicaltrials' | 'gdelt' | 'cassandra_report' | 'manual';
+  impact_score?: number;
+  source?: string;
+  source_entity?: string;
+  source_ids?: string[];
+  source_url?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface HoverData {

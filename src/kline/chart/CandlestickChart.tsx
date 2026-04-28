@@ -23,7 +23,15 @@ interface Props {
   trades?: TradeMarker[];
 }
 
-// Event type → color mapping
+// Event category/type -> color mapping
+const EVENT_CATEGORY_COLOR: Record<string, string> = {
+  clinical: '#00e5ff',
+  regulatory: '#00e676',
+  corporate: '#a78bfa',
+  macro: '#f59e0b',
+  report: '#f472b6',
+};
+
 const EVENT_TYPE_COLOR: Record<string, string> = {
   fda_decision: '#00e676',
   clinical_readout: '#00e5ff',
@@ -40,8 +48,11 @@ const EVENT_TYPE_COLOR: Record<string, string> = {
 
 const EVENT_TYPE_COLOR_DEFAULT = '#64748b';
 
-function getEventColor(type: string): string {
-  return EVENT_TYPE_COLOR[type] || EVENT_TYPE_COLOR_DEFAULT;
+function getEventColor(event: BiotechEvent): string {
+  if (event.category && EVENT_CATEGORY_COLOR[event.category]) {
+    return EVENT_CATEGORY_COLOR[event.category];
+  }
+  return EVENT_TYPE_COLOR[event.type] || EVENT_TYPE_COLOR_DEFAULT;
 }
 
 function getEventRadius(priority: number, priceImpact?: number): number {
@@ -352,7 +363,7 @@ export default function CandlestickChart({
           px: margin.left + cx,
           py,
           radius,
-          color: getEventColor(evt.type),
+          color: getEventColor(evt),
           alpha: getEventAlpha(evt.priority),
         });
       }
@@ -542,15 +553,26 @@ export default function CandlestickChart({
           const tooltip = tooltipRef.current;
           if (tooltip) {
             if (hit) {
+              const tooltipTitle = hit.title || hit.catalyst || hit.summary || hit.type || 'Catalyst';
+              const tooltipType = hit.category || hit.type || 'event';
               const impactStr = hit.price_impact !== undefined ? `${(hit.price_impact * 100).toFixed(2)}%` : '-';
               const impactColor = hit.price_impact !== undefined ? (hit.price_impact >= 0 ? '#00e676' : '#ff5252') : '#555';
-              tooltip.innerHTML = `
-                <div class="pt-title">${hit.catalyst}</div>
-                <div class="pt-meta">
-                  <span class="pt-sentiment" style="color:${hit.color}">${hit.type}</span>
-                  <span class="pt-ret" style="color:${impactColor}">Impact: ${impactStr}</span>
-                </div>
-              `;
+              tooltip.replaceChildren();
+              const title = document.createElement('div');
+              title.className = 'pt-title';
+              title.textContent = tooltipTitle;
+              const meta = document.createElement('div');
+              meta.className = 'pt-meta';
+              const type = document.createElement('span');
+              type.className = 'pt-sentiment';
+              type.style.color = hit.color;
+              type.textContent = tooltipType;
+              const impact = document.createElement('span');
+              impact.className = 'pt-ret';
+              impact.style.color = impactColor;
+              impact.textContent = `Impact: ${impactStr}`;
+              meta.append(type, impact);
+              tooltip.append(title, meta);
               tooltip.style.display = 'block';
               const tipW = 280;
               const onRight = hit.px < fullWidth / 2;

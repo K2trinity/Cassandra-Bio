@@ -1,51 +1,78 @@
 {% extends "base.html" %}
 
-{% block title %}K-line Workspace - Cassandra{% endblock %}
+{% block title %}K-line Workspace{% if workspace %} - {{ workspace.ticker }}{% endif %}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/pokie-chart.css">
+<link rel="stylesheet" href="/static/kline/workspace.css">
+{% endblock %}
 
 {% block content %}
-<section
-    id="kline-workspace"
-    class="flex-1 overflow-auto bg-slate-900 p-6"
-    data-workspace='{{ workspace | tojson }}'
-    data-error='{{ error | tojson }}'
->
-    <div class="mx-auto flex max-w-7xl flex-col gap-4">
-        <header class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <p class="text-sm uppercase tracking-wide text-emerald-400">K-line Workspace</p>
-                <h2 class="text-2xl font-semibold text-white">
-                    {% if workspace %}{{ workspace.ticker }}{% else %}Unavailable{% endif %}
-                </h2>
+{% if error %}
+<main class="kline-workspace" id="kline-workspace">
+    <section class="kline-error">
+        <p class="kline-eyebrow">K-line Workspace</p>
+        <h2>Invalid ticker</h2>
+        <p>{{ error }}</p>
+        <a href="{{ url_for('kline.kline_default') }}">Open default workspace</a>
+    </section>
+</main>
+{% else %}
+<main class="kline-workspace" id="kline-workspace" data-ticker="{{ workspace.ticker }}">
+    <script id="kline-workspace-data" type="application/json">{{ workspace|tojson }}</script>
+
+    <section class="kline-topbar" aria-label="Workspace controls">
+        <div class="ticker-control" data-role="ticker-selector">
+            <label for="ticker-search">Ticker</label>
+            <form id="ticker-form" class="ticker-form">
+                <input id="ticker-search" name="symbol" value="{{ workspace.ticker }}" autocomplete="off" spellcheck="false" inputmode="latin">
+                <button type="submit">Open</button>
+            </form>
+        </div>
+        <div class="source-strip" id="source-strip" aria-label="Data source status"></div>
+    </section>
+
+    <section class="company-strip" aria-label="Current company">
+        <div class="company-heading">
+            <h2 id="company-name">{{ workspace.company.name }}</h2>
+            <p>{{ workspace.ticker }} · {{ workspace.company.sector }}</p>
+        </div>
+        <div class="price-readout">
+            <span>Last close</span>
+            <strong id="last-close">-</strong>
+        </div>
+        <div class="price-readout">
+            <span>Coverage</span>
+            <strong id="coverage-range">-</strong>
+        </div>
+        <div class="price-readout">
+            <span>Hover</span>
+            <strong id="hover-readout">-</strong>
+        </div>
+    </section>
+
+    <section class="workspace-grid">
+        <section class="chart-region" aria-label="K-line chart">
+            <div class="layer-bar" id="layer-bar" aria-label="Chart layers"></div>
+            <div id="kline-container" class="chart-host"></div>
+            <div id="range-context" class="range-context" hidden></div>
+        </section>
+
+        <aside class="side-panel" aria-label="K-line workspace panels">
+            <div class="panel-tabs" role="tablist" aria-label="Workspace panels">
+                <button type="button" data-tab="catalysts" class="is-active" role="tab" aria-selected="true">Catalysts</button>
+                <button type="button" data-tab="details" role="tab" aria-selected="false">Details</button>
+                <button type="button" data-tab="backtest" role="tab" aria-selected="false">Backtest</button>
+                <button type="button" data-tab="status" role="tab" aria-selected="false">Status</button>
             </div>
-            <select
-                data-role="ticker-selector"
-                class="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-            >
-                {% if workspace %}
-                <option value="{{ workspace.ticker }}">{{ workspace.ticker }}</option>
-                {% else %}
-                <option value="">Ticker</option>
-                {% endif %}
-            </select>
-        </header>
-
-        {% if error %}
-        <div class="rounded border border-red-800 bg-red-950/40 p-4 text-sm text-red-200">
-            {{ error }}
-        </div>
-        {% endif %}
-
-        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div class="min-h-[420px] rounded border border-slate-800 bg-slate-950"></div>
-            <aside class="grid gap-4">
-                <section data-panel="catalysts" class="rounded border border-slate-800 bg-slate-950 p-4"></section>
-                <section data-panel="details" class="rounded border border-slate-800 bg-slate-950 p-4"></section>
-                <section data-panel="backtest" class="rounded border border-slate-800 bg-slate-950 p-4"></section>
-                <section data-panel="status" class="rounded border border-slate-800 bg-slate-950 p-4"></section>
-            </aside>
-        </div>
-    </div>
-</section>
+            <section data-panel="catalysts" class="panel-body is-active" role="tabpanel"></section>
+            <section data-panel="details" class="panel-body" role="tabpanel"></section>
+            <section data-panel="backtest" class="panel-body" role="tabpanel"></section>
+            <section data-panel="status" class="panel-body" role="tabpanel"></section>
+        </aside>
+    </section>
+</main>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
