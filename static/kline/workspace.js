@@ -70,6 +70,9 @@
       return null;
     }
     var trimmed = String(value).trim();
+    if (trimmed.indexOf("\\") !== -1) {
+      return null;
+    }
     if (!/^https?:\/\/[^/?#\s]+(?:[/?#]|$)/i.test(trimmed)) {
       return null;
     }
