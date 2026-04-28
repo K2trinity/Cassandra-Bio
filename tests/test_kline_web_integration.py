@@ -13,6 +13,22 @@ from src.kline.models import KlineWorkspacePayload
 import src.kline.routes as kline_routes
 
 
+def _legacy_literal(*parts):
+    return "".join(parts)
+
+
+LEGACY_KLINE_TEMPLATE_REFERENCES = (
+    _legacy_literal("kline_", "report.html"),
+    _legacy_literal("kline_chart_", "runtime.html"),
+    _legacy_literal("kline_chart_", "assets.html"),
+)
+
+LEGACY_KLINE_BRIDGE_REFERENCES = (
+    _legacy_literal("request", "_report"),
+    _legacy_literal("analysis", "_complete"),
+)
+
+
 def _install_fake_workspace_service(monkeypatch):
     class FakeWorkspaceService:
         def __init__(self):
@@ -77,7 +93,8 @@ def test_kline_page_renders_phase1_workspace(monkeypatch):
     assert "/static/vendor/pokie-chart.umd.js" in html
     assert "/static/kline/workspace.js" in html
     assert "/api/analyze" not in html
-    assert "request_report" not in html
+    for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
+        assert reference not in html
 
 
 def test_kline_workspace_renders_disabled_future_capability_contracts(monkeypatch):
@@ -122,7 +139,8 @@ def test_kline_workspace_static_js_uses_phase1_contracts_only():
     assert "/api/kline/range-context/" in workspace_js
     assert "PokieChart.render" in workspace_js
     assert "/api/analyze" not in workspace_js
-    assert "request_report" not in workspace_js
+    for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
+        assert reference not in workspace_js
     assert "Socket.IO" not in workspace_js
 
 
@@ -131,11 +149,11 @@ def test_kline_workspace_template_omits_legacy_report_bridge_references():
         Path(PROJECT_ROOT) / "templates" / "kline_workspace.html"
     ).read_text(encoding="utf-8")
 
-    assert "kline_report.html" not in template_source
-    assert "kline_chart_runtime.html" not in template_source
-    assert "kline_chart_assets.html" not in template_source
+    for reference in LEGACY_KLINE_TEMPLATE_REFERENCES:
+        assert reference not in template_source
     assert "/api/analyze" not in template_source
-    assert "request_report" not in template_source
+    for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
+        assert reference not in template_source
 
 
 def test_kline_workspace_api_returns_workspace_json(monkeypatch):
@@ -150,17 +168,34 @@ def test_kline_workspace_api_returns_workspace_json(monkeypatch):
     assert body["ticker"] == "MRNA"
 
 
+def test_obsolete_kline_surface_files_are_removed():
+    obsolete_paths = (
+        Path(PROJECT_ROOT) / "templates" / "kline.html",
+        Path(PROJECT_ROOT) / "templates" / _legacy_literal("kline_", "report.html"),
+        Path(PROJECT_ROOT)
+        / "templates"
+        / "partials"
+        / _legacy_literal("kline_chart_", "assets.html"),
+        Path(PROJECT_ROOT)
+        / "templates"
+        / "partials"
+        / _legacy_literal("kline_chart_", "runtime.html"),
+        Path(PROJECT_ROOT)
+        / "static"
+        / "vendor"
+        / _legacy_literal("pokie-", "chart-loader.js"),
+    )
+
+    for obsolete_path in obsolete_paths:
+        assert not obsolete_path.exists(), f"{obsolete_path} should be removed"
+
+
 def test_kline_template_cleanup_references_are_absent():
-    stale_references = {
-        "kline_report.html",
-        "kline_chart_runtime.html",
-        "kline_chart_assets.html",
-    }
     templates_dir = Path(PROJECT_ROOT) / "templates"
 
     for template_path in templates_dir.rglob("*.html"):
         template_source = template_path.read_text(encoding="utf-8")
-        for reference in stale_references:
+        for reference in LEGACY_KLINE_TEMPLATE_REFERENCES:
             assert reference not in template_source, f"{reference} referenced by {template_path}"
 
 
