@@ -81,30 +81,39 @@ def test_derive_trades_handles_exits_flips_and_open_trade_closeout():
     assert _derive_trades(price_window, results) == [
         {
             "entry_date": "2026-04-21",
+            "exit_date": "2026-04-21",
+            "direction": "long",
+            "size": 0.2,
+            "entry_price": 111.0,
+            "exit_price": 120.0,
+            "pnl_pct": 0.081081,
+        },
+        {
+            "entry_date": "2026-04-22",
             "exit_date": "2026-04-22",
             "direction": "long",
-            "entry_price": 111.0,
+            "size": 0.2,
+            "entry_price": 119.0,
             "exit_price": 115.0,
-            "pnl_pct": 0.036036,
-            "position": 0.2,
+            "pnl_pct": -0.033613,
         },
         {
             "entry_date": "2026-04-24",
             "exit_date": "2026-04-24",
             "direction": "short",
+            "size": 0.2,
             "entry_price": 107.0,
             "exit_price": 109.0,
             "pnl_pct": -0.018692,
-            "position": -0.2,
         },
         {
             "entry_date": "2026-04-25",
             "exit_date": "2026-04-25",
             "direction": "long",
+            "size": 0.2,
             "entry_price": 108.0,
             "exit_price": 104.0,
             "pnl_pct": -0.037037,
-            "position": 0.2,
         },
     ]
 
@@ -243,10 +252,10 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, 
             "entry_date": "2026-04-21",
             "exit_date": "2026-04-21",
             "direction": "long",
+            "size": 0.2,
             "entry_price": 103.0,
             "exit_price": 105.0,
             "pnl_pct": 0.019417,
-            "position": 0.2,
         }
     ]
     saved_payload = runner.load_saved_run(payload["run_id"])

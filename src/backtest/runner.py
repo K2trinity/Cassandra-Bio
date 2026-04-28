@@ -161,6 +161,12 @@ def _trade_pnl_pct(direction: str, entry_price: float, exit_price: float) -> flo
 
 
 def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[dict]:
+    """Serialize per-exposure trade overlays from strategy result rows.
+
+    `apply_strategy()` models each non-zero result row as exposure from that
+    day's open to that day's close, so the chart overlay should not combine
+    consecutive same-direction rows into a synthetic multi-day PnL span.
+    """
     if price_window.empty or results.empty:
         return []
     required_price_columns = {"date", "open", "close"}
@@ -179,76 +185,29 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
         return []
 
     trades: list[dict] = []
-    open_trade: dict | None = None
+    for _, row in rows.iterrows():
+        position = _json_safe_number(row["position"])
+        if position is None or position == 0:
+            continue
 
-    def position_direction(position: object) -> str | None:
-        numeric_position = _json_safe_number(position)
-        if numeric_position is None or numeric_position == 0:
-            return None
-        return "long" if numeric_position > 0 else "short"
+        entry_price = _json_safe_number(row["open"])
+        exit_price = _json_safe_number(row["close"])
+        if entry_price is None or exit_price is None:
+            continue
 
-    def close_trade(exit_index: int) -> None:
-        nonlocal open_trade
-        if open_trade is None:
-            return
-
-        exit_row = rows.iloc[max(0, min(exit_index, len(rows) - 1))]
-        exit_price = _json_safe_number(exit_row["close"])
-        if exit_price is None:
-            open_trade = None
-            return
-
-        pnl_pct = _trade_pnl_pct(open_trade["direction"], open_trade["entry_price"], exit_price)
+        direction = "long" if position > 0 else "short"
+        pnl_pct = _trade_pnl_pct(direction, entry_price, exit_price)
         trades.append(
             {
-                "entry_date": _to_iso_date(open_trade["entry_date"]),
-                "exit_date": _to_iso_date(exit_row["date"]),
-                "direction": open_trade["direction"],
-                "entry_price": open_trade["entry_price"],
+                "entry_date": _to_iso_date(row["date"]),
+                "exit_date": _to_iso_date(row["date"]),
+                "direction": direction,
+                "size": abs(position),
+                "entry_price": entry_price,
                 "exit_price": exit_price,
                 "pnl_pct": round(pnl_pct, 6),
-                "position": open_trade["position"],
             }
         )
-        open_trade = None
-
-    for index, row in rows.iterrows():
-        direction = position_direction(row["position"])
-        current_direction = open_trade["direction"] if open_trade is not None else None
-
-        if direction is None:
-            if open_trade is not None:
-                close_trade(index - 1)
-            continue
-
-        if open_trade is None:
-            entry_price = _json_safe_number(row["open"])
-            position = _json_safe_number(row["position"])
-            if entry_price is None or position is None:
-                continue
-            open_trade = {
-                "entry_date": row["date"],
-                "direction": direction,
-                "entry_price": entry_price,
-                "position": position,
-            }
-            continue
-
-        if direction != current_direction:
-            close_trade(index - 1)
-            entry_price = _json_safe_number(row["open"])
-            position = _json_safe_number(row["position"])
-            if entry_price is None or position is None:
-                continue
-            open_trade = {
-                "entry_date": row["date"],
-                "direction": direction,
-                "entry_price": entry_price,
-                "position": position,
-            }
-
-    if open_trade is not None:
-        close_trade(len(rows) - 1)
 
     return trades
 

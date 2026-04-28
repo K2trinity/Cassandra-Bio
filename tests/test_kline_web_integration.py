@@ -399,10 +399,10 @@ def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
                 "entry_date": "2026-04-21",
                 "exit_date": "2026-04-21",
                 "direction": "long",
+                "size": 0.2,
                 "entry_price": 101.0,
                 "exit_price": 104.0,
                 "pnl_pct": 0.029703,
-                "position": 0.2,
             }
         ],
     }
