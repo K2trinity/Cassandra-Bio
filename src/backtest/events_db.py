@@ -77,6 +77,9 @@ def _serialize_json_field(value: object, default: object) -> str:
 def _serialize_event(event: dict) -> dict:
     """Return an insert-ready event with structured fields serialized."""
     serialized = dict(event)
+    serialized.setdefault("priority", 3)
+    serialized.setdefault("sentiment", "neutral")
+    serialized.setdefault("price_impact", None)
     serialized.setdefault("source_entity", None)
     serialized.setdefault("source_url", None)
     serialized.setdefault("confidence", "medium")

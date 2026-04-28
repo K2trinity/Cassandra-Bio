@@ -608,6 +608,42 @@ def test_event_db_roundtrips_source_ids_and_metadata():
     assert rows[0]["metadata"] == {"phase": "Phase 3", "has_results": True}
 
 
+def test_event_db_insert_applies_optional_field_defaults():
+    """Event inserts should apply defaults for omitted optional bound fields."""
+    import pandas as pd
+
+    from src.backtest.events_db import init_db, insert_event, get_events_for_chart, _get_conn
+
+    init_db()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'DEFAULTS'")
+    conn.commit()
+    conn.close()
+
+    insert_event(
+        {
+            "id": "defaults-event-1",
+            "date": "2026-04-22",
+            "type": "clinical_readout",
+            "ticker": "DEFAULTS",
+            "disease_area": "Oncology",
+            "catalyst": "Clinical Trial: defaulted fields",
+            "source": "clinicaltrials",
+        }
+    )
+
+    rows = get_events_for_chart("DEFAULTS")
+
+    assert len(rows) == 1
+    assert rows[0]["priority"] == 3
+    assert rows[0]["sentiment"] == "neutral"
+    assert pd.isna(rows[0]["price_impact"])
+    assert rows[0]["source_ids"] == []
+    assert rows[0]["metadata"] == {}
+    assert rows[0]["confidence"] == "medium"
+
+
 def test_event_db_decodes_legacy_rows_with_default_attribution_fields():
     """Existing rows without structured metadata should still decode safely."""
     from src.backtest.events_db import init_db, get_events_for_chart, _get_conn
