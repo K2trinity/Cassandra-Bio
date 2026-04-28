@@ -14,6 +14,101 @@ def test_json_safe_number_rejects_non_finite_values():
     assert _json_safe_number(1.25) == 1.25
 
 
+def test_serialize_signals_preserves_zero_signal_days_and_attaches_event_ids():
+    from src.backtest.runner import _serialize_signals
+
+    signals = pd.DataFrame(
+        [
+            {"date": pd.Timestamp("2026-04-20"), "signal": 1, "signal_strength": 0.75},
+            {"date": pd.Timestamp("2026-04-21"), "signal": 0, "signal_strength": 0.0},
+            {"date": pd.Timestamp("2026-04-22"), "signal": -1, "signal_strength": 0.5},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {"event_id": "evt-1", "date": "2026-04-20"},
+            {"id": "evt-2", "date": "2026-04-20"},
+            {"event_id": "evt-3", "date": "2026-04-22"},
+        ]
+    )
+
+    assert _serialize_signals(signals, events) == [
+        {
+            "date": "2026-04-20",
+            "signal": 1,
+            "signal_strength": 0.75,
+            "source_event_ids": ["evt-1", "evt-2"],
+        },
+        {
+            "date": "2026-04-21",
+            "signal": 0,
+            "signal_strength": 0.0,
+            "source_event_ids": [],
+        },
+        {
+            "date": "2026-04-22",
+            "signal": -1,
+            "signal_strength": 0.5,
+            "source_event_ids": ["evt-3"],
+        },
+    ]
+
+
+def test_derive_trades_handles_exits_flips_and_open_trade_closeout():
+    from src.backtest.runner import _derive_trades
+
+    price_window = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "open": 100.0, "close": 110.0},
+            {"date": "2026-04-21", "open": 111.0, "close": 120.0},
+            {"date": "2026-04-22", "open": 119.0, "close": 115.0},
+            {"date": "2026-04-23", "open": 114.0, "close": 108.0},
+            {"date": "2026-04-24", "open": 107.0, "close": 109.0},
+            {"date": "2026-04-25", "open": 108.0, "close": 104.0},
+        ]
+    )
+    results = pd.DataFrame(
+        [
+            {"date": pd.Timestamp("2026-04-20"), "position": 0.0},
+            {"date": pd.Timestamp("2026-04-21"), "position": 0.2},
+            {"date": pd.Timestamp("2026-04-22"), "position": 0.2},
+            {"date": pd.Timestamp("2026-04-23"), "position": 0.0},
+            {"date": pd.Timestamp("2026-04-24"), "position": -0.2},
+            {"date": pd.Timestamp("2026-04-25"), "position": 0.2},
+        ]
+    )
+
+    assert _derive_trades(price_window, results) == [
+        {
+            "entry_date": "2026-04-21",
+            "exit_date": "2026-04-22",
+            "direction": "long",
+            "entry_price": 111.0,
+            "exit_price": 115.0,
+            "pnl_pct": 0.036036,
+            "position": 0.2,
+        },
+        {
+            "entry_date": "2026-04-24",
+            "exit_date": "2026-04-24",
+            "direction": "short",
+            "entry_price": 107.0,
+            "exit_price": 109.0,
+            "pnl_pct": -0.018692,
+            "position": -0.2,
+        },
+        {
+            "entry_date": "2026-04-25",
+            "exit_date": "2026-04-25",
+            "direction": "long",
+            "entry_price": 108.0,
+            "exit_price": 104.0,
+            "pnl_pct": -0.037037,
+            "position": 0.2,
+        },
+    ]
+
+
 def test_load_saved_run_rejects_non_generated_ids(tmp_path, monkeypatch):
     from src.backtest import runner
 
@@ -122,6 +217,37 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, 
         {"date": "2026-04-20", "equity": 1.0},
         {"date": "2026-04-21", "equity": 1.01},
         {"date": "2026-04-22", "equity": 1.01},
+    ]
+    assert payload["signals"] == [
+        {
+            "date": "2026-04-20",
+            "signal": 1,
+            "signal_strength": 1.0,
+            "source_event_ids": [],
+        },
+        {
+            "date": "2026-04-21",
+            "signal": 0,
+            "signal_strength": 0.0,
+            "source_event_ids": [],
+        },
+        {
+            "date": "2026-04-22",
+            "signal": 0,
+            "signal_strength": 0.0,
+            "source_event_ids": [],
+        },
+    ]
+    assert payload["trades"] == [
+        {
+            "entry_date": "2026-04-21",
+            "exit_date": "2026-04-21",
+            "direction": "long",
+            "entry_price": 103.0,
+            "exit_price": 105.0,
+            "pnl_pct": 0.019417,
+            "position": 0.2,
+        }
     ]
     saved_payload = runner.load_saved_run(payload["run_id"])
     assert saved_payload == payload

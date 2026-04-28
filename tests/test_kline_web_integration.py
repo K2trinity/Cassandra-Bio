@@ -371,6 +371,64 @@ def test_backtest_run_api_returns_runner_payload(monkeypatch):
     assert body["equity_curve"][0]["date"] == "2026-04-20"
 
 
+def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
+    runner_payload = {
+        "run_id": "run-with-overlays",
+        "ticker": "BIIB",
+        "start_date": "2026-04-20",
+        "end_date": "2026-04-21",
+        "metrics": {"sharpe": 1.2},
+        "equity_curve": [{"date": "2026-04-20", "equity": 1.0}],
+        "event_car": [],
+        "signals": [
+            {
+                "date": "2026-04-20",
+                "signal": 1,
+                "signal_strength": 0.75,
+                "source_event_ids": ["evt-1"],
+            },
+            {
+                "date": "2026-04-21",
+                "signal": 0,
+                "signal_strength": 0.0,
+                "source_event_ids": [],
+            },
+        ],
+        "trades": [
+            {
+                "entry_date": "2026-04-21",
+                "exit_date": "2026-04-21",
+                "direction": "long",
+                "entry_price": 101.0,
+                "exit_price": 104.0,
+                "pnl_pct": 0.029703,
+                "position": 0.2,
+            }
+        ],
+    }
+
+    def fake_run_kline_backtest(**kwargs):
+        return runner_payload
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fake_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "biib",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-21",
+            "stop_loss_pct": -0.08,
+            "max_position_pct": 0.2,
+            "slippage_pct": 0.001,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == runner_payload
+
+
 def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
     def fail_run_kline_backtest(**kwargs):
         raise AssertionError("runner should not be called for invalid ticker")
