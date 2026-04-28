@@ -144,3 +144,15 @@ def test_narrative_service_falls_back_to_empty_on_invalid_payload():
     assert narratives.executive_summary == ""
     assert narratives.clinical_trial_and_pipeline_landscape == ""
     assert narratives.pipeline_timeline_and_competition_risk == ""
+
+
+def test_narrative_service_falls_back_to_empty_on_missing_fields():
+    client = FakeClient({"executive_summary": "Partial output should not be used."})
+    service = DiseaseReportNarrativeService(client_factory=lambda: client)
+
+    narratives = service.generate(_package(), language="en")
+
+    assert narratives.language == "en"
+    assert narratives.executive_summary == ""
+    assert narratives.clinical_trial_and_pipeline_landscape == ""
+    assert narratives.pipeline_timeline_and_competition_risk == ""

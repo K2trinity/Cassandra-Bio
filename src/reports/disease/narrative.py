@@ -55,6 +55,10 @@ class DiseaseReportNarrativeService:
         if not isinstance(response, dict):
             return DiseaseChapterNarratives(language=selected_language)
 
+        required_keys = set(NARRATIVE_SCHEMA["required"])
+        if not required_keys.issubset(response):
+            return DiseaseChapterNarratives(language=selected_language)
+
         values = {
             "executive_summary": _clean_text(response.get("executive_summary")),
             "clinical_trial_and_pipeline_landscape": _clean_text(
