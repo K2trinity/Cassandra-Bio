@@ -813,7 +813,10 @@ def normalize_biotech_events(
             # Requested ticker owns the chart event; sponsor remains source attribution.
             sponsor = trial.get("sponsor") or "UNKNOWN"
             raw_ticker = sponsor.split()[0] if sponsor else None
-            ticker = (requested_ticker or raw_ticker or "UNKNOWN").upper()
+            if requested_ticker is not None:
+                ticker = requested_ticker.strip().upper()
+            else:
+                ticker = sponsor.split()[0] if sponsor else "UNKNOWN"
 
             # Extract disease area from conditions
             conditions = trial.get("conditions", "")

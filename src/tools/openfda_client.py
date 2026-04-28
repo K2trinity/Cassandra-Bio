@@ -140,11 +140,10 @@ def normalize_biotech_events(
             brand_names = openfda.get("brand_name", [])
             generic_names = openfda.get("generic_name", [])
             sponsor_name = result.get("sponsor_name")
-            ticker = (
-                requested_ticker
-                or sponsor_name
-                or (brand_names[0] if brand_names else "UNKNOWN")
-            ).upper()
+            if requested_ticker is not None:
+                ticker = requested_ticker.strip().upper()
+            else:
+                ticker = brand_names[0] if brand_names else result.get("sponsor_name", "UNKNOWN")
             raw_ticker = brand_names[0] if brand_names else sponsor_name
             application_number = result.get("application_number")
             recall_number = result.get("recall_number")

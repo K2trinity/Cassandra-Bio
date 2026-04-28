@@ -109,6 +109,7 @@ def test_normalize_openfda_approval(openfda_approval_payload):
     assert event["priority"] in range(1, 6)
     assert "ticker" in event
     assert "catalyst" in event
+    assert event["ticker"] == "SPIKEVAX"
 
     # Verify date format YYYY-MM-DD
     assert len(event["date"]) == 10
@@ -143,7 +144,7 @@ def test_normalize_openfda_preserves_requested_ticker_attribution():
     events = normalize_biotech_events(
         payload,
         source="openfda",
-        requested_ticker="MRNA",
+        requested_ticker=" mrna ",
     )
 
     assert len(events) == 1
@@ -194,6 +195,7 @@ def test_normalize_clinical_trials_completed(clinical_trials_completed_payload):
     assert "id" in event
     assert "date" in event
     assert "catalyst" in event
+    assert event["ticker"] == "Pharma"
 
     # Verify date format
     assert len(event["date"]) == 10
@@ -221,7 +223,7 @@ def test_normalize_clinical_trials_preserves_requested_ticker_attribution():
     events = normalize_biotech_events(
         payload,
         source="clinicaltrials",
-        requested_ticker="MRNA",
+        requested_ticker=" mrna ",
     )
 
     assert len(events) == 1
