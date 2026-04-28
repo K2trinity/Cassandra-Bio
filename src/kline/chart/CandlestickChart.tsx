@@ -17,6 +17,8 @@ interface Props {
   onAnomalyDetected?: (signal: AnomalySignal) => void;
   onHover?: (date: string | null, ohlc?: HoverData) => void;
   onRangeSelect?: (range: RangeSelection | null) => void;
+  highlightedEventId?: string;
+  equityCurve?: Array<{ date: string; equity: number }>;
 }
 
 // Event type → color mapping
@@ -27,9 +29,14 @@ const EVENT_TYPE_COLOR: Record<string, string> = {
   financing: '#ffd700',
   patent: '#ff9800',
   competitor: '#ff5252',
+  geopolitical: '#a78bfa',
+  trade_policy: '#38bdf8',
+  sanctions: '#fb7185',
+  regulatory_change: '#f59e0b',
+  macro_economic: '#94a3b8',
 };
 
-const EVENT_TYPE_COLOR_DEFAULT = '#555';
+const EVENT_TYPE_COLOR_DEFAULT = '#64748b';
 
 function getEventColor(type: string): string {
   return EVENT_TYPE_COLOR[type] || EVENT_TYPE_COLOR_DEFAULT;
