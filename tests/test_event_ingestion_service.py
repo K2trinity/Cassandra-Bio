@@ -115,6 +115,45 @@ def test_normalize_openfda_approval(openfda_approval_payload):
     assert event["date"].count("-") == 2
 
 
+def test_normalize_openfda_preserves_requested_ticker_attribution():
+    """openFDA sponsor names must not replace the requested ticker ownership."""
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "BLA001",
+                "sponsor_name": "ModernaTX, Inc.",
+                "openfda": {
+                    "brand_name": ["SPIKEVAX"],
+                    "generic_name": ["mRNA-1273"],
+                },
+                "products": [
+                    {
+                        "brand_name": "SPIKEVAX",
+                        "active_ingredient": "mRNA-1273",
+                    }
+                ],
+                "action_type": "APPROVAL",
+                "approval_date": "20260420",
+            }
+        ]
+    }
+
+    events = normalize_biotech_events(
+        payload,
+        source="openfda",
+        requested_ticker="MRNA",
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["ticker"] == "MRNA"
+    assert event["source_entity"] == "ModernaTX, Inc."
+    assert event["source_ids"] == ["BLA001"]
+    assert event["metadata"]["brand_names"] == ["SPIKEVAX"]
+
+
 def test_normalize_openfda_recall(openfda_recall_payload):
     """Test normalization of openFDA recall into regulatory_change event."""
     from src.tools.openfda_client import normalize_biotech_events
@@ -159,6 +198,37 @@ def test_normalize_clinical_trials_completed(clinical_trials_completed_payload):
     # Verify date format
     assert len(event["date"]) == 10
     assert event["date"].count("-") == 2
+
+
+def test_normalize_clinical_trials_preserves_requested_ticker_attribution():
+    """ClinicalTrials sponsors must be attribution metadata, not event ownership."""
+    from src.tools.clinical_trials_client import normalize_biotech_events
+
+    payload = [
+        {
+            "nct_id": "NCT00000001",
+            "title": "A Study of mRNA-1273 in Respiratory Virus Prevention",
+            "status": "COMPLETED",
+            "completion_date": "2026-04-20",
+            "results_first_posted": "2026-04-20",
+            "sponsor": "ModernaTX, Inc.",
+            "has_results": True,
+            "conditions": "Respiratory Syncytial Virus",
+            "phase": "Phase 3",
+        }
+    ]
+
+    events = normalize_biotech_events(
+        payload,
+        source="clinicaltrials",
+        requested_ticker="MRNA",
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["ticker"] == "MRNA"
+    assert event["source_entity"] == "ModernaTX, Inc."
+    assert event["source_ids"] == ["NCT00000001"]
 
 
 def test_normalize_clinical_trials_terminated(clinical_trials_terminated_payload):
