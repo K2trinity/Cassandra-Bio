@@ -26,6 +26,33 @@ def test_load_saved_run_rejects_non_generated_ids(tmp_path, monkeypatch):
     assert runner.load_saved_run("run-123") is None
 
 
+def test_load_saved_run_returns_none_for_corrupt_json(tmp_path, monkeypatch):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    run_id = "20260428_120000_deadbeef"
+    (tmp_path / f"{run_id}.json").write_text("{", encoding="utf-8")
+
+    assert runner.load_saved_run(run_id) is None
+
+
+def test_run_kline_backtest_rejects_invalid_ticker_without_loading(monkeypatch):
+    from src.backtest import runner
+
+    def fail_load_ohlc(ticker: str):
+        raise AssertionError("load_ohlc should not be called for invalid ticker")
+
+    monkeypatch.setattr(runner, "load_ohlc", fail_load_ohlc)
+
+    payload = runner.run_kline_backtest(
+        ticker="../BIIB",
+        start_date="2026-04-20",
+        end_date="2026-04-22",
+    )
+
+    assert payload == {"error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"}
+
+
 def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, monkeypatch):
     from src.backtest import runner
 

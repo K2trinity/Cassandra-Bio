@@ -318,6 +318,70 @@ def test_backtest_run_api_returns_runner_payload(monkeypatch):
     assert body["equity_curve"][0]["date"] == "2026-04-20"
 
 
+def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
+    def fail_run_kline_backtest(**kwargs):
+        raise AssertionError("runner should not be called for invalid ticker")
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "../BIIB",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-21",
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 400
+    assert body["error"] == "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+
+
+def test_backtest_run_api_rejects_non_finite_risk_parameters(monkeypatch):
+    def fail_run_kline_backtest(**kwargs):
+        raise AssertionError("runner should not be called for invalid risk parameters")
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        data=(
+            '{"ticker":"BIIB","start_date":"2026-04-20","end_date":"2026-04-21",'
+            '"max_position_pct":NaN}'
+        ),
+        content_type="application/json",
+    )
+    body = response.get_json()
+
+    assert response.status_code == 400
+    assert body["error"] == "risk parameters must be finite numbers"
+
+
+def test_backtest_run_api_rejects_out_of_range_risk_parameters(monkeypatch):
+    def fail_run_kline_backtest(**kwargs):
+        raise AssertionError("runner should not be called for invalid risk parameters")
+
+    monkeypatch.setattr(app_module, "run_kline_backtest", fail_run_kline_backtest)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "BIIB",
+            "start_date": "2026-04-20",
+            "end_date": "2026-04-21",
+            "max_position_pct": 1.5,
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 400
+    assert body["error"] == "max_position_pct must be greater than 0 and less than or equal to 1"
+
+
 def test_backtest_result_api_returns_saved_payload(monkeypatch):
     def fake_load_saved_run(run_id: str):
         return {

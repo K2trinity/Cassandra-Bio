@@ -20,6 +20,7 @@ from src.backtest.metrics import compute_metrics, compute_event_car
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "backtest_results"
 RUN_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{8}$")
+TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
 
 
 POOLS = {
@@ -94,6 +95,13 @@ def _ohlc_cache_path(ticker: str) -> Path:
     return DATA_DIR / f"{ticker}.parquet"
 
 
+def normalize_kline_ticker(value: object) -> str | None:
+    ticker = str(value or "").strip().upper()
+    if not TICKER_PATTERN.fullmatch(ticker):
+        return None
+    return ticker
+
+
 def _json_safe_number(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
@@ -118,7 +126,11 @@ def run_kline_backtest(
     This API is intended for the K-line web workflow and keeps the response
     chart-ready with a flat payload shape.
     """
-    ticker = ticker.upper().strip()
+    normalized_ticker = normalize_kline_ticker(ticker)
+    if normalized_ticker is None:
+        return {"error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"}
+
+    ticker = normalized_ticker
     cache_path = _ohlc_cache_path(ticker)
 
     try:
@@ -224,8 +236,11 @@ def load_saved_run(run_id: str) -> dict | None:
     if not path.exists():
         return None
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def run_walk_forward(

@@ -1149,6 +1149,7 @@
       const maxHeight = Math.floor(window.innerHeight * 0.7);
       const nextHeight = Math.max(180, Math.min(maxHeight, startHeight + delta));
       workspacePanel.style.height = nextHeight + 'px';
+      workspacePanel.style.flexBasis = nextHeight + 'px';
       workspacePanel.dataset.collapsed = 'false';
       collapseButton.textContent = 'Collapse';
     });

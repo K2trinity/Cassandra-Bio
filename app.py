@@ -16,6 +16,7 @@ Architecture:
 import os
 import sys
 import json
+import math
 import threading
 import time
 from collections import deque
@@ -47,7 +48,7 @@ from config import Settings
 from src.services.workflow_service import WorkflowService
 from src.services.market_data_service import get_ohlc_rows
 from src.services.event_ingestion_service import get_events_for_ticker
-from src.backtest.runner import run_kline_backtest, load_saved_run
+from src.backtest.runner import run_kline_backtest, load_saved_run, normalize_kline_ticker
 _workflow_service = WorkflowService()
 
 # Conditionally import Neo4j GraphManager
@@ -1000,13 +1001,19 @@ def api_backtest_run():
     """Run a single ticker backtest for K-line workflow."""
     data = request.get_json(silent=True) or {}
 
-    ticker = str(data.get('ticker') or '').strip().upper()
+    raw_ticker = data.get('ticker')
+    ticker = normalize_kline_ticker(raw_ticker)
     start_date = str(data.get('start_date') or '').strip()
     end_date = str(data.get('end_date') or '').strip()
 
-    if not ticker or not start_date or not end_date:
+    if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return jsonify({
             "error": "ticker, start_date, and end_date are required",
+        }), 400
+
+    if ticker is None:
+        return jsonify({
+            "error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens",
         }), 400
 
     try:
@@ -1029,6 +1036,26 @@ def api_backtest_run():
     except (TypeError, ValueError):
         return jsonify({
             "error": "risk parameters must be numeric",
+        }), 400
+
+    if not all(math.isfinite(value) for value in (stop_loss_pct, max_position_pct, slippage_pct)):
+        return jsonify({
+            "error": "risk parameters must be finite numbers",
+        }), 400
+
+    if not (-1.0 < stop_loss_pct < 0):
+        return jsonify({
+            "error": "stop_loss_pct must be greater than -1 and less than 0",
+        }), 400
+
+    if not (0 < max_position_pct <= 1):
+        return jsonify({
+            "error": "max_position_pct must be greater than 0 and less than or equal to 1",
+        }), 400
+
+    if not (0 <= slippage_pct <= 0.2):
+        return jsonify({
+            "error": "slippage_pct must be between 0 and 0.2",
         }), 400
 
     result = run_kline_backtest(
