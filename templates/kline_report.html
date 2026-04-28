@@ -1,292 +1,1068 @@
-<!-- templates/kline_report.html -->
 {% extends "base.html" %}
 {% block title %}K-Line + Report · {{ symbol }}{% endblock %}
 
 {% block head %}
+{% include "partials/kline_chart_assets.html" %}
 <style>
   .kline-report-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    padding: 20px;
-    height: calc(100vh - 100px);
-  }
-
-  .kline-panel {
+    --panel-height: clamp(260px, 30vh, 360px);
+    --panel-min-height: 220px;
+    --panel-max-height: 60vh;
+    --surface: #0d1117;
+    --surface-alt: #161b22;
+    --line: #30363d;
+    --text: #e6edf3;
+    --muted: #9ca3af;
+    --accent: #00e5ff;
+    --good: #22c55e;
+    --bad: #ef4444;
+    --warn: #f59e0b;
     display: flex;
     flex-direction: column;
-    background: #0d1117;
-    border-radius: 8px;
+    gap: 12px;
+    height: calc(100vh - 92px);
+    padding: 16px;
+  }
+
+  .kline-top-region {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: 10px;
     overflow: hidden;
-    border: 1px solid #30363d;
+    background: var(--surface);
   }
 
   .kline-header {
-    padding: 16px;
-    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(120deg, #101722, #161f2f);
+  }
+
+  .kline-header-left {
     display: flex;
     align-items: center;
     gap: 12px;
   }
 
-  .kline-header .ticker {
-    font-size: 1.6em;
-    color: #00e5ff;
-    font-weight: 700;
-  }
-
   .kline-header h3 {
     margin: 0;
-    color: #e6edf3;
-    font-size: 1em;
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 600;
   }
 
   #kline-container {
     flex: 1;
-    overflow: hidden;
+    min-height: 0;
   }
 
-  .report-panel {
+  .kline-chart-shell {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #kline-container .chart-container {
+    min-height: clamp(320px, 48vh, 520px);
+  }
+
+  .chart-empty-state {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    background: #0d1117;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid #30363d;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    border-top: 1px solid rgba(51, 65, 85, 0.55);
+    background:
+      linear-gradient(135deg, rgba(11, 18, 32, 0.92), rgba(15, 23, 42, 0.96)),
+      radial-gradient(circle at top right, rgba(14, 165, 233, 0.18), transparent 42%);
+    color: #dbeafe;
+    z-index: 3;
   }
 
-  .report-header {
-    padding: 16px;
-    border-bottom: 1px solid #30363d;
-    background: #161b22;
+  .chart-empty-state strong {
+    font-size: 1rem;
+    color: #f8fafc;
   }
 
-  .report-header h3 {
-    margin: 0;
-    color: #e6edf3;
-  }
-
-  .report-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-  }
-
-  .report-section {
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid #30363d;
-  }
-
-  .report-section:last-child {
-    border-bottom: none;
-  }
-
-  .report-section h4 {
-    color: #00e5ff;
-    margin: 0 0 8px 0;
-    font-size: 0.95em;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .report-text {
-    color: #c9d1d9;
-    font-size: 0.9em;
+  .chart-empty-state span {
+    max-width: 56ch;
+    color: #bfdbfe;
+    font-size: 0.9rem;
     line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
   }
 
-  .event-item {
-    background: #161b22;
+  .is-hidden {
+    display: none !important;
+  }
+
+  .workspace-panel {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--surface);
+    flex: 0 0 var(--panel-height);
+    height: var(--panel-height);
+    min-height: var(--panel-min-height);
+    max-height: var(--panel-max-height);
+    position: relative;
+  }
+
+  .workspace-panel[data-collapsed="true"] {
+    height: 52px;
+    min-height: 52px;
+  }
+
+  .workspace-resize-handle {
+    height: 8px;
+    cursor: ns-resize;
+    background: linear-gradient(to right, #1f2937, #374151, #1f2937);
+    border-bottom: 1px solid #111827;
+  }
+
+  .workspace-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-alt);
+  }
+
+  .workspace-tabs {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .workspace-tab {
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #cbd5e1;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .workspace-tab:hover {
+    border-color: #475569;
+    color: #e2e8f0;
+  }
+
+  .workspace-tab.is-active {
+    background: #0ea5e9;
+    color: #0f172a;
+    border-color: #38bdf8;
+    font-weight: 700;
+  }
+
+  .collapse-button {
+    border: 1px solid #4b5563;
+    background: #111827;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .workspace-body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .workspace-panel[data-collapsed="true"] .workspace-body {
+    display: none;
+  }
+
+  .tab-panel {
+    display: none;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .tab-panel.is-active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .events-panel {
     padding: 12px;
-    border-radius: 4px;
+    gap: 12px;
+  }
+
+  .events-filters {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .events-filters select,
+  .events-filters input {
+    width: 100%;
+    border: 1px solid #334155;
+    background: #0b1220;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 0.8rem;
+  }
+
+  .events-filters button {
+    border: 1px solid #475569;
+    background: #111827;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 7px 8px;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+
+  .events-list {
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .event-card {
+    border: 1px solid #243244;
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .event-card:hover {
+    border-color: #3b82f6;
+    transform: translateY(-1px);
+  }
+
+  .event-card.is-highlighted {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+  }
+
+  .event-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-bottom: 8px;
-    border-left: 3px solid #00e5ff;
   }
 
-  .event-item .date {
-    color: #8b949e;
-    font-size: 0.85em;
+  .event-pill {
+    border-radius: 999px;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border: 1px solid #334155;
+    background: #1f2937;
+    color: #e5e7eb;
   }
 
-  .event-item .type {
-    color: #00e5ff;
+  .event-pill.sentiment-positive {
+    border-color: #166534;
+    background: #052e16;
+    color: #86efac;
+  }
+
+  .event-pill.sentiment-negative {
+    border-color: #7f1d1d;
+    background: #450a0a;
+    color: #fca5a5;
+  }
+
+  .event-pill.sentiment-neutral {
+    border-color: #92400e;
+    background: #451a03;
+    color: #fcd34d;
+  }
+
+  .event-catalyst {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+
+  .event-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+  }
+
+  .event-investigate {
+    border: 1px solid #0284c7;
+    background: #0369a1;
+    color: #e0f2fe;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.75rem;
     font-weight: 600;
-    font-size: 0.9em;
+    cursor: pointer;
   }
 
-  .event-item .catalyst {
-    color: #c9d1d9;
-    margin-top: 4px;
-    font-size: 0.9em;
+  .event-investigate:hover {
+    background: #0284c7;
   }
 
-  .loading {
-    color: #8b949e;
-    text-align: center;
-    padding: 20px;
+  .backtest-panel {
+    padding: 12px;
+    gap: 10px;
   }
 
-  .spinner {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid #30363d;
-    border-top-color: #00e5ff;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+  .backtest-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #334155;
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  .backtest-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
-  @media (max-width: 1200px) {
+  .backtest-field label {
+    font-size: 0.76rem;
+    color: #93c5fd;
+  }
+
+  .backtest-field input {
+    border: 1px solid #334155;
+    background: #0b1220;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 0.8rem;
+  }
+
+  .backtest-run {
+    align-self: end;
+    border: 1px solid #ea580c;
+    background: #c2410c;
+    color: #fff7ed;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .backtest-run:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .backtest-status {
+    border: 1px solid #334155;
+    background: #111827;
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #d1d5db;
+    font-size: 0.82rem;
+  }
+
+  .backtest-status.is-error {
+    border-color: #7f1d1d;
+    color: #fecaca;
+    background: #450a0a;
+  }
+
+  .backtest-status.is-running {
+    border-color: #92400e;
+    color: #fde68a;
+    background: #451a03;
+  }
+
+  .backtest-results {
+    overflow-y: auto;
+  }
+
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .metric-card {
+    border: 1px solid #334155;
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 8px;
+  }
+
+  .metric-label {
+    font-size: 0.7rem;
+    color: #93c5fd;
+    margin-bottom: 4px;
+  }
+
+  .metric-value {
+    font-size: 0.9rem;
+    color: #f8fafc;
+    font-weight: 700;
+  }
+
+  .car-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+  }
+
+  .car-table th,
+  .car-table td {
+    border: 1px solid #263445;
+    padding: 6px 8px;
+    text-align: left;
+  }
+
+  .car-table th {
+    background: #152033;
+    color: #bae6fd;
+  }
+
+  .empty-state {
+    color: var(--muted);
+    font-size: 0.84rem;
+    border: 1px dashed #334155;
+    border-radius: 8px;
+    padding: 16px;
+    background: #0b1220;
+  }
+
+  @media (max-width: 1100px) {
+    .events-filters {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .backtest-form {
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+
+    .metrics-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 780px) {
     .kline-report-container {
-      grid-template-columns: 1fr;
       height: auto;
+      min-height: calc(100vh - 92px);
+    }
+
+    .kline-top-region {
+      min-height: 48vh;
+    }
+
+    .workspace-panel {
+      height: auto;
+      min-height: 48vh;
+      max-height: none;
+    }
+
+    .workspace-resize-handle {
+      display: none;
+    }
+
+    .workspace-controls {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .workspace-tabs {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .workspace-tab {
+      width: 100%;
+    }
+
+    .backtest-form {
+      grid-template-columns: 1fr;
+    }
+
+    .metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="kline-report-container">
-  <!-- K-Line Chart Panel -->
-  <div class="kline-panel">
+<div class="kline-report-container" id="kline-workspace">
+  <section class="kline-top-region">
     <div class="kline-header">
-      <span class="ticker">{{ symbol }}</span>
-      <h3>K-Line Chart</h3>
-    </div>
-    <div id="kline-container"></div>
-  </div>
-
-  <!-- Cassandra Report Panel -->
-  <div class="report-panel">
-    <div class="report-header">
-      <h3>📊 Cassandra Analysis Report</h3>
-    </div>
-    <div class="report-content" id="report-content">
-      <div class="loading">
-        <div class="spinner"></div>
-        <p>Generating analysis...</p>
+      <div class="kline-header-left">
+        <h3>K-Line Workspace</h3>
       </div>
     </div>
-  </div>
+    <div class="kline-chart-shell">
+      <div id="kline-container"></div>
+      <div id="chart-empty-state" class="chart-empty-state{% if ohlc_json %} is-hidden{% endif %}">
+        <strong>No OHLC data is available for this ticker yet.</strong>
+        <span>Backtest and candlesticks need either a local file under <code>data/ohlc</code> or a successful Yahoo Finance download from the active Python 3.11 runtime.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="workspace-panel" id="workspace-panel" data-collapsed="false">
+    <div class="workspace-resize-handle" id="workspace-resize-handle"></div>
+    <div class="workspace-controls">
+      <div class="workspace-tabs">
+        <button type="button" id="events-tab" class="workspace-tab is-active" role="tab" aria-selected="true" data-tab="events">Events</button>
+        <button type="button" id="backtest-tab" class="workspace-tab" role="tab" aria-selected="false" data-tab="backtest">Backtest</button>
+      </div>
+      <button type="button" id="workspace-collapse-btn" class="collapse-button">Collapse</button>
+    </div>
+
+    <div class="workspace-body">
+      <section class="tab-panel events-panel is-active" id="events-panel" data-panel="events" role="tabpanel" aria-labelledby="events-tab">
+        <div class="events-filters">
+          <select id="event-type-filter">
+            <option value="">All Types</option>
+          </select>
+          <select id="event-source-filter">
+            <option value="">All Sources</option>
+          </select>
+          <input id="event-start-date" type="date" />
+          <input id="event-end-date" type="date" />
+          <button id="event-filter-reset" type="button">Reset Filters</button>
+        </div>
+        <div id="events-list" class="events-list"></div>
+      </section>
+
+      <section class="tab-panel backtest-panel" id="backtest-panel" data-panel="backtest" role="tabpanel" aria-labelledby="backtest-tab">
+        <form id="backtest-form" class="backtest-form">
+          <div class="backtest-field">
+            <label for="bt-start-date">Start Date</label>
+            <input id="bt-start-date" name="start_date" type="date" required>
+          </div>
+          <div class="backtest-field">
+            <label for="bt-end-date">End Date</label>
+            <input id="bt-end-date" name="end_date" type="date" required>
+          </div>
+          <div class="backtest-field">
+            <label for="bt-stop-loss">Stop Loss %</label>
+            <input id="bt-stop-loss" name="stop_loss_pct" type="number" step="0.01" value="-0.08">
+          </div>
+          <div class="backtest-field">
+            <label for="bt-max-position">Max Position %</label>
+            <input id="bt-max-position" name="max_position_pct" type="number" step="0.01" value="0.2">
+          </div>
+          <div class="backtest-field">
+            <label for="bt-slippage">Slippage %</label>
+            <input id="bt-slippage" name="slippage_pct" type="number" step="0.0001" value="0.001">
+          </div>
+          <button id="backtest-run-btn" class="backtest-run" type="submit">Run Backtest</button>
+        </form>
+
+        <div id="backtest-status" class="backtest-status">No run yet. Configure parameters and click Run Backtest.</div>
+        <div id="backtest-results" class="backtest-results"></div>
+      </section>
+    </div>
+  </section>
 </div>
 
-<!-- React + D3 + Socket.IO -->
-<script src="https://cdn.jsdelivr.net/npm/react@19/umd/react.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@19/umd/react-dom.production.min.js"></script>
-<script src="/static/vendor/pokie-chart.umd.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
+{% include "partials/kline_chart_runtime.html" %}
 <script>
-  const socket = io();
   const ticker = '{{ symbol }}';
   const ohlcData = {{ ohlc_json | tojson }};
   const eventsData = {{ events_json | tojson }};
 
-  // Render K-line chart
-  const cleanup = PokieChart.render(
-    document.getElementById('kline-container'),
-    {
-      ohlcData: ohlcData,
-      events: eventsData,
-      onEventClick: function(evt) {
-        console.log('Event clicked:', evt);
-        socket.emit('request_report', {
-          ticker: ticker,
-          event_id: evt.id,
-          event_type: evt.type,
-          date: evt.date,
-          catalyst: evt.catalyst
-        });
-      },
-      onAnomalyDetected: function(signal) {
-        console.log('Anomaly detected:', signal);
-        signal.ticker = ticker;
-        socket.emit('anomaly_signal', signal);
-      }
-    }
-  );
+  const tabButtons = Array.from(document.querySelectorAll('.workspace-tab'));
+  const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+  const workspacePanel = document.getElementById('workspace-panel');
+  const collapseButton = document.getElementById('workspace-collapse-btn');
+  const resizeHandle = document.getElementById('workspace-resize-handle');
+  const eventsList = document.getElementById('events-list');
+  const backtestForm = document.getElementById('backtest-form');
+  const backtestRunButton = document.getElementById('backtest-run-btn');
+  const backtestStatus = document.getElementById('backtest-status');
+  const backtestResults = document.getElementById('backtest-results');
+  const chartEmptyState = document.getElementById('chart-empty-state');
 
-  // Display events in report panel
-  function displayEvents() {
-    const reportContent = document.getElementById('report-content');
-    let html = '<div class="report-section"><h4>📅 Biotech Events</h4>';
+  const typeFilter = document.getElementById('event-type-filter');
+  const sourceFilter = document.getElementById('event-source-filter');
+  const startDateFilter = document.getElementById('event-start-date');
+  const endDateFilter = document.getElementById('event-end-date');
+  const resetFilterButton = document.getElementById('event-filter-reset');
 
-    if (eventsData.length === 0) {
-      html += '<p class="report-text">No events found for this period.</p>';
-    } else {
-      eventsData.forEach(evt => {
-        html += `
-          <div class="event-item">
-            <div class="date">${evt.date}</div>
-            <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
-            <div class="catalyst">${evt.catalyst}</div>
-          </div>
-        `;
-      });
-    }
-    html += '</div>';
-    reportContent.innerHTML = html;
+  const pageState = {
+    activeTab: 'events',
+    highlightedEventId: null,
+    equityCurve: [],
+    events: Array.isArray(eventsData) ? eventsData : [],
+    chartCleanup: null,
+    lastRunId: null,
+  };
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, function(char) {
+      return {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[char];
+    });
   }
 
-  // Listen for report updates from Cassandra
-  socket.on('report_ready', function(data) {
-    console.log('Report ready:', data);
-    const reportContent = document.getElementById('report-content');
-    let html = '<div class="report-section"><h4>📋 Analysis Report</h4>';
-    html += '<div class="report-text">' + (data.report || 'Report generated') + '</div></div>';
-    html += '<div class="report-section"><h4>📅 Events</h4>';
+  function safeEventText(value, fallback) {
+    if (value === null || value === undefined || value === '') {
+      return fallback;
+    }
+    return String(value);
+  }
 
-    eventsData.forEach(evt => {
-      html += `
-        <div class="event-item">
-          <div class="date">${evt.date}</div>
-          <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
-          <div class="catalyst">${evt.catalyst}</div>
-        </div>
+  function formatEventType(type) {
+    return safeEventText(type, 'unknown').replace(/_/g, ' ');
+  }
+
+  function formatMetricValue(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return 'N/A';
+    }
+    return Number(value).toFixed(4);
+  }
+
+  function ensurePanelExpanded() {
+    if (workspacePanel.dataset.collapsed === 'true') {
+      workspacePanel.dataset.collapsed = 'false';
+      collapseButton.textContent = 'Collapse';
+    }
+  }
+
+  function setActiveTab(tabName) {
+    pageState.activeTab = tabName;
+    tabButtons.forEach(function(button) {
+      const isActive = button.dataset.tab === tabName;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    tabPanels.forEach(function(panel) {
+      panel.classList.toggle('is-active', panel.dataset.panel === tabName);
+    });
+  }
+
+  function setChartEmptyState(visible, message) {
+    if (!chartEmptyState) {
+      return;
+    }
+
+    if (message) {
+      const messageNode = chartEmptyState.querySelector('span');
+      if (messageNode) {
+        messageNode.textContent = message;
+      }
+    }
+
+    chartEmptyState.classList.toggle('is-hidden', !visible);
+  }
+
+  function renderChart() {
+    const hasOhlcData = Array.isArray(ohlcData) && ohlcData.length > 0;
+
+    if (!hasOhlcData) {
+      if (typeof pageState.chartCleanup === 'function') {
+        pageState.chartCleanup();
+        pageState.chartCleanup = null;
+      }
+      setChartEmptyState(true);
+      return;
+    }
+
+    setChartEmptyState(false);
+
+    try {
+      if (!window.CassandraKline || typeof window.CassandraKline.renderChart !== 'function') {
+        throw new Error('K-line renderer is unavailable.');
+      }
+
+      if (typeof pageState.chartCleanup === 'function') {
+        pageState.chartCleanup();
+        pageState.chartCleanup = null;
+      }
+
+      pageState.chartCleanup = window.CassandraKline.renderChart({
+        containerId: 'kline-container',
+        ohlcData: Array.isArray(ohlcData) ? ohlcData : [],
+        events: pageState.events,
+        highlightedEventId: pageState.highlightedEventId,
+        equityCurve: pageState.equityCurve,
+        onEventClick: function(eventItem) {
+          if (!eventItem || !eventItem.id) {
+            return;
+          }
+
+          pageState.highlightedEventId = eventItem.id;
+          ensurePanelExpanded();
+          setActiveTab('events');
+          renderEventsList();
+          renderChart();
+          scrollToEventCard(eventItem.id);
+        },
+        onAnomalyDetected: function(signal) {
+          console.warn('Anomaly detected:', signal);
+        }
+      });
+    } catch (error) {
+      setChartEmptyState(true, 'The chart renderer could not initialize. Check the browser console and static asset bundle.');
+      console.error('Chart Error:', error.message || 'Failed to render chart.');
+    }
+  }
+
+  function getFilteredEvents() {
+    const wantedType = typeFilter.value;
+    const wantedSource = sourceFilter.value;
+    const startDate = startDateFilter.value;
+    const endDate = endDateFilter.value;
+
+    return pageState.events.filter(function(eventItem) {
+      if (wantedType && eventItem.type !== wantedType) {
+        return false;
+      }
+      if (wantedSource && eventItem.source !== wantedSource) {
+        return false;
+      }
+      if (startDate && eventItem.date && eventItem.date < startDate) {
+        return false;
+      }
+      if (endDate && eventItem.date && eventItem.date > endDate) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function renderEventsList() {
+    const filtered = getFilteredEvents();
+
+    if (filtered.length === 0) {
+      eventsList.innerHTML = '<div class="empty-state">No events match the current filters.</div>';
+      return;
+    }
+
+    eventsList.innerHTML = filtered.map(function(eventItem) {
+      const highlightedClass = pageState.highlightedEventId === eventItem.id ? 'is-highlighted' : '';
+      const sentiment = safeEventText(eventItem.sentiment, 'neutral');
+      const source = safeEventText(eventItem.source, 'manual');
+      return `
+        <article class="event-card ${highlightedClass}" data-event-id="${escapeHtml(eventItem.id)}">
+          <div class="event-meta">
+            <span class="event-pill">${escapeHtml(safeEventText(eventItem.date, 'unknown date'))}</span>
+            <span class="event-pill">${escapeHtml(formatEventType(eventItem.type))}</span>
+            <span class="event-pill sentiment-${escapeHtml(sentiment)}">${escapeHtml(sentiment)}</span>
+            <span class="event-pill">${escapeHtml(source)}</span>
+          </div>
+          <p class="event-catalyst">${escapeHtml(safeEventText(eventItem.catalyst, 'No catalyst summary available.'))}</p>
+          <div class="event-actions">
+            <button type="button" class="event-investigate" data-investigate-id="${escapeHtml(eventItem.id)}">Investigate</button>
+          </div>
+        </article>
       `;
+    }).join('');
+
+    eventsList.querySelectorAll('.event-card').forEach(function(card) {
+      card.addEventListener('click', function() {
+        const eventId = card.dataset.eventId;
+        pageState.highlightedEventId = eventId;
+        renderEventsList();
+        renderChart();
+      });
+    });
+
+    eventsList.querySelectorAll('.event-investigate').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.stopPropagation();
+        const eventId = button.dataset.investigateId;
+        const targetEvent = pageState.events.find(function(item) {
+          return item.id === eventId;
+        });
+
+        if (!targetEvent) {
+          return;
+        }
+
+        pageState.highlightedEventId = targetEvent.id;
+        renderEventsList();
+        renderChart();
+        scrollToEventCard(targetEvent.id);
+      });
+    });
+  }
+
+  function scrollToEventCard(eventId) {
+    const node = eventsList.querySelector('[data-event-id="' + eventId + '"]');
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  function populateFilterOptions() {
+    const typeSet = new Set();
+    const sourceSet = new Set();
+    pageState.events.forEach(function(eventItem) {
+      if (eventItem.type) {
+        typeSet.add(eventItem.type);
+      }
+      if (eventItem.source) {
+        sourceSet.add(eventItem.source);
+      }
+    });
+
+    Array.from(typeSet).sort().forEach(function(typeValue) {
+      const option = document.createElement('option');
+      option.value = typeValue;
+      option.textContent = formatEventType(typeValue);
+      typeFilter.appendChild(option);
+    });
+
+    Array.from(sourceSet).sort().forEach(function(sourceValue) {
+      const option = document.createElement('option');
+      option.value = sourceValue;
+      option.textContent = sourceValue;
+      sourceFilter.appendChild(option);
+    });
+  }
+
+  function attachFilterHandlers() {
+    [typeFilter, sourceFilter, startDateFilter, endDateFilter].forEach(function(node) {
+      node.addEventListener('change', renderEventsList);
+    });
+
+    resetFilterButton.addEventListener('click', function() {
+      typeFilter.value = '';
+      sourceFilter.value = '';
+      startDateFilter.value = '';
+      endDateFilter.value = '';
+      renderEventsList();
+    });
+  }
+
+  function renderBacktestStatus(message, stateClass) {
+    backtestStatus.className = 'backtest-status';
+    if (stateClass) {
+      backtestStatus.classList.add(stateClass);
+    }
+    backtestStatus.textContent = message;
+  }
+
+  function renderBacktestResults(payload) {
+    const metrics = payload.metrics || {};
+    const carRows = Array.isArray(payload.event_car) ? payload.event_car : [];
+
+    const metricItems = [
+      ['Sharpe', formatMetricValue(metrics.sharpe)],
+      ['Annual Return', formatMetricValue(metrics.annualized_return)],
+      ['Max Drawdown', formatMetricValue(metrics.max_drawdown)],
+      ['Win Rate', formatMetricValue(metrics.win_rate)],
+      ['Profit Factor', formatMetricValue(metrics.profit_factor)]
+    ];
+
+    let html = '<div class="metrics-grid">';
+    metricItems.forEach(function(item) {
+      html += '<div class="metric-card"><div class="metric-label">' + escapeHtml(item[0]) + '</div><div class="metric-value">' + escapeHtml(item[1]) + '</div></div>';
     });
     html += '</div>';
-    reportContent.innerHTML = html;
-  });
 
-  socket.on('anomaly_acknowledged', function(data) {
-    console.log('Anomaly acknowledged:', data);
-    const reportContent = document.getElementById('report-content');
-    let html = '<div class="report-section"><h4>⚠️ Anomaly Signal</h4>';
-    html += '<div class="report-text">Type: ' + data.query + '</div></div>';
-    html += '<div class="report-section"><h4>📅 Events</h4>';
+    html += '<table class="car-table"><thead><tr><th>Date</th><th>Type</th><th>CAR</th><th>t-stat</th></tr></thead><tbody>';
+    if (carRows.length === 0) {
+      html += '<tr><td colspan="4">No event CAR rows returned.</td></tr>';
+    } else {
+      carRows.forEach(function(row) {
+        html += '<tr>' +
+          '<td>' + escapeHtml(safeEventText(row.date, 'N/A')) + '</td>' +
+          '<td>' + escapeHtml(formatEventType(row.type)) + '</td>' +
+          '<td>' + escapeHtml(formatMetricValue(row.car)) + '</td>' +
+          '<td>' + escapeHtml(formatMetricValue(row.t_stat)) + '</td>' +
+          '</tr>';
+      });
+    }
+    html += '</tbody></table>';
 
-    eventsData.forEach(evt => {
-      html += `
-        <div class="event-item">
-          <div class="date">${evt.date}</div>
-          <div class="type">${evt.type.replace(/_/g, ' ').toUpperCase()}</div>
-          <div class="catalyst">${evt.catalyst}</div>
-        </div>
-      `;
-    });
-    html += '</div>';
-    reportContent.innerHTML = html;
-  });
+    backtestResults.innerHTML = html;
+  }
 
-  // Initial display
-  displayEvents();
+  async function hydrateBacktestRun(runId) {
+    if (!runId) {
+      return;
+    }
 
-  // Auto-trigger analysis on page load
-  setTimeout(() => {
-    socket.emit('request_report', {
+    try {
+      const response = await fetch('/api/backtest/results/' + encodeURIComponent(runId), {
+        headers: { 'Accept': 'application/json' }
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = await response.json();
+      pageState.lastRunId = payload.run_id || runId;
+      pageState.equityCurve = Array.isArray(payload.equity_curve) ? payload.equity_curve : [];
+      renderBacktestResults(payload);
+      renderBacktestStatus('Loaded run ' + (payload.run_id || runId) + '.', null);
+      renderChart();
+    } catch (error) {
+      console.warn('Failed to hydrate backtest run:', error);
+    }
+  }
+
+  async function handleBacktestSubmit(event) {
+    event.preventDefault();
+    setActiveTab('backtest');
+
+    const formData = new FormData(backtestForm);
+    const payload = {
       ticker: ticker,
-      event_type: 'overview',
-      date: new Date().toISOString().split('T')[0],
-      catalyst: 'Full ticker analysis'
+      start_date: String(formData.get('start_date') || ''),
+      end_date: String(formData.get('end_date') || ''),
+      stop_loss_pct: Number(formData.get('stop_loss_pct') || -0.08),
+      max_position_pct: Number(formData.get('max_position_pct') || 0.2),
+      slippage_pct: Number(formData.get('slippage_pct') || 0.001),
+    };
+
+    if (!payload.start_date || !payload.end_date || payload.start_date > payload.end_date) {
+      renderBacktestStatus('Invalid date range. Please verify start and end dates.', 'is-error');
+      return;
+    }
+
+    backtestRunButton.disabled = true;
+    renderBacktestStatus('Backtest running...', 'is-running');
+
+    try {
+      const response = await fetch('/api/backtest/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const body = await response.json().catch(function() { return {}; });
+
+      if (!response.ok) {
+        renderBacktestStatus(body.error || body.message || 'Backtest API returned an error.', 'is-error');
+        return;
+      }
+
+      pageState.lastRunId = body.run_id || null;
+      if (pageState.lastRunId) {
+        localStorage.setItem('kline-last-run-' + ticker, pageState.lastRunId);
+      }
+
+      pageState.equityCurve = Array.isArray(body.equity_curve) ? body.equity_curve : [];
+      renderBacktestResults(body);
+      renderBacktestStatus('Backtest completed: ' + safeEventText(body.run_id, 'latest run') + '.', null);
+      renderChart();
+    } catch (error) {
+      renderBacktestStatus(error.message || 'Backtest request failed.', 'is-error');
+    } finally {
+      backtestRunButton.disabled = false;
+    }
+  }
+
+  function initializeBacktestDefaults() {
+    const sortedDates = (Array.isArray(ohlcData) ? ohlcData : [])
+      .map(function(row) { return row && row.date; })
+      .filter(Boolean)
+      .sort();
+
+    if (sortedDates.length > 0) {
+      const startInput = document.getElementById('bt-start-date');
+      const endInput = document.getElementById('bt-end-date');
+      if (!startInput.value) {
+        startInput.value = sortedDates[0];
+      }
+      if (!endInput.value) {
+        endInput.value = sortedDates[sortedDates.length - 1];
+      }
+    }
+
+    backtestForm.addEventListener('submit', handleBacktestSubmit);
+  }
+
+  function initializeResizeAndCollapse() {
+    collapseButton.addEventListener('click', function() {
+      const isCollapsed = workspacePanel.dataset.collapsed === 'true';
+      workspacePanel.dataset.collapsed = isCollapsed ? 'false' : 'true';
+      collapseButton.textContent = isCollapsed ? 'Collapse' : 'Expand';
     });
-  }, 1000);
+
+    let resizing = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    resizeHandle.addEventListener('mousedown', function(event) {
+      resizing = true;
+      startY = event.clientY;
+      startHeight = workspacePanel.getBoundingClientRect().height;
+      document.body.style.userSelect = 'none';
+    });
+
+    window.addEventListener('mousemove', function(event) {
+      if (!resizing) {
+        return;
+      }
+      const delta = startY - event.clientY;
+      const maxHeight = Math.floor(window.innerHeight * 0.7);
+      const nextHeight = Math.max(180, Math.min(maxHeight, startHeight + delta));
+      workspacePanel.style.height = nextHeight + 'px';
+      workspacePanel.dataset.collapsed = 'false';
+      collapseButton.textContent = 'Collapse';
+    });
+
+    window.addEventListener('mouseup', function() {
+      if (!resizing) {
+        return;
+      }
+      resizing = false;
+      document.body.style.userSelect = '';
+    });
+  }
+
+  function initializeTabs() {
+    tabButtons.forEach(function(button) {
+      button.addEventListener('click', function() {
+        ensurePanelExpanded();
+        setActiveTab(button.dataset.tab);
+      });
+    });
+  }
+
+  initializeTabs();
+  initializeResizeAndCollapse();
+  initializeBacktestDefaults();
+  populateFilterOptions();
+  attachFilterHandlers();
+  renderEventsList();
+  renderChart();
+  setActiveTab('events');
+
+  const savedRun = localStorage.getItem('kline-last-run-' + ticker);
+  if (savedRun) {
+    hydrateBacktestRun(savedRun);
+  }
 </script>
 {% endblock %}
