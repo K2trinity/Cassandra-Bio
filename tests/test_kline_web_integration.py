@@ -9,21 +9,18 @@ if PROJECT_ROOT not in sys.path:
 
 
 from app import app
+from src.kline.models import KlineWorkspacePayload
 import src.kline.routes as kline_routes
 
 
 def _install_fake_workspace_service(monkeypatch):
-    import src.kline.routes as kline_routes
-
-    payload_cls = kline_routes.KlineWorkspacePayload
-
     class FakeWorkspaceService:
         def __init__(self):
             self.requested_symbols = []
 
         def build_workspace(self, symbol: str):
             self.requested_symbols.append(symbol)
-            return payload_cls.example(symbol)
+            return KlineWorkspacePayload.example(symbol)
 
     fake_service = FakeWorkspaceService()
     monkeypatch.setattr(kline_routes, "workspace_service", fake_service)

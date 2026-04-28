@@ -8,7 +8,6 @@ from datetime import datetime
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
 from src.backtest.runner import load_saved_run, normalize_kline_ticker, run_kline_backtest
-from src.kline.models import KlineWorkspacePayload
 from src.kline.ticker_resolver import TickerResolver
 from src.kline.workspace_service import KlineWorkspaceService
 
@@ -17,7 +16,7 @@ kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
 resolver = TickerResolver()
 
-__all__ = ["KlineWorkspacePayload", "kline_bp"]
+__all__ = ["kline_bp"]
 
 
 @kline_bp.get("/kline")
