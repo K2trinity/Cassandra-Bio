@@ -176,10 +176,8 @@ def _latest_date(frame: pd.DataFrame | None) -> str | None:
     if frame is None or frame.empty:
         return None
 
-    if "date" in frame.columns:
-        dates = pd.to_datetime(frame["date"], errors="coerce").dropna()
-    else:
-        dates = pd.to_datetime(frame.index, errors="coerce").dropna()
+    raw_dates = frame["date"] if "date" in frame.columns else frame.index
+    dates = pd.Series(pd.to_datetime(raw_dates, errors="coerce")).dropna()
 
     if dates.empty:
         return None

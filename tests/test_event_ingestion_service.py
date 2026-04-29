@@ -26,6 +26,32 @@ def isolated_events_db(tmp_path, monkeypatch):
         lambda *args, **kwargs: [],
         raising=False,
     )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_biotech_macro_events",
+        lambda *args, **kwargs: [],
+        raising=False,
+    )
+
+
+def test_default_fixture_stubs_ingestion_gdelt_fetch(monkeypatch):
+    """The service-level GDELT fetch hook should be inert unless a test opts in."""
+    from src.services import event_ingestion_service
+    from src.tools import gdelt_client
+
+    def fail_network(*args, **kwargs):
+        raise AssertionError("live GDELT network should be stubbed")
+
+    monkeypatch.setattr(gdelt_client.requests, "get", fail_network)
+
+    assert (
+        event_ingestion_service.fetch_biotech_macro_events(
+            "MRNA",
+            max_records=20,
+            raise_on_error=True,
+        )
+        == []
+    )
 
 
 @pytest.fixture

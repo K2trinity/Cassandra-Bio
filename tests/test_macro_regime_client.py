@@ -50,3 +50,21 @@ def test_builds_vix_risk_off_event_when_vix_is_elevated():
 
     assert [event["type"] for event in events] == ["macro_risk_off"]
     assert events[0]["priority"] == 2
+
+
+def test_uses_latest_datetime_index_date_when_date_column_missing():
+    xbi_frame = pd.DataFrame(
+        {"close": [100, 90]},
+        index=pd.date_range("2026-04-20", periods=2, freq="D"),
+    )
+
+    events = build_macro_regime_events(
+        "MRNA",
+        {
+            "XBI": xbi_frame,
+            "SPY": frame([100, 100]),
+        },
+    )
+
+    assert len(events) == 1
+    assert events[0]["date"] == "2026-04-21"
