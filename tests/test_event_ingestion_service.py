@@ -16,9 +16,16 @@ from typing import Dict, Any
 def isolated_events_db(tmp_path, monkeypatch):
     """Keep DB-touching tests away from the repo's persistent event store."""
     from src.backtest import events_db
+    from src.services import event_ingestion_service
 
     monkeypatch.setattr(events_db, "DB_PATH", tmp_path / "events.db")
     monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_macro_regime_events",
+        lambda *args, **kwargs: [],
+        raising=False,
+    )
 
 
 @pytest.fixture
@@ -1028,6 +1035,10 @@ def test_ingestion_records_explicit_gdelt_success_status(
         "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
         (ticker, "alphavantage", recent_time, 0),
     )
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        (ticker, "macro_regime", recent_time, 0),
+    )
     conn.commit()
     conn.close()
 
@@ -1058,6 +1069,82 @@ def test_ingestion_records_explicit_gdelt_success_status(
     assert fetch_calls == [(ticker, 20, True)]
     assert attempts == [
         ((ticker, "gdelt", len(gdelt_events)), {"status": expected_status})
+    ]
+
+
+def test_ingestion_records_explicit_macro_regime_success_status(monkeypatch):
+    """Macro regime success rows should expose normal source readiness state."""
+    from datetime import datetime, timedelta
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services import event_ingestion_service
+
+    ticker = "MACROREADY"
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = ?", (ticker,))
+    conn.execute("DELETE FROM fetch_log WHERE ticker = ?", (ticker,))
+    recent_time = (datetime.now() - timedelta(hours=2)).isoformat()
+    for source in ("openfda", "clinicaltrials", "alphavantage", "gdelt"):
+        conn.execute(
+            "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+            (ticker, source, recent_time, 0),
+        )
+    conn.commit()
+    conn.close()
+
+    attempts = []
+    fetch_calls = []
+
+    def record_fetch_attempt_spy(*args, **kwargs):
+        attempts.append((args, kwargs))
+
+    def fetch_macro_regime_spy(requested_ticker):
+        fetch_calls.append(requested_ticker)
+        return [
+            {
+                "id": "macro-ready-1",
+                "date": "2026-04-24",
+                "type": "macro_risk_off",
+                "category": "macro",
+                "priority": 2,
+                "ticker": requested_ticker,
+                "disease_area": "",
+                "catalyst": "VIX risk-off regime at 31.0",
+                "sentiment": "negative",
+                "price_impact": None,
+                "source": "macro_regime",
+                "source_entity": "^VIX",
+                "source_ids": ["^VIX"],
+                "metadata": {
+                    "benchmark": "^VIX",
+                    "level": 31.0,
+                    "backtest_eligible": True,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_macro_regime_events",
+        fetch_macro_regime_spy,
+        raising=False,
+    )
+    monkeypatch.setattr(event_ingestion_service, "insert_events", lambda events: None)
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "record_fetch_attempt",
+        record_fetch_attempt_spy,
+    )
+
+    event_ingestion_service.get_events_for_ticker(ticker, max_age_hours=6)
+
+    assert fetch_calls == [ticker]
+    assert attempts == [
+        ((ticker, "macro_regime", 1), {"status": "ready"})
     ]
 
 

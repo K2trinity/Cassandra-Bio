@@ -39,6 +39,12 @@ def _stub_empty_non_trial_sources(monkeypatch):
         "fetch_biotech_macro_events",
         lambda *args, **kwargs: [],
     )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_macro_regime_events",
+        lambda *args, **kwargs: [],
+        raising=False,
+    )
 
 
 def _trial(**overrides):
@@ -254,6 +260,19 @@ def test_clinical_event_without_ownership_status_metadata_is_quarantined():
     assert ownership_status == "unknown"
     assert trust_status == "quarantined"
     assert quarantine_reason == "missing clinical ownership evidence"
+
+
+def test_macro_regime_event_is_trusted_macro_context():
+    from src.services.event_ingestion_service import _ownership_for_event
+
+    ownership_status, trust_status, quarantine_reason = _ownership_for_event(
+        {"source": "macro_regime"},
+        "macro_regime",
+    )
+
+    assert ownership_status == "macro_context"
+    assert trust_status == "trusted"
+    assert quarantine_reason is None
 
 
 @pytest.mark.parametrize("entity_match", [True, ["sponsor"], "bogus"])

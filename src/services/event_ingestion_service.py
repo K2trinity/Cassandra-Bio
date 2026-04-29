@@ -24,6 +24,7 @@ from src.tools.clinical_trials_client import (
 )
 from src.tools.alpha_vantage_news_client import fetch_market_news_events
 from src.tools.gdelt_client import fetch_biotech_macro_events
+from src.tools.macro_regime_client import fetch_macro_regime_events
 from src.kline.event_filter import enrich_event_metadata
 from src.kline.event_trust import (
     apply_event_trust,
@@ -157,6 +158,8 @@ def _ownership_for_event(
             "quarantined",
             quarantine_reason or "missing clinical ownership evidence",
         )
+    if source_key == "macro_regime":
+        return ("macro_context", "trusted", None)
     if source_key in {"openfda", "alphavantage", "gdelt"}:
         return ("market_relevant", "trusted", None)
     return ("unknown", "quarantined", "unknown event source")
@@ -218,7 +221,7 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
     init_db()
     init_fetch_log_table()
 
-    sources = ["openfda", "clinicaltrials", "alphavantage", "gdelt"]
+    sources = ["openfda", "clinicaltrials", "alphavantage", "gdelt", "macro_regime"]
     source_statuses = _cached_source_statuses(ticker)
 
     for source in sources:
@@ -353,6 +356,32 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 if events:
                     insert_events(events)
                     logger.info(f"Inserted {item_count} GDELT events for {ticker}")
+
+                record_fetch_attempt(
+                    ticker,
+                    source,
+                    item_count,
+                    status="ready" if item_count > 0 else "empty",
+                )
+
+            elif source == "macro_regime":
+                source_run_id = build_source_run_id(ticker, source)
+                query_hash = build_query_hash(source, ticker)
+                events = fetch_macro_regime_events(ticker)
+
+                events = _enrich_events(
+                    events,
+                    ticker=ticker,
+                    source=source,
+                    source_run_id=source_run_id,
+                    query_hash=query_hash,
+                )
+                item_count = len(events)
+                if events:
+                    insert_events(events)
+                    logger.info(
+                        f"Inserted {item_count} macro regime events for {ticker}"
+                    )
 
                 record_fetch_attempt(
                     ticker,
