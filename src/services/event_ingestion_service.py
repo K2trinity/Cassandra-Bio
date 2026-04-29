@@ -104,14 +104,26 @@ def _ownership_for_event(
     source_key = str(source or event.get("source") or "").strip().lower()
     if source_key == "clinicaltrials":
         metadata = decode_metadata(event.get("metadata"))
-        if metadata.get("ownership_status") == "unowned":
+        ownership_status = str(metadata.get("ownership_status") or "").strip().lower()
+        entity_match = str(metadata.get("entity_match") or "").strip().lower()
+        quarantine_reason = metadata.get("quarantine_reason")
+        if (
+            ownership_status == "owned"
+            and entity_match not in {"", "unknown", "unowned"}
+        ):
+            return ("owned", "trusted", None)
+        if ownership_status == "unowned":
             return (
                 "unowned",
                 "quarantined",
-                metadata.get("quarantine_reason")
+                quarantine_reason
                 or "clinical trial sponsor/collaborator did not match requested ticker",
             )
-        return ("owned", "trusted", None)
+        return (
+            "unknown",
+            "quarantined",
+            quarantine_reason or "missing clinical ownership evidence",
+        )
     if source_key in {"openfda", "alphavantage", "gdelt"}:
         return ("market_relevant", "trusted", None)
     return ("unknown", "quarantined", "unknown event source")

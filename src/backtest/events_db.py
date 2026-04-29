@@ -69,6 +69,54 @@ FETCH_LOG_COLUMN_DEFINITIONS = {
     "message": "TEXT",
 }
 
+_EVENT_INSERT_COLUMNS = (
+    "id",
+    "date",
+    "type",
+    "priority",
+    "ticker",
+    "disease_area",
+    "catalyst",
+    "sentiment",
+    "price_impact",
+    "source",
+    "source_entity",
+    "source_url",
+    "source_ids",
+    "confidence",
+    "metadata",
+    "ticker_scope",
+    "source_run_id",
+    "query_hash",
+    "company_identity",
+    "ownership_status",
+    "trust_status",
+    "schema_version",
+    "quarantine_reason",
+)
+_EVENT_UPDATE_COLUMNS = tuple(
+    column for column in _EVENT_INSERT_COLUMNS if column != "id"
+)
+_EVENT_COLUMNS_SQL = ", ".join(_EVENT_INSERT_COLUMNS)
+_EVENT_PARAMS_SQL = ", ".join(f":{column}" for column in _EVENT_INSERT_COLUMNS)
+_EVENT_UPDATE_SQL = ",\n            ".join(
+    f"{column} = excluded.{column}" for column in _EVENT_UPDATE_COLUMNS
+)
+_EVENT_CHANGED_SQL = "\n        OR ".join(
+    f"biotech_events.{column} IS NOT excluded.{column}"
+    for column in _EVENT_UPDATE_COLUMNS
+)
+_EVENT_UPSERT_SQL = f"""
+    INSERT INTO biotech_events
+        ({_EVENT_COLUMNS_SQL})
+    VALUES
+        ({_EVENT_PARAMS_SQL})
+    ON CONFLICT(id) DO UPDATE SET
+            {_EVENT_UPDATE_SQL}
+    WHERE
+        {_EVENT_CHANGED_SQL}
+"""
+
 
 def _get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -142,49 +190,21 @@ def _serialize_event(event: dict) -> dict:
 
 
 def insert_event(event: dict) -> None:
-    """Insert a single event. Ignores duplicates by id."""
+    """Insert or refresh a single event by id."""
     conn = _get_conn()
     _ensure_event_table(conn)
     serialized = _serialize_event(event)
-    conn.execute("""
-        INSERT OR IGNORE INTO biotech_events
-        (
-            id, date, type, priority, ticker, disease_area, catalyst, sentiment,
-            price_impact, source, source_entity, source_url, source_ids, confidence, metadata,
-            ticker_scope, source_run_id, query_hash, company_identity, ownership_status,
-            trust_status, schema_version, quarantine_reason
-        )
-        VALUES (
-            :id, :date, :type, :priority, :ticker, :disease_area, :catalyst, :sentiment,
-            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata,
-            :ticker_scope, :source_run_id, :query_hash, :company_identity, :ownership_status,
-            :trust_status, :schema_version, :quarantine_reason
-        )
-    """, serialized)
+    conn.execute(_EVENT_UPSERT_SQL, serialized)
     conn.commit()
     conn.close()
 
 
 def insert_events(events: list[dict]) -> int:
-    """Batch insert events. Returns count of inserted rows."""
+    """Batch insert or refresh events. Returns count of inserted or changed rows."""
     conn = _get_conn()
     _ensure_event_table(conn)
     serialized_events = [_serialize_event(event) for event in events]
-    cur = conn.executemany("""
-        INSERT OR IGNORE INTO biotech_events
-        (
-            id, date, type, priority, ticker, disease_area, catalyst, sentiment,
-            price_impact, source, source_entity, source_url, source_ids, confidence, metadata,
-            ticker_scope, source_run_id, query_hash, company_identity, ownership_status,
-            trust_status, schema_version, quarantine_reason
-        )
-        VALUES (
-            :id, :date, :type, :priority, :ticker, :disease_area, :catalyst, :sentiment,
-            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata,
-            :ticker_scope, :source_run_id, :query_hash, :company_identity, :ownership_status,
-            :trust_status, :schema_version, :quarantine_reason
-        )
-    """, serialized_events)
+    cur = conn.executemany(_EVENT_UPSERT_SQL, serialized_events)
     conn.commit()
     count = cur.rowcount
     conn.close()
