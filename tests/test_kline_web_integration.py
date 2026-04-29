@@ -133,6 +133,28 @@ def test_kline_workspace_invalid_ticker_has_recovery_link(monkeypatch):
     assert 'id="kline-workspace-data"' not in html
 
 
+def test_kline_default_rejects_path_like_query_symbol():
+    client = app.test_client()
+
+    response = client.get("/kline?symbol=../MRNA")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert "Invalid ticker" in html
+    assert "invalid ticker: use 1-16 letters, numbers, dots, or hyphens" in html
+
+
+def test_kline_path_like_symbol_uses_invalid_ticker_page():
+    client = app.test_client()
+
+    response = client.get("/kline/..%2FMRNA")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 400
+    assert "Invalid ticker" in html
+    assert "invalid ticker: use 1-16 letters, numbers, dots, or hyphens" in html
+
+
 def test_kline_workspace_static_js_uses_phase1_contracts_only():
     workspace_js = (Path(PROJECT_ROOT) / "static" / "kline" / "workspace.js").read_text(
         encoding="utf-8",

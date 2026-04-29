@@ -784,3 +784,194 @@ def test_get_source_statuses_for_ticker_returns_fetch_log_rows():
     assert [row["source"] for row in rows] == ["clinicaltrials", "openfda"]
     assert [row["item_count"] for row in rows] == [2, 1]
     assert all(row["last_fetch_at"] for row in rows)
+
+
+def test_fetch_log_preserves_error_status_and_message():
+    """Fetch status rows should distinguish failed sources from empty sources."""
+    from src.backtest.events_db import init_fetch_log_table, record_fetch_attempt, _get_conn
+    from src.services.event_ingestion_service import get_source_statuses_for_ticker
+
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'STATUSERR'")
+    conn.commit()
+    conn.close()
+
+    record_fetch_attempt(
+        "STATUSERR",
+        "openfda",
+        0,
+        status="rate_limited",
+        message="429 Too Many Requests",
+    )
+
+    rows = get_source_statuses_for_ticker("STATUSERR")
+
+    assert rows == [
+        {
+            "source": "openfda",
+            "last_fetch_at": rows[0]["last_fetch_at"],
+            "item_count": 0,
+            "status": "rate_limited",
+            "message": "429 Too Many Requests",
+        }
+    ]
+    assert rows[0]["last_fetch_at"]
+
+
+def test_ingestion_records_error_status_when_source_fetch_fails():
+    """Source exceptions should be visible to Kline status panels."""
+    from unittest.mock import patch
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services.event_ingestion_service import (
+        get_events_for_ticker,
+        get_source_statuses_for_ticker,
+    )
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'ERRSTAT'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'ERRSTAT'")
+    conn.commit()
+    conn.close()
+
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
+         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+        mock_fda.return_value.collect.side_effect = RuntimeError("429 Too Many Requests")
+        mock_trials.return_value = []
+
+        get_events_for_ticker("ERRSTAT", max_age_hours=0)
+
+    rows = get_source_statuses_for_ticker("ERRSTAT")
+    by_source = {row["source"]: row for row in rows}
+
+    assert by_source["openfda"]["status"] == "rate_limited"
+    assert by_source["openfda"]["message"] == "429 Too Many Requests"
+    assert by_source["clinicaltrials"]["status"] == "empty"
+
+
+def test_ingestion_records_openfda_client_http_failure_status():
+    """Real openFDA HTTP failures should not be flattened into empty source status."""
+    import requests
+    from unittest.mock import MagicMock, patch
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services.event_ingestion_service import (
+        get_events_for_ticker,
+        get_source_statuses_for_ticker,
+    )
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'FDAHTTPERR'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'FDAHTTPERR'")
+    conn.commit()
+    conn.close()
+
+    failed_response = MagicMock()
+    failed_response.raise_for_status.side_effect = requests.HTTPError(
+        "429 Too Many Requests"
+    )
+
+    with patch(
+        "src.tools.openfda_client.requests.Session.get",
+        return_value=failed_response,
+    ), patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+        mock_trials.return_value = []
+
+        get_events_for_ticker("FDAHTTPERR", max_age_hours=0)
+
+    rows = get_source_statuses_for_ticker("FDAHTTPERR")
+    by_source = {row["source"]: row for row in rows}
+
+    assert by_source["openfda"]["status"] == "rate_limited"
+    assert "429 Too Many Requests" in by_source["openfda"]["message"]
+    assert by_source["clinicaltrials"]["status"] == "empty"
+
+
+def test_ingestion_records_openfda_no_matches_as_empty_status():
+    """openFDA 404 no-match responses should remain empty, not source failures."""
+    import requests
+    from unittest.mock import MagicMock, patch
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services.event_ingestion_service import (
+        get_events_for_ticker,
+        get_source_statuses_for_ticker,
+    )
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'FDANOMATCH'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'FDANOMATCH'")
+    conn.commit()
+    conn.close()
+
+    not_found_response = MagicMock()
+    not_found_response.status_code = 404
+    not_found_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found for url"
+    )
+
+    with patch(
+        "src.tools.openfda_client.requests.Session.get",
+        return_value=not_found_response,
+    ), patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+        mock_trials.return_value = []
+
+        get_events_for_ticker("FDANOMATCH", max_age_hours=0)
+
+    rows = get_source_statuses_for_ticker("FDANOMATCH")
+    by_source = {row["source"]: row for row in rows}
+
+    assert by_source["openfda"]["status"] == "empty"
+    assert by_source["openfda"]["message"] is None
+    assert by_source["clinicaltrials"]["status"] == "empty"
+
+
+def test_ingestion_records_clinicaltrials_request_failure_status():
+    """Real ClinicalTrials request exhaustion should not be flattened into empty status."""
+    import requests
+    from unittest.mock import patch
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services.event_ingestion_service import (
+        get_events_for_ticker,
+        get_source_statuses_for_ticker,
+    )
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'CTHTTPERR'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'CTHTTPERR'")
+    conn.commit()
+    conn.close()
+
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
+         patch("src.tools.clinical_trials_client.requests.get") as mock_get, \
+         patch("src.tools.clinical_trials_client.time.sleep"):
+        mock_fda.return_value.collect.return_value = {
+            "label": {"results": []},
+            "event": {"results": []},
+            "drugsfda": {"results": []},
+        }
+        mock_get.side_effect = requests.RequestException("503 Service Unavailable")
+
+        get_events_for_ticker("CTHTTPERR", max_age_hours=0)
+
+    rows = get_source_statuses_for_ticker("CTHTTPERR")
+    by_source = {row["source"]: row for row in rows}
+
+    assert by_source["openfda"]["status"] == "empty"
+    assert by_source["clinicaltrials"]["status"] == "error"
+    assert "503 Service Unavailable" in by_source["clinicaltrials"]["message"]

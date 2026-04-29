@@ -35,6 +35,23 @@ EVENT_TABLE_SQL = """
     )
 """
 
+FETCH_LOG_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS fetch_log (
+        ticker TEXT NOT NULL,
+        source TEXT NOT NULL,
+        last_fetch_at TEXT NOT NULL,
+        item_count INTEGER DEFAULT 0,
+        status TEXT,
+        message TEXT,
+        PRIMARY KEY (ticker, source)
+    )
+"""
+
+FETCH_LOG_COLUMN_DEFINITIONS = {
+    "status": "TEXT",
+    "message": "TEXT",
+}
+
 
 def _get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -194,26 +211,41 @@ def _decode_event_row(row: dict) -> dict:
 def init_fetch_log_table() -> None:
     """Create fetch_log table if not exists."""
     conn = _get_conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS fetch_log (
-            ticker TEXT NOT NULL,
-            source TEXT NOT NULL,
-            last_fetch_at TEXT NOT NULL,
-            item_count INTEGER DEFAULT 0,
-            PRIMARY KEY (ticker, source)
-        )
-    """)
+    _ensure_fetch_log_table(conn)
     conn.commit()
     conn.close()
 
 
-def record_fetch_attempt(ticker: str, source: str, item_count: int) -> None:
-    """Record a fetch attempt with timestamp and item count."""
+def _ensure_fetch_log_table(conn: sqlite3.Connection) -> None:
+    """Create or migrate fetch_log without dropping source history."""
+    conn.execute(FETCH_LOG_TABLE_SQL)
+    existing_columns = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in conn.execute("PRAGMA table_info(fetch_log)").fetchall()
+    }
+    for column_name, column_definition in FETCH_LOG_COLUMN_DEFINITIONS.items():
+        if column_name not in existing_columns:
+            conn.execute(f"ALTER TABLE fetch_log ADD COLUMN {column_name} {column_definition}")
+
+
+def record_fetch_attempt(
+    ticker: str,
+    source: str,
+    item_count: int,
+    status: str | None = None,
+    message: str | None = None,
+) -> None:
+    """Record a fetch attempt with timestamp, item count, and source status."""
+    count = int(item_count or 0)
+    source_status = status or ("ready" if count > 0 else "empty")
+    detail = str(message) if message else None
     conn = _get_conn()
+    _ensure_fetch_log_table(conn)
     conn.execute("""
-        INSERT OR REPLACE INTO fetch_log (ticker, source, last_fetch_at, item_count)
-        VALUES (?, ?, datetime('now'), ?)
-    """, (ticker, source, item_count))
+        INSERT OR REPLACE INTO fetch_log
+            (ticker, source, last_fetch_at, item_count, status, message)
+        VALUES (?, ?, datetime('now'), ?, ?, ?)
+    """, (ticker, source, count, source_status, detail))
     conn.commit()
     conn.close()
 
@@ -221,6 +253,7 @@ def record_fetch_attempt(ticker: str, source: str, item_count: int) -> None:
 def get_last_fetch_at(ticker: str, source: str) -> Optional[str]:
     """Get the last fetch timestamp for a ticker/source pair, or None if never fetched."""
     conn = _get_conn()
+    _ensure_fetch_log_table(conn)
     cur = conn.execute(
         "SELECT last_fetch_at FROM fetch_log WHERE ticker = ? AND source = ?",
         (ticker, source)
@@ -233,9 +266,18 @@ def get_last_fetch_at(ticker: str, source: str) -> Optional[str]:
 def get_fetch_log_entries(ticker: str) -> list[dict]:
     """Return fetch log source statuses for a ticker ordered by source."""
     conn = _get_conn()
+    _ensure_fetch_log_table(conn)
     cur = conn.execute(
         """
-        SELECT source, last_fetch_at, item_count
+        SELECT
+            source,
+            last_fetch_at,
+            item_count,
+            COALESCE(
+                status,
+                CASE WHEN item_count > 0 THEN 'ready' ELSE 'empty' END
+            ) AS status,
+            message
         FROM fetch_log
         WHERE ticker = ?
         ORDER BY source

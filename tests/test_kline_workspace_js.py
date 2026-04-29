@@ -196,6 +196,69 @@ def test_workspace_js_backtest_ignores_stale_response():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_backtest_layer_button_toggles_overlays():
+    result = _run_workspace_script(
+        r"""
+        fetch = function () {
+          return Promise.resolve(jsonResponse({
+            run_id: 'run-C',
+            metrics: { sharpe: 1.1 },
+            equity_curve: [{ date: '2026-04-20', equity: 2 }],
+            signals: [{ date: '2026-04-20', signal: 1, signal_strength: 1 }],
+            trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-20', pnl_pct: 0.04 }]
+          }));
+        };
+
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: []
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: false,
+            series: []
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        let latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
+          throw new Error('backtest run did not enable chart overlays');
+        }
+
+        const layerBar = document.getElementById('layer-bar');
+        const backtestButton = layerBar.children.find((child) => child.dataset.layerKind === 'backtest');
+        if (!backtestButton) {
+          throw new Error('backtest layer button was not rendered');
+        }
+        if (backtestButton.disabled) {
+          throw new Error('backtest layer button stayed disabled after overlays loaded');
+        }
+
+        backtestButton.dispatchEvent({ type: 'click' });
+        latestConfig = chartConfigs[chartConfigs.length - 1];
+        if ((latestConfig.equityCurve || []).length || (latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('backtest layer button did not hide overlays');
+        }
+
+        backtestButton.dispatchEvent({ type: 'click' });
+        latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
+          throw new Error('backtest layer button did not restore overlays');
+        }
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def _dom_harness() -> str:
     return textwrap.dedent(
         r"""

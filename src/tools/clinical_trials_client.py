@@ -82,6 +82,7 @@ def search_trials(
     max_results: int = 50,
     include_statuses: Optional[List[str]] = None,
     retries: int = MAX_RETRIES,
+    raise_on_error: bool = False,
 ) -> List[Dict[str, str]]:
     """
     Search ClinicalTrials.gov studies with broad status coverage and pagination.
@@ -124,6 +125,7 @@ def search_trials(
             params["pageToken"] = next_page_token
 
         response_data = None
+        last_error: requests.exceptions.RequestException | None = None
         for attempt in range(retries):
             try:
                 response = requests.get(
@@ -136,11 +138,14 @@ def search_trials(
                 response_data = response.json()
                 break
             except requests.exceptions.RequestException as e:
+                last_error = e
                 logger.warning(f"ClinicalTrials page request attempt {attempt + 1}/{retries} failed: {e}")
                 if attempt < retries - 1:
                     time.sleep(2 ** attempt)
                 else:
                     logger.error("ClinicalTrials.gov page request exhausted retries")
+                    if raise_on_error and last_error is not None:
+                        raise last_error
                     return parsed_trials[:max_results]
 
         if not response_data:

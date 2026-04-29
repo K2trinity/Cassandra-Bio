@@ -23,24 +23,20 @@ __all__ = ["kline_bp"]
 def kline_default():
     """Default K-line route with optional symbol query parameter."""
     symbol = (request.args.get("symbol") or "MRNA").strip().upper() or "MRNA"
-    return redirect(url_for("kline.kline_view", symbol=symbol))
+    try:
+        company = resolver.resolve(symbol)
+    except ValueError as exc:
+        return _invalid_ticker_response(str(exc))
+    return redirect(url_for("kline.kline_view", symbol=company.ticker))
 
 
-@kline_bp.get("/kline/<symbol>")
+@kline_bp.get("/kline/<path:symbol>")
 def kline_view(symbol: str):
     """Render the K-line phase 1 workspace."""
     try:
         workspace = workspace_service.build_workspace(symbol)
     except ValueError as exc:
-        return (
-            render_template(
-                "kline_workspace.html",
-                workspace=None,
-                error=str(exc),
-                kline_active=True,
-            ),
-            400,
-        )
+        return _invalid_ticker_response(str(exc))
     return render_template(
         "kline_workspace.html",
         workspace=workspace.to_dict(),
@@ -190,3 +186,15 @@ def api_backtest_result(run_id: str):
     if payload is None:
         return jsonify({"error": "backtest run not found"}), 404
     return jsonify(payload)
+
+
+def _invalid_ticker_response(message: str):
+    return (
+        render_template(
+            "kline_workspace.html",
+            workspace=None,
+            error=message,
+            kline_active=True,
+        ),
+        400,
+    )

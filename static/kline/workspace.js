@@ -25,11 +25,25 @@
     }) || { points: [] };
   }
 
+  function backtestLayer(workspace) {
+    return (workspace.layers || []).find(function (layer) {
+      return layer.kind === "backtest";
+    }) || { series: [], summary: {} };
+  }
+
   function layerVisibleByDefault(workspace, kind) {
     var layer = (workspace.layers || []).find(function (item) {
       return item.kind === kind;
     });
     return !layer || layer.visible_by_default !== false;
+  }
+
+  function hasBacktestOverlays(state) {
+    return Boolean(
+      (state.equityCurve && state.equityCurve.length) ||
+      (state.signals && state.signals.length) ||
+      (state.trades && state.trades.length)
+    );
   }
 
   function safeToken(value) {
@@ -115,9 +129,9 @@
       ohlcData: (workspace.price && workspace.price.rows) || [],
       events: state.showCatalysts ? catalystLayer(workspace).points || [] : [],
       highlightedEventId: state.selectedEventId,
-      equityCurve: state.equityCurve,
-      signals: state.signals,
-      trades: state.trades,
+      equityCurve: state.showBacktest ? state.equityCurve : [],
+      signals: state.showBacktest ? state.signals : [],
+      trades: state.showBacktest ? state.trades : [],
       onEventClick: function (event) {
         state.selectedEventId = event && event.id;
         renderCatalysts(workspace, state);
@@ -175,12 +189,27 @@
       var button = makeElement("button", { type: "button", text: layer.label || layer.kind });
       button.dataset.layerKind = layer.kind;
       var isCatalysts = layer.kind === "catalysts";
-      var isActive = isCatalysts ? state.showCatalysts : layer.visible_by_default !== false;
+      var isBacktest = layer.kind === "backtest";
+      var isActive = isCatalysts
+        ? state.showCatalysts
+        : isBacktest
+          ? state.showBacktest && hasBacktestOverlays(state)
+          : layer.visible_by_default !== false;
       button.classList.toggle("is-active", isActive);
       if (isCatalysts) {
         button.addEventListener("click", function () {
           state.showCatalysts = !state.showCatalysts;
           button.classList.toggle("is-active", state.showCatalysts);
+          renderChart(workspace, state);
+        });
+      } else if (isBacktest) {
+        button.disabled = !hasBacktestOverlays(state);
+        button.addEventListener("click", function () {
+          if (!hasBacktestOverlays(state)) {
+            return;
+          }
+          state.showBacktest = !state.showBacktest;
+          renderLayerBar(workspace, state);
           renderChart(workspace, state);
         });
       } else {
@@ -415,8 +444,10 @@
         state.equityCurve = body.equity_curve || [];
         state.signals = body.signals || [];
         state.trades = body.trades || [];
+        state.showBacktest = true;
         status.textContent = "Run " + (body.run_id || "complete") + " complete.";
         renderMetrics(results, body.metrics || {});
+        renderLayerBar(workspace, state);
         renderChart(workspace, state);
       }).catch(function () {
         if (requestId !== state.backtestRequestId) {
@@ -477,13 +508,16 @@
     if (!workspace) {
       return;
     }
+    var savedBacktest = backtestLayer(workspace);
+    var savedBacktestSummary = savedBacktest.summary || {};
 
     var state = {
       selectedEventId: (workspace.panels && workspace.panels.selected_event_id) || null,
       showCatalysts: layerVisibleByDefault(workspace, "catalysts"),
-      equityCurve: [],
-      signals: [],
-      trades: [],
+      showBacktest: layerVisibleByDefault(workspace, "backtest"),
+      equityCurve: savedBacktest.series || [],
+      signals: savedBacktestSummary.signals || [],
+      trades: savedBacktestSummary.trades || [],
       backtestRequestId: 0,
       chartCleanup: null
     };

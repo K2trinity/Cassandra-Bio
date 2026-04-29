@@ -7,6 +7,7 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 import sys
 import os
+from types import SimpleNamespace
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -137,3 +138,86 @@ class TestGetOhlcRows:
 
         assert result[0]["date"] == "2024-01-15"
         assert result[1]["date"] == "2024-02-20"
+
+    @patch("src.services.market_data_service.load_ohlc")
+    @patch("src.services.market_data_service.refresh_ohlc")
+    @patch("src.services.market_data_service._is_cache_stale")
+    def test_refresh_failure_returns_stale_cache_status(
+        self,
+        mock_stale,
+        mock_refresh,
+        mock_load,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Refresh failures should preserve stale cache visibility and status."""
+        from src.services import market_data_service
+
+        mock_stale.return_value = True
+        mock_refresh.side_effect = RuntimeError("429 Too Many Requests")
+        monkeypatch.setattr(market_data_service, "DATA_DIR", tmp_path)
+        (tmp_path / "TEST.parquet").write_bytes(b"cached")
+        mock_load.return_value = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=1),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [1000],
+        })
+
+        result = market_data_service.get_ohlc_rows_with_status(
+            "TEST",
+            max_age_hours=24,
+        )
+
+        assert result["status"] == "stale"
+        assert result["message"] == "429 Too Many Requests"
+        assert result["rows"][0]["date"] == "2024-01-01"
+
+    def test_refresh_failure_uses_existing_stale_parquet_without_deleting_it(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Stale fallback should work with real data_loader cache semantics."""
+        from src.backtest import data_loader
+        from src.services import market_data_service
+
+        cached = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=1),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [1000],
+        })
+        cache_path = tmp_path / "REALSTALE.parquet"
+        cached.to_parquet(cache_path, index=False)
+
+        def fail_download(*args, **kwargs):
+            raise RuntimeError("429 Too Many Requests")
+
+        monkeypatch.setattr(data_loader, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(market_data_service, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(market_data_service, "_is_cache_stale", lambda path, max_age_hours: True)
+        monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(download=fail_download))
+
+        result = market_data_service.get_ohlc_rows_with_status(
+            "REALSTALE",
+            max_age_hours=24,
+        )
+
+        assert cache_path.exists()
+        assert result["status"] == "stale"
+        assert result["message"] == "429 Too Many Requests"
+        assert result["rows"] == [
+            {
+                "date": "2024-01-01",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1000,
+            }
+        ]

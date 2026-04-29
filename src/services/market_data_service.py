@@ -1,7 +1,8 @@
 """Market data service with 24-hour cache freshness logic."""
 
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
+
 import pandas as pd
 
 from src.backtest.data_loader import load_ohlc, refresh_ohlc, DATA_DIR
@@ -25,33 +26,60 @@ def _is_cache_stale(path: Path, max_age_hours: int) -> bool:
     return age > timedelta(hours=max_age_hours)
 
 
-def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:
-    """Get OHLC data with 24-hour cache freshness logic.
+def _serialize_ohlc_frame(df: pd.DataFrame) -> list[dict]:
+    """Serialize OHLC rows for chart compatibility."""
+    if df.empty:
+        return []
+    serialized = df.copy()
+    serialized["date"] = pd.to_datetime(serialized["date"]).dt.strftime("%Y-%m-%d")
+    return serialized.to_dict(orient="records")
+
+
+def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
+    """Get OHLC rows plus source freshness status.
 
     Checks if cached Parquet is fresh (< max_age_hours old). If fresh, loads
-    from cache. If stale or missing, refreshes from yfinance. Serializes dates
-    to YYYY-MM-DD format for chart compatibility.
+    from cache. If stale or missing, refreshes from yfinance. When refresh
+    fails but local cache can still be loaded, returns those cached rows with
+    ``status='stale'`` so the UI can show usable but dated data.
 
     Args:
         ticker: Stock ticker symbol (e.g., "AAPL")
         max_age_hours: Maximum cache age in hours before refresh (default 24)
 
     Returns:
-        List of dicts with keys: date (YYYY-MM-DD), open, high, low, close, volume
-        Returns empty list if data fetch fails or DataFrame is empty
+        Dict with rows, status, and optional message.
     """
     cache_path = DATA_DIR / f"{ticker}.parquet"
+    is_stale = _is_cache_stale(cache_path, max_age_hours)
+    had_cache = cache_path.exists()
 
-    # Decide whether to load from cache or refresh
-    if _is_cache_stale(cache_path, max_age_hours):
-        df = refresh_ohlc(ticker)
-    else:
-        df = load_ohlc(ticker)
+    try:
+        df = refresh_ohlc(ticker) if is_stale else load_ohlc(ticker)
+    except Exception as exc:
+        if not is_stale or not had_cache:
+            raise
+        return _stale_payload(ticker, str(exc))
 
-    # Handle empty DataFrame
-    if df.empty:
-        return []
+    rows = _serialize_ohlc_frame(df)
+    if is_stale and had_cache and not rows:
+        return _stale_payload(ticker, "refresh returned no rows")
+    return {
+        "rows": rows,
+        "status": "ready" if rows else "empty",
+        "message": None,
+    }
 
-    # Serialize date to YYYY-MM-DD and convert to list of dicts
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-    return df.to_dict(orient="records")
+
+def _stale_payload(ticker: str, message: str) -> dict:
+    return {
+        "rows": _serialize_ohlc_frame(load_ohlc(ticker)),
+        "status": "stale",
+        "message": message,
+    }
+
+
+def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:
+    """Get OHLC rows with the historical list-only return contract."""
+    payload = get_ohlc_rows_with_status(ticker, max_age_hours)
+    return list(payload.get("rows") or [])

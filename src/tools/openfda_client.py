@@ -23,8 +23,9 @@ class OpenFDAClient:
 
     BASE_URL = "https://api.fda.gov"
 
-    def __init__(self, timeout: int = 30) -> None:
+    def __init__(self, timeout: int = 30, raise_on_error: bool = False) -> None:
         self.timeout = timeout
+        self.raise_on_error = raise_on_error
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "Cassandra-BioHarvest/1.0"})
 
@@ -34,12 +35,17 @@ class OpenFDAClient:
             "search": search,
             "limit": min(max(limit, 1), 100),
         }
+        response = None
         try:
             response = self.session.get(url, params=params, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"openFDA request failed for {endpoint}: {e}")
+            if isinstance(e, requests.HTTPError) and getattr(response, "status_code", None) == 404:
+                return {"meta": {"results": {"total": 0}}, "results": []}
+            if self.raise_on_error:
+                raise
             return {"meta": {"results": {"total": 0}}, "results": []}
 
     def drug_label(self, ingredient_or_term: str, limit: int = 20) -> Dict[str, Any]:

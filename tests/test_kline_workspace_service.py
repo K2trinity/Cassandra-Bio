@@ -163,6 +163,35 @@ def test_ohlc_provider_returns_error_status_for_malformed_rows():
     assert statuses[0].message
 
 
+def test_ohlc_provider_preserves_status_payload_metadata():
+    contracts = _contracts()
+    provider = contracts.OHLCProvider(
+        fetch_rows=lambda ticker, max_age_hours=24: {
+            "rows": [
+                {
+                    "date": "2026-04-20",
+                    "open": 101.0,
+                    "high": 104.0,
+                    "low": 100.0,
+                    "close": 103.0,
+                    "volume": 1200000,
+                }
+            ],
+            "status": "stale",
+            "message": "using stale cache after refresh failed",
+        }
+    )
+
+    price, statuses = provider.load("MRNA")
+
+    assert price.rows[0]["date"] == "2026-04-20"
+    assert price.cache_status == "stale"
+    assert statuses[0].source == "ohlc"
+    assert statuses[0].status == "stale"
+    assert statuses[0].item_count == 1
+    assert statuses[0].message == "using stale cache after refresh failed"
+
+
 def test_catalyst_provider_preserves_requested_ticker():
     contracts = _contracts()
     provider = contracts.CatalystEventProvider(
@@ -266,6 +295,78 @@ def test_catalyst_provider_uses_injected_status_rows():
     ]
 
 
+def test_catalyst_provider_preserves_error_status_rows():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [],
+        fetch_statuses=lambda ticker: [
+            {
+                "source": "openfda",
+                "status": "rate_limited",
+                "item_count": 0,
+                "last_fetch_at": "2026-04-20T10:00:00",
+                "message": "429 Too Many Requests",
+            }
+        ],
+    )
+
+    _events, statuses = provider.load("MRNA")
+
+    assert [status.to_dict() for status in statuses] == [
+        {
+            "source": "openfda",
+            "status": "rate_limited",
+            "item_count": 0,
+            "last_fetch_at": "2026-04-20T10:00:00",
+            "message": "429 Too Many Requests",
+        }
+    ]
+
+
+def test_catalyst_provider_classifies_report_events():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "report-1",
+                "date": "2026-04-20",
+                "ticker": "MRNA",
+                "type": "cassandra_report",
+                "category": "report",
+                "title": "Cassandra thesis update",
+                "source": "report",
+            }
+        ],
+        fetch_statuses=None,
+    )
+
+    events, _statuses = provider.load("MRNA")
+
+    assert events[0].category == "report"
+
+
+def test_catalyst_provider_keeps_reported_clinical_results_clinical():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "clinical-1",
+                "date": "2026-04-20",
+                "ticker": "MRNA",
+                "type": "clinical_readout",
+                "category": "clinical",
+                "title": "Reported Phase 3 results met primary endpoint",
+                "source": "clinicaltrials",
+            }
+        ],
+        fetch_statuses=None,
+    )
+
+    events, _statuses = provider.load("MRNA")
+
+    assert events[0].category == "clinical"
+
+
 def test_catalyst_provider_default_fetch_statuses_uses_fetch_log_helper(monkeypatch):
     contracts = _contracts()
     from src.services import event_ingestion_service
@@ -325,6 +426,37 @@ def test_catalyst_provider_default_fetch_statuses_uses_fetch_log_helper(monkeypa
             "message": None,
         },
     ]
+
+
+def test_workspace_warnings_include_failed_source_statuses():
+    contracts = _contracts()
+
+    class RateLimitedCatalystProvider:
+        def load(self, ticker: str):
+            return [], [
+                contracts.KlineDataStatus(
+                    source="openfda",
+                    status="rate_limited",
+                    item_count=0,
+                    message="429 Too Many Requests",
+                )
+            ]
+
+    service = contracts.KlineWorkspaceService(
+        resolver=contracts.TickerResolver(),
+        ohlc_provider=FakeOHLCProvider(
+            contracts.KlineDataStatus,
+            contracts.KlinePriceSeries,
+        ),
+        catalyst_provider=RateLimitedCatalystProvider(),
+        backtest_provider=FakeBacktestProvider(),
+    )
+
+    workspace = service.build_workspace("MRNA")
+
+    assert workspace.warnings[0].source == "openfda"
+    assert workspace.warnings[0].code == "openfda_rate_limited"
+    assert workspace.warnings[0].message == "429 Too Many Requests"
 
 
 def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabilities():

@@ -157,17 +157,26 @@ def _backtest_series(last_backtest: dict[str, Any] | None) -> list[Any]:
 
 def _warnings_from_statuses(statuses: list[KlineDataStatus]) -> list[KlineWarning]:
     warnings: list[KlineWarning] = []
+    warning_statuses = {"error", "rate_limited", "stale"}
     for status in statuses:
-        if status.status != "error":
+        if status.status not in warning_statuses:
             continue
         warnings.append(
             KlineWarning(
-                code=f"{status.source}_error",
-                message=status.message or f"{status.source} unavailable",
+                code=f"{status.source}_{status.status}",
+                message=status.message or _status_message(status),
                 source=status.source,
             )
         )
     return warnings
+
+
+def _status_message(status: KlineDataStatus) -> str:
+    if status.status == "rate_limited":
+        return f"{status.source} rate limited"
+    if status.status == "stale":
+        return f"{status.source} using stale cached data"
+    return f"{status.source} unavailable"
 
 
 def _run_id(last_backtest: dict[str, Any] | None) -> str | None:

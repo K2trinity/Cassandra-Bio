@@ -36,6 +36,14 @@ def get_source_statuses_for_ticker(ticker: str) -> list[dict]:
     return get_fetch_log_entries(ticker)
 
 
+def _status_for_exception(exc: Exception) -> str:
+    """Map source fetch exceptions into user-facing data-source states."""
+    text = str(exc).lower()
+    if "429" in text or "too many requests" in text or "rate" in text:
+        return "rate_limited"
+    return "error"
+
+
 def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
     """
     Fetch and cache biotech events for a ticker with 6-hour freshness.
@@ -72,7 +80,7 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
 
         try:
             if source == "openfda":
-                client = OpenFDAClient()
+                client = OpenFDAClient(raise_on_error=True)
                 payload = client.collect(ticker, limit=20)
 
                 # Normalize all three slices
@@ -93,10 +101,19 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                     insert_events(events)
                     logger.info(f"Inserted {item_count} openFDA events for {ticker}")
 
-                record_fetch_attempt(ticker, source, item_count)
+                record_fetch_attempt(
+                    ticker,
+                    source,
+                    item_count,
+                    status="ready" if item_count > 0 else "empty",
+                )
 
             elif source == "clinicaltrials":
-                trials = search_trials(ticker, max_results=50)
+                trials = search_trials(
+                    ticker,
+                    max_results=50,
+                    raise_on_error=True,
+                )
                 events = normalize_clinical_trials(
                     trials,
                     source="clinicaltrials",
@@ -108,12 +125,22 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                     insert_events(events)
                     logger.info(f"Inserted {item_count} ClinicalTrials events for {ticker}")
 
-                record_fetch_attempt(ticker, source, item_count)
+                record_fetch_attempt(
+                    ticker,
+                    source,
+                    item_count,
+                    status="ready" if item_count > 0 else "empty",
+                )
 
         except Exception as e:
             logger.error(f"Error fetching {source} for {ticker}: {e}")
-            # Record attempt even on error (with 0 items)
-            record_fetch_attempt(ticker, source, 0)
+            record_fetch_attempt(
+                ticker,
+                source,
+                0,
+                status=_status_for_exception(e),
+                message=str(e),
+            )
 
     # Return all events for the ticker
     return get_events_for_chart(ticker)

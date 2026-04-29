@@ -9,11 +9,20 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ohlc"
 
 def fetch_ohlc(ticker: str, period: str = "10y") -> pd.DataFrame:
     """Download OHLC from yfinance and cache as Parquet."""
-    import yfinance as yf
-
     path = DATA_DIR / f"{ticker}.parquet"
     if path.exists():
         return pd.read_parquet(path)
+
+    df = _download_ohlc(ticker, period)
+    if not df.empty:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(path, index=False)
+    return df
+
+
+def _download_ohlc(ticker: str, period: str = "10y") -> pd.DataFrame:
+    """Download and normalize OHLC rows without touching the local cache."""
+    import yfinance as yf
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     raw = yf.download(ticker, period=period, interval="1d", progress=False)
@@ -30,7 +39,6 @@ def fetch_ohlc(ticker: str, period: str = "10y") -> pd.DataFrame:
     })
     df["date"] = pd.to_datetime(df["date"])
     df = df[["date", "open", "high", "low", "close", "volume"]].dropna()
-    df.to_parquet(path, index=False)
     return df
 
 
@@ -44,7 +52,9 @@ def load_ohlc(ticker: str) -> pd.DataFrame:
 
 def refresh_ohlc(ticker: str) -> pd.DataFrame:
     """Force re-download and overwrite cache."""
-    path = DATA_DIR / f"{ticker}.parquet"
-    if path.exists():
-        path.unlink()
-    return fetch_ohlc(ticker)
+    df = _download_ohlc(ticker)
+    if not df.empty:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path = DATA_DIR / f"{ticker}.parquet"
+        df.to_parquet(path, index=False)
+    return df

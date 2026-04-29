@@ -152,15 +152,27 @@ def _valid_status_row(row: object) -> bool:
 
 def _status_from_row(row: dict[str, Any]) -> KlineDataStatus:
     item_count = _int_value(row.get("item_count"), default=0)
+    status = _optional_string(row.get("status"))
     return KlineDataStatus(
         source=_string_value(row.get("source")),
-        status="ready" if item_count > 0 else "empty",
+        status=status or ("ready" if item_count > 0 else "empty"),
         item_count=item_count,
         last_fetch_at=_optional_string(row.get("last_fetch_at")),
+        message=_optional_string(row.get("message")),
     )
 
 
 def _category_for(raw: dict[str, Any]) -> str:
+    category = str(raw.get("category") or "").strip().lower()
+    source = str(raw.get("source") or "").strip().lower()
+    event_type = str(raw.get("type") or raw.get("event_type") or "").strip().lower()
+    if (
+        category == "report"
+        or source in {"report", "cassandra", "cassandra_report"}
+        or event_type == "cassandra_report"
+    ):
+        return "report"
+
     values = [
         raw.get("category"),
         raw.get("source"),
