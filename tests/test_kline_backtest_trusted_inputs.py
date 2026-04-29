@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import subprocess
+import sys
 
 import pandas as pd
 
@@ -68,6 +71,17 @@ def trusted_events() -> pd.DataFrame:
     )
 
 
+def trusted_but_backtest_ineligible_events() -> pd.DataFrame:
+    events = trusted_events()
+    events.at[0, "metadata"] = {
+        "source_tier": "official",
+        "confidence_score": 0.95,
+        "impact_score": 0.80,
+        "backtest_eligible": False,
+    }
+    return events
+
+
 def test_backtest_reads_trusted_events_only(tmp_path, monkeypatch):
     from src.backtest import runner
 
@@ -83,6 +97,7 @@ def test_backtest_reads_trusted_events_only(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: price_frame())
+    monkeypatch.setattr(runner, "init_db", lambda: None)
     monkeypatch.setattr(
         runner,
         "get_trusted_events_for_backtest",
@@ -103,6 +118,7 @@ def test_backtest_returns_error_without_trusted_events(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: price_frame())
+    monkeypatch.setattr(runner, "init_db", lambda: None)
     monkeypatch.setattr(
         runner,
         "get_trusted_events_for_backtest",
@@ -113,6 +129,44 @@ def test_backtest_returns_error_without_trusted_events(tmp_path, monkeypatch):
 
     assert result == {"error": "no trusted backtest-eligible events in date range"}
     assert not (tmp_path / "index.json").exists()
+
+
+def test_backtest_returns_error_when_filter_excludes_all_trusted_events(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: price_frame())
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda ticker, start_date, end_date: trusted_but_backtest_ineligible_events(),
+    )
+
+    result = runner.run_kline_backtest("MRNA", "2025-01-01", "2025-01-05")
+
+    assert result == {"error": "no trusted backtest-eligible events in date range"}
+    assert not (tmp_path / "index.json").exists()
+
+
+def test_backtest_result_provider_import_does_not_load_runner():
+    script = (
+        "import sys\n"
+        "import src.kline.providers.backtest_provider\n"
+        "print('src.backtest.runner' in sys.modules)\n"
+        "raise SystemExit(1 if 'src.backtest.runner' in sys.modules else 0)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_backtest_provider_loads_latest_indexed_run(tmp_path):

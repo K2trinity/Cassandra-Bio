@@ -24,15 +24,12 @@ from src.backtest.events_db import (
     init_db,
 )
 from src.backtest.features_v2 import build_features_v2
+from src.backtest.result_store import RESULTS_DIR, load_run_payload
 from src.backtest.signals import generate_signals
 from src.backtest.strategy import apply_strategy
 from src.backtest.metrics import compute_metrics, compute_event_car
 from src.kline.event_filter import filter_backtest_events
 
-RESULTS_DIR = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "backtest_results"
-)
-RUN_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{8}$")
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
 
 
@@ -404,6 +401,9 @@ def run_kline_backtest(
         return {"error": "no trusted backtest-eligible events in date range"}
 
     eligible_events, event_filter = filter_backtest_events(events)
+    if eligible_events.empty:
+        return {"error": "no trusted backtest-eligible events in date range"}
+
     signals = generate_signals(
         price_window, eligible_events, report_confidence=report_confidence
     )
@@ -487,18 +487,7 @@ def run_kline_backtest(
 
 def load_saved_run(run_id: str) -> dict | None:
     """Load a persisted single-run backtest payload by run_id."""
-    if not RUN_ID_PATTERN.fullmatch(str(run_id or "")):
-        return None
-
-    path = RESULTS_DIR / f"{run_id}.json"
-    if not path.exists():
-        return None
-
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_run_payload(run_id, RESULTS_DIR)
 
 
 def run_walk_forward(

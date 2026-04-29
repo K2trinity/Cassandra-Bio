@@ -6,13 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.backtest import runner
+from src.backtest.result_store import RESULTS_DIR, RUN_ID_PATTERN, load_run_payload
 
 
 class BacktestResultProvider:
     def __init__(self, results_dir: Path | None = None):
         self.results_dir = (
-            Path(results_dir) if results_dir is not None else runner.RESULTS_DIR
+            Path(results_dir) if results_dir is not None else RESULTS_DIR
         )
 
     def load_last_run(self, ticker: str) -> dict[str, Any] | None:
@@ -30,10 +30,10 @@ class BacktestResultProvider:
             return None
 
         run_id = str(entry.get("run_id") or "")
-        if not runner.RUN_ID_PATTERN.fullmatch(run_id):
+        if not RUN_ID_PATTERN.fullmatch(run_id):
             return None
 
-        payload = self._load_payload(run_id)
+        payload = load_run_payload(run_id, self.results_dir)
         if not isinstance(payload, dict):
             return None
 
@@ -50,11 +50,3 @@ class BacktestResultProvider:
         except (OSError, json.JSONDecodeError):
             return {}
         return index if isinstance(index, dict) else {}
-
-    def _load_payload(self, run_id: str) -> dict[str, Any] | None:
-        try:
-            with open(self.results_dir / f"{run_id}.json", "r", encoding="utf-8") as f:
-                payload = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
-        return payload if isinstance(payload, dict) else None
