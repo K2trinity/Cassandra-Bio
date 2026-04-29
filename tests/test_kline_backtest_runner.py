@@ -157,17 +157,42 @@ def test_run_kline_backtest_rejects_invalid_ticker_without_loading(monkeypatch):
         end_date="2026-04-22",
     )
 
-    assert payload == {"error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"}
+    assert payload == {
+        "error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+    }
 
 
-def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, monkeypatch):
+def test_run_kline_backtest_initializes_events_and_writes_strict_json(
+    tmp_path, monkeypatch
+):
     from src.backtest import runner
 
     ohlc = pd.DataFrame(
         [
-            {"date": "2026-04-20", "open": 100.0, "high": 104.0, "low": 99.0, "close": 103.0, "volume": 1000},
-            {"date": "2026-04-21", "open": 103.0, "high": 106.0, "low": 101.0, "close": 105.0, "volume": 1100},
-            {"date": "2026-04-22", "open": 105.0, "high": 107.0, "low": 102.0, "close": 106.0, "volume": 1200},
+            {
+                "date": "2026-04-20",
+                "open": 100.0,
+                "high": 104.0,
+                "low": 99.0,
+                "close": 103.0,
+                "volume": 1000,
+            },
+            {
+                "date": "2026-04-21",
+                "open": 103.0,
+                "high": 106.0,
+                "low": 101.0,
+                "close": 105.0,
+                "volume": 1100,
+            },
+            {
+                "date": "2026-04-22",
+                "open": 105.0,
+                "high": 107.0,
+                "low": 102.0,
+                "close": 106.0,
+                "volume": 1200,
+            },
         ]
     )
     events = pd.DataFrame()
@@ -182,18 +207,48 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, 
     def fake_generate_signals(price_window, event_rows, report_confidence=0.5):
         return pd.DataFrame(
             [
-                {"date": pd.Timestamp("2026-04-20"), "signal": 1, "signal_strength": 1.0},
-                {"date": pd.Timestamp("2026-04-21"), "signal": 0, "signal_strength": 0.0},
-                {"date": pd.Timestamp("2026-04-22"), "signal": 0, "signal_strength": 0.0},
+                {
+                    "date": pd.Timestamp("2026-04-20"),
+                    "signal": 1,
+                    "signal_strength": 1.0,
+                },
+                {
+                    "date": pd.Timestamp("2026-04-21"),
+                    "signal": 0,
+                    "signal_strength": 0.0,
+                },
+                {
+                    "date": pd.Timestamp("2026-04-22"),
+                    "signal": 0,
+                    "signal_strength": 0.0,
+                },
             ]
         )
 
     def fake_apply_strategy(price_window, signals, **kwargs):
         return pd.DataFrame(
             [
-                {"date": pd.Timestamp("2026-04-20"), "position": 0.0, "daily_return": 0.0, "equity": 1.0, "drawdown": 0.0},
-                {"date": pd.Timestamp("2026-04-21"), "position": 0.2, "daily_return": 0.01, "equity": 1.01, "drawdown": 0.0},
-                {"date": pd.Timestamp("2026-04-22"), "position": 0.0, "daily_return": 0.0, "equity": 1.01, "drawdown": 0.0},
+                {
+                    "date": pd.Timestamp("2026-04-20"),
+                    "position": 0.0,
+                    "daily_return": 0.0,
+                    "equity": 1.0,
+                    "drawdown": 0.0,
+                },
+                {
+                    "date": pd.Timestamp("2026-04-21"),
+                    "position": 0.2,
+                    "daily_return": 0.01,
+                    "equity": 1.01,
+                    "drawdown": 0.0,
+                },
+                {
+                    "date": pd.Timestamp("2026-04-22"),
+                    "position": 0.0,
+                    "daily_return": 0.0,
+                    "equity": 1.01,
+                    "drawdown": 0.0,
+                },
             ]
         )
 
@@ -215,7 +270,9 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(tmp_path, 
     monkeypatch.setattr(runner, "generate_signals", fake_generate_signals)
     monkeypatch.setattr(runner, "apply_strategy", fake_apply_strategy)
     monkeypatch.setattr(runner, "compute_metrics", fake_compute_metrics)
-    monkeypatch.setattr(runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame())
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
 
     payload = runner.run_kline_backtest(
         ticker="BIIB",
@@ -294,3 +351,217 @@ def test_derive_trades_prefers_strategy_daily_return_for_pnl_pct():
             "pnl_pct": 0.00899,
         }
     ]
+
+
+def test_attribution_helpers_handle_empty_frames_and_metadata_json():
+    from src.backtest.attribution import (
+        compute_baseline,
+        summarize_events,
+        summarize_signals,
+    )
+
+    assert summarize_events(pd.DataFrame()) == {
+        "by_source": [],
+        "by_category": [],
+        "by_type": [],
+    }
+    assert summarize_signals(pd.DataFrame()) == {
+        "active_signal_days": 0,
+        "long_signal_days": 0,
+        "short_signal_days": 0,
+        "mean_signal_strength": 0.0,
+    }
+    assert compute_baseline(pd.DataFrame(), pd.DataFrame()) == {
+        "buy_hold_return": None,
+        "strategy_return": None,
+        "excess_return": None,
+    }
+
+    events = pd.DataFrame(
+        [
+            {
+                "date": "2026-04-20",
+                "type": "market_news",
+                "source": "alphavantage",
+                "metadata": '{"source_tier": "market_news", "category": "news"}',
+            },
+            {
+                "date": "2026-04-21",
+                "type": "macro_policy",
+                "source": "gdelt",
+                "metadata": '{"source_tier": "macro", "category": "macro"}',
+            },
+        ]
+    )
+
+    summary = summarize_events(events)
+
+    assert summary["by_source"] == [
+        {"source": "alphavantage", "count": 1},
+        {"source": "gdelt", "count": 1},
+    ]
+    assert summary["by_category"] == [
+        {"category": "macro", "count": 1},
+        {"category": "news", "count": 1},
+    ]
+
+
+def test_score_event_uses_phase2_metadata_before_legacy_fallback():
+    from src.backtest.signals import score_event
+
+    eligible_event = {
+        "type": "unknown_phase2_event",
+        "priority": 1,
+        "sentiment": "positive",
+        "metadata": '{"backtest_eligible": true, "confidence_score": 0.9, "impact_score": 0.8}',
+    }
+    ineligible_event = {
+        "type": "fda_decision",
+        "priority": 1,
+        "sentiment": "positive",
+        "metadata": '{"backtest_eligible": false, "confidence_score": 0.99, "impact_score": 0.99}',
+    }
+    legacy_event = {
+        "type": "fda_decision",
+        "priority": 1,
+        "sentiment": "positive",
+    }
+
+    assert score_event(eligible_event) == 0.72
+    assert score_event(ineligible_event) == 0.0
+    assert score_event(legacy_event) == 1.0
+
+
+def test_score_event_ignores_non_finite_phase2_scores_for_strict_json():
+    from src.backtest.signals import score_event
+
+    event = {
+        "type": "fda_decision",
+        "priority": 1,
+        "sentiment": "positive",
+        "metadata": '{"backtest_eligible": true, "confidence_score": NaN, "impact_score": NaN}',
+    }
+
+    assert score_event(event) == 1.0
+
+
+def test_default_signals_include_phase2_fda_approval_after_enrichment():
+    from src.backtest.signals import generate_signals
+    from src.kline.event_filter import filter_backtest_events
+
+    ohlc = pd.DataFrame(
+        [
+            {"date": "2026-04-20"},
+            {"date": "2026-04-21"},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "id": "fda-approval",
+                "date": "2026-04-20",
+                "type": "fda_approval",
+                "source": "openfda",
+                "ticker": "MRNA",
+                "priority": 1,
+                "sentiment": "positive",
+                "source_ids": ["BLA125514"],
+                "metadata": "{}",
+            }
+        ]
+    )
+
+    eligible_events, summary = filter_backtest_events(events)
+    signals = generate_signals(ohlc, eligible_events)
+
+    assert summary["eligible_events"] == 1
+    assert signals.iloc[0]["signal"] == 1
+    assert signals.iloc[0]["signal_strength"] > 0.15
+
+
+def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypatch):
+    from src.backtest import runner
+
+    ohlc = pd.DataFrame(
+        [
+            {
+                "date": "2026-04-20",
+                "open": 100.0,
+                "high": 104.0,
+                "low": 99.0,
+                "close": 103.0,
+                "volume": 1000,
+            },
+            {
+                "date": "2026-04-21",
+                "open": 103.0,
+                "high": 106.0,
+                "low": 101.0,
+                "close": 105.0,
+                "volume": 1100,
+            },
+            {
+                "date": "2026-04-22",
+                "open": 105.0,
+                "high": 107.0,
+                "low": 102.0,
+                "close": 106.0,
+                "volume": 1200,
+            },
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-eligible",
+                "date": "2026-04-20",
+                "type": "trial_results_posted",
+                "priority": 1,
+                "sentiment": "positive",
+                "source": "clinicaltrials",
+                "metadata": '{"backtest_eligible": true, "confidence_score": 0.9, "impact_score": 0.8, "source_tier": "official", "category": "clinical"}',
+            },
+            {
+                "id": "evt-excluded",
+                "date": "2026-04-21",
+                "type": "macro_economic",
+                "priority": 3,
+                "sentiment": "neutral",
+                "source": "gdelt",
+                "metadata": '{"backtest_eligible": false, "confidence_score": 0.4, "impact_score": 0.2, "source_tier": "macro", "category": "macro"}',
+            },
+        ]
+    )
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(runner, "get_events", lambda *args, **kwargs: events)
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2026-04-20",
+        end_date="2026-04-22",
+    )
+
+    assert payload["event_filter"] == {
+        "input_events": 2,
+        "eligible_events": 1,
+        "excluded_events": 1,
+        "min_confidence_score": 0.7,
+    }
+    assert payload["event_attribution"]["by_source"] == [
+        {"source": "clinicaltrials", "count": 1}
+    ]
+    assert payload["event_attribution"]["by_category"] == [
+        {"category": "clinical", "count": 1}
+    ]
+    assert payload["signal_summary"]["active_signal_days"] == 1
+    assert payload["baseline"]["buy_hold_return"] == 0.06
+    assert "strategy_return" in payload["baseline"]
+    assert payload["signals"][0]["source_event_ids"] == ["evt-eligible"]
+    assert all(
+        "evt-excluded" not in signal["source_event_ids"]
+        for signal in payload["signals"]
+    )
+    assert runner.load_saved_run(payload["run_id"]) == payload

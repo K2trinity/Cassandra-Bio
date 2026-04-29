@@ -11,14 +11,22 @@ import uuid
 
 import pandas as pd
 
+from src.backtest.attribution import (
+    compute_baseline,
+    summarize_events,
+    summarize_signals,
+)
 from src.backtest.data_loader import DATA_DIR, load_ohlc
 from src.backtest.events_db import get_events, init_db
 from src.backtest.features_v2 import build_features_v2
 from src.backtest.signals import generate_signals
 from src.backtest.strategy import apply_strategy
 from src.backtest.metrics import compute_metrics, compute_event_car
+from src.kline.event_filter import filter_backtest_events
 
-RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "backtest_results"
+RESULTS_DIR = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "backtest_results"
+)
 RUN_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{8}$")
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
 
@@ -59,7 +67,9 @@ def run_single_ticker(
         all_events_df = events
 
     train_ohlc = ohlc[(ohlc["date"] >= train_start) & (ohlc["date"] <= train_end)]
-    train_events = events[pd.to_datetime(events["date"]).between(train_start, train_end)]
+    train_events = events[
+        pd.to_datetime(events["date"]).between(train_start, train_end)
+    ]
 
     features = build_features_v2(train_ohlc, train_events, all_events_df)
     if features.empty:
@@ -82,7 +92,9 @@ def run_single_ticker(
         "event_car_summary": {
             "n_events": len(car_df),
             "mean_car": round(car_df["car"].mean(), 4) if not car_df.empty else None,
-            "significant_events": int((car_df["t_stat"].abs() > 1.96).sum()) if not car_df.empty else 0,
+            "significant_events": (
+                int((car_df["t_stat"].abs() > 1.96).sum()) if not car_df.empty else 0
+            ),
         },
     }
 
@@ -183,7 +195,11 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
         result_columns.append("daily_return")
     positions = results[result_columns].copy()
     positions["date"] = pd.to_datetime(positions["date"])
-    rows = prices.merge(positions, on="date", how="inner").sort_values("date").reset_index(drop=True)
+    rows = (
+        prices.merge(positions, on="date", how="inner")
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
     if rows.empty:
         return []
 
@@ -199,7 +215,11 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
             continue
 
         direction = "long" if position > 0 else "short"
-        daily_return = _json_safe_number(row.get("daily_return")) if "daily_return" in rows.columns else None
+        daily_return = (
+            _json_safe_number(row.get("daily_return"))
+            if "daily_return" in rows.columns
+            else None
+        )
         if daily_return is not None:
             pnl_pct = daily_return / abs(position)
         else:
@@ -265,13 +285,18 @@ def run_kline_backtest(
 
     ohlc = ohlc.copy()
     ohlc["date"] = pd.to_datetime(ohlc["date"])
-    price_window = ohlc[(ohlc["date"] >= start_date) & (ohlc["date"] <= end_date)].copy()
+    price_window = ohlc[
+        (ohlc["date"] >= start_date) & (ohlc["date"] <= end_date)
+    ].copy()
     if len(price_window) < 2:
         return {"error": "insufficient OHLC data in date range"}
 
     init_db()
     events = get_events(ticker, start_date=start_date, end_date=end_date)
-    signals = generate_signals(price_window, events, report_confidence=report_confidence)
+    eligible_events, event_filter = filter_backtest_events(events)
+    signals = generate_signals(
+        price_window, eligible_events, report_confidence=report_confidence
+    )
     results = apply_strategy(
         price_window,
         signals,
@@ -281,10 +306,14 @@ def run_kline_backtest(
     )
 
     raw_metrics = compute_metrics(results)
-    strategy_metrics = raw_metrics.get("layer3_strategy", {}) if isinstance(raw_metrics, dict) else {}
+    strategy_metrics = (
+        raw_metrics.get("layer3_strategy", {}) if isinstance(raw_metrics, dict) else {}
+    )
     metrics = {
         "sharpe": _json_safe_number(strategy_metrics.get("sharpe_ratio")),
-        "annualized_return": _json_safe_number(strategy_metrics.get("annualized_return")),
+        "annualized_return": _json_safe_number(
+            strategy_metrics.get("annualized_return")
+        ),
         "max_drawdown": _json_safe_number(strategy_metrics.get("max_drawdown")),
         "win_rate": _json_safe_number(strategy_metrics.get("win_rate")),
         "profit_factor": _json_safe_number(strategy_metrics.get("profit_factor")),
@@ -302,7 +331,7 @@ def run_kline_backtest(
             }
         )
 
-    car_df = compute_event_car(price_window, events)
+    car_df = compute_event_car(price_window, eligible_events)
     event_car = []
     if not car_df.empty:
         for row in car_df.itertuples(index=False):
@@ -325,8 +354,12 @@ def run_kline_backtest(
         "metrics": metrics,
         "equity_curve": equity_curve,
         "event_car": event_car,
-        "signals": _serialize_signals(signals, events),
+        "signals": _serialize_signals(signals, eligible_events),
         "trades": _derive_trades(price_window, results),
+        "event_filter": event_filter,
+        "event_attribution": summarize_events(eligible_events),
+        "signal_summary": summarize_signals(signals),
+        "baseline": compute_baseline(price_window, results),
     }
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -384,9 +417,15 @@ def run_walk_forward(
 
         for ticker in tickers:
             result = run_single_ticker(
-                ticker, train_start, train_end, test_start, test_end,
+                ticker,
+                train_start,
+                train_end,
+                test_start,
+                test_end,
             )
-            result["window"] = f"{window_start}-{window_start + train_window + test_window - 1}"
+            result["window"] = (
+                f"{window_start}-{window_start + train_window + test_window - 1}"
+            )
             all_results.append(result)
 
     output = {

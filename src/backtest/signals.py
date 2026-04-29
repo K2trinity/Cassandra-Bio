@@ -1,30 +1,90 @@
 # src/backtest/signals.py
 """Signal generation: event score × report confidence → trade signal."""
 
+import math
+
 import pandas as pd
 import numpy as np
 
+from src.kline.event_filter import decode_metadata
 
 EVENT_SCORE = {
     "fda_decision": 1.0,
+    "fda_approval": 1.0,
+    "fda_label_update": 0.7,
+    "fda_recall": 0.8,
     "clinical_readout": 0.9,
+    "trial_results_posted": 0.95,
+    "trial_primary_completion": 0.7,
+    "trial_completion": 0.55,
+    "trial_status_change": 0.45,
+    "trial_termination": 0.9,
+    "safety_signal": 0.75,
     "partnership": 0.6,
+    "partnership_mna": 0.65,
     "financing": 0.4,
+    "earnings_financing": 0.45,
     "patent": 0.3,
     "competitor": 0.5,
+    "market_news": 0.4,
+    "analyst_news": 0.35,
+    "geopolitical": 0.3,
+    "trade_policy": 0.3,
+    "sanctions": 0.4,
+    "regulatory_change": 0.4,
+    "macro_policy": 0.3,
+    "macro_economic": 0.2,
 }
 
-PRIORITY_WEIGHT = {1: 1.0, 2: 0.6, 3: 0.3}
+PRIORITY_WEIGHT = {1: 1.0, 2: 0.6, 3: 0.3, 4: 0.2, 5: 0.15}
 
 SENTIMENT_DIRECTION = {"positive": 1.0, "negative": -1.0, "neutral": 0.0}
 
 
 def score_event(event: dict) -> float:
-    """Score a single event: type_weight × priority_weight × sentiment_direction."""
-    type_w = EVENT_SCORE.get(event.get("type", ""), 0.3)
-    prio_w = PRIORITY_WEIGHT.get(event.get("priority", 3), 0.3)
+    """Score a single event using phase2 metadata when available."""
+    metadata = decode_metadata(event.get("metadata"))
+    if "backtest_eligible" in metadata and not _bool_value(
+        metadata.get("backtest_eligible")
+    ):
+        return 0.0
+
+    impact_score = _float_value(metadata.get("impact_score"))
+    confidence_score = _float_value(metadata.get("confidence_score"))
+    type_w = (
+        impact_score
+        if impact_score is not None
+        else EVENT_SCORE.get(event.get("type", ""), 0.3)
+    )
+    prio_w = PRIORITY_WEIGHT.get(_int_value(event.get("priority", 3), 3), 0.3)
     sent_d = SENTIMENT_DIRECTION.get(event.get("sentiment", "neutral"), 0.0)
-    return type_w * prio_w * sent_d
+    confidence_w = confidence_score if confidence_score is not None else 1.0
+    return round(type_w * prio_w * sent_d * confidence_w, 6)
+
+
+def _bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(value)
+
+
+def _float_value(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _int_value(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
 
 
 def generate_signals(
