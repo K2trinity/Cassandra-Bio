@@ -17,7 +17,12 @@ from src.backtest.attribution import (
     summarize_signals,
 )
 from src.backtest.data_loader import DATA_DIR, load_ohlc
-from src.backtest.events_db import get_events, init_db
+from src.backtest.events_db import (
+    get_events,
+    get_fetch_log_entries,
+    get_trusted_events_for_backtest,
+    init_db,
+)
 from src.backtest.features_v2 import build_features_v2
 from src.backtest.signals import generate_signals
 from src.backtest.strategy import apply_strategy
@@ -142,6 +147,60 @@ def _event_ids_by_date(events: pd.DataFrame) -> dict[str, list[str]]:
     return ids_by_date
 
 
+def _event_identifier(row: pd.Series) -> str | None:
+    event_id = _clean_text(row.get("event_id"))
+    if event_id is None:
+        event_id = _clean_text(row.get("id"))
+    return event_id
+
+
+def _input_event_ids(events: pd.DataFrame) -> list[str]:
+    if events.empty:
+        return []
+
+    event_ids: list[str] = []
+    for _, row in events.iterrows():
+        event_id = _event_identifier(row)
+        if event_id is not None:
+            event_ids.append(event_id)
+    return event_ids
+
+
+def _clean_text(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text or None
+
+
+def _count_event_values(events: pd.DataFrame, column: str) -> list[dict]:
+    if events.empty or column not in events.columns:
+        return []
+
+    counts: dict[str, int] = {}
+    for value in events[column]:
+        label = _clean_text(value) or "unknown"
+        counts[label] = counts.get(label, 0) + 1
+
+    return [
+        {column: label, "count": count}
+        for label, count in sorted(counts.items(), key=lambda item: item[0])
+    ]
+
+
+def _trust_summary(events: pd.DataFrame) -> dict:
+    return {
+        "trusted_event_count": int(len(events)),
+        "by_source": _count_event_values(events, "source"),
+        "by_ownership_status": _count_event_values(events, "ownership_status"),
+    }
+
+
 def _serialize_signals(signals: pd.DataFrame, events: pd.DataFrame) -> list[dict]:
     if signals.empty or "date" not in signals.columns:
         return []
@@ -239,6 +298,50 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
     return trades
 
 
+def _load_results_index() -> dict:
+    index_path = RESULTS_DIR / "index.json"
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            raw_index = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        raw_index = {}
+
+    latest_by_ticker: dict[str, dict[str, str]] = {}
+    if isinstance(raw_index, dict) and isinstance(
+        raw_index.get("latest_by_ticker"), dict
+    ):
+        for ticker, entry in raw_index["latest_by_ticker"].items():
+            normalized_ticker = normalize_kline_ticker(ticker)
+            if normalized_ticker is None or not isinstance(entry, dict):
+                continue
+
+            clean_entry: dict[str, str] = {}
+            for key in ("run_id", "ticker", "start", "end", "created_at"):
+                text = _clean_text(entry.get(key))
+                if text is not None:
+                    clean_entry[key] = text
+            if clean_entry:
+                latest_by_ticker[normalized_ticker] = clean_entry
+
+    return {"latest_by_ticker": latest_by_ticker}
+
+
+def _update_latest_run_index(payload: dict) -> None:
+    index = _load_results_index()
+    latest_by_ticker = index["latest_by_ticker"]
+    ticker = str(payload["ticker"])
+    latest_by_ticker[ticker] = {
+        "run_id": str(payload["run_id"]),
+        "ticker": ticker,
+        "start": str(payload["start_date"]),
+        "end": str(payload["end_date"]),
+        "created_at": str(payload["created_at"]),
+    }
+
+    with open(RESULTS_DIR / "index.json", "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, allow_nan=False)
+
+
 def run_kline_backtest(
     ticker: str,
     start_date: str,
@@ -292,7 +395,14 @@ def run_kline_backtest(
         return {"error": "insufficient OHLC data in date range"}
 
     init_db()
-    events = get_events(ticker, start_date=start_date, end_date=end_date)
+    events = get_trusted_events_for_backtest(
+        ticker,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if events.empty:
+        return {"error": "no trusted backtest-eligible events in date range"}
+
     eligible_events, event_filter = filter_backtest_events(events)
     signals = generate_signals(
         price_window, eligible_events, report_confidence=report_confidence
@@ -345,12 +455,17 @@ def run_kline_backtest(
                 }
             )
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    created_at = datetime.now()
+    run_id = created_at.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     payload = {
         "run_id": run_id,
+        "created_at": created_at.isoformat(timespec="seconds"),
         "ticker": ticker,
         "start_date": start_date,
         "end_date": end_date,
+        "input_event_ids": _input_event_ids(eligible_events),
+        "trust_summary": _trust_summary(eligible_events),
+        "source_status_at_run": get_fetch_log_entries(ticker),
         "metrics": metrics,
         "equity_curve": equity_curve,
         "event_car": event_car,
@@ -365,6 +480,7 @@ def run_kline_backtest(
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_DIR / f"{run_id}.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
+    _update_latest_run_index(payload)
 
     return payload
 

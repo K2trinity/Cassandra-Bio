@@ -195,13 +195,26 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(
             },
         ]
     )
-    events = pd.DataFrame()
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-strict-json",
+                "date": "2026-04-20",
+                "type": "trial_results_posted",
+                "priority": 1,
+                "sentiment": "positive",
+                "source": "clinicaltrials",
+                "ownership_status": "owned",
+                "metadata": '{"backtest_eligible": true, "confidence_score": 0.9, "impact_score": 0.8}',
+            }
+        ]
+    )
     init_calls: list[bool] = []
 
     def fake_init_db():
         init_calls.append(True)
 
-    def fake_get_events(*args, **kwargs):
+    def fake_get_trusted_events(*args, **kwargs):
         return events
 
     def fake_generate_signals(price_window, event_rows, report_confidence=0.5):
@@ -266,7 +279,12 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
     monkeypatch.setattr(runner, "init_db", fake_init_db)
-    monkeypatch.setattr(runner, "get_events", fake_get_events)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        fake_get_trusted_events,
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
     monkeypatch.setattr(runner, "generate_signals", fake_generate_signals)
     monkeypatch.setattr(runner, "apply_strategy", fake_apply_strategy)
     monkeypatch.setattr(runner, "compute_metrics", fake_compute_metrics)
@@ -292,7 +310,7 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(
             "date": "2026-04-20",
             "signal": 1,
             "signal_strength": 1.0,
-            "source_event_ids": [],
+            "source_event_ids": ["evt-strict-json"],
         },
         {
             "date": "2026-04-21",
@@ -536,7 +554,12 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
     monkeypatch.setattr(runner, "init_db", lambda: None)
-    monkeypatch.setattr(runner, "get_events", lambda *args, **kwargs: events)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: events,
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
 
     payload = runner.run_kline_backtest(
         ticker="MRNA",
