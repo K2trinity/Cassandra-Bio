@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
-import uuid
-
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def isolated_events_db(monkeypatch):
+def isolated_events_db(monkeypatch, tmp_path):
     from src.backtest import events_db
 
-    temp_dir = Path.cwd() / ".pytest-event-dbs"
-    temp_dir.mkdir(exist_ok=True)
-    db_path = temp_dir / f"{uuid.uuid4().hex}.db"
+    db_path = tmp_path / "events.db"
     monkeypatch.setattr(events_db, "DB_PATH", db_path)
     yield
-    for suffix in ("", "-wal", "-shm"):
-        path = Path(f"{db_path}{suffix}")
-        if path.exists():
-            path.unlink()
 
 
 def _event(event_id: str, **overrides: object) -> dict:
@@ -92,13 +83,31 @@ def test_trusted_reads_require_ticker_scope_and_schema_version():
     assert [row["id"] for row in rows] == ["trusted-mrna"]
 
 
-def test_trusted_backtest_reads_require_backtest_eligible():
+def test_trusted_chart_reads_reject_disallowed_ownership_status():
+    from src.backtest.events_db import get_trusted_events_for_chart, insert_events
+
+    insert_events(
+        [
+            _trusted_event("trusted-mrna"),
+            _trusted_event("unknown-owner", ownership_status="unknown"),
+            _trusted_event("unowned", ownership_status="unowned"),
+        ]
+    )
+
+    rows = get_trusted_events_for_chart("MRNA")
+
+    assert [row["id"] for row in rows] == ["trusted-mrna"]
+
+
+def test_trusted_backtest_reads_require_explicit_boolean_backtest_eligible():
     from src.backtest.events_db import get_trusted_events_for_backtest, insert_events
 
     insert_events(
         [
             _trusted_event("eligible", metadata={"backtest_eligible": True}),
             _trusted_event("visual-only", metadata={"backtest_eligible": False}),
+            _trusted_event("string-true", metadata={"backtest_eligible": "true"}),
+            _trusted_event("numeric-one", metadata={"backtest_eligible": 1}),
         ]
     )
 
@@ -128,7 +137,7 @@ def test_mark_legacy_events_untrusted_updates_missing_schema():
     conn = _get_conn()
     row = conn.execute(
         """
-        SELECT trust_status, schema_version
+        SELECT trust_status, schema_version, quarantine_reason
         FROM biotech_events
         WHERE id = ?
         """,
@@ -137,4 +146,8 @@ def test_mark_legacy_events_untrusted_updates_missing_schema():
     conn.close()
 
     assert updated == 1
-    assert (row["trust_status"], row["schema_version"]) == ("legacy_untrusted", 1)
+    assert (
+        row["trust_status"],
+        row["schema_version"],
+        row["quarantine_reason"],
+    ) == ("legacy_untrusted", 1, "legacy row missing trust provenance")

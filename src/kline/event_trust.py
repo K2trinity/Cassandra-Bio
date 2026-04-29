@@ -99,19 +99,9 @@ def apply_event_trust(
 
 
 def is_metadata_backtest_eligible(value: object) -> bool:
-    """Return true only for explicit true-like metadata.backtest_eligible."""
+    """Return true only for explicit boolean True metadata.backtest_eligible."""
     metadata = decode_metadata(value)
-    eligible = metadata.get("backtest_eligible")
-    if isinstance(eligible, bool):
-        return eligible is True
-    if isinstance(eligible, str):
-        return eligible.strip().lower() in {"true", "1", "yes", "y"}
-    if isinstance(eligible, (int, float)) and not isinstance(eligible, bool):
-        try:
-            return math.isfinite(float(eligible)) and float(eligible) == 1.0
-        except (TypeError, ValueError):
-            return False
-    return False
+    return metadata.get("backtest_eligible") is True
 
 
 def _utc_datetime(value: datetime | None) -> datetime:
