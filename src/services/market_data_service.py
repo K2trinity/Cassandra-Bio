@@ -3,21 +3,14 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from loguru import logger
 import pandas as pd
 
 from src.backtest.data_loader import load_ohlc, refresh_ohlc, DATA_DIR
 
 
 def _is_cache_stale(path: Path, max_age_hours: int) -> bool:
-    """Check if cached Parquet file is older than max_age_hours.
-
-    Args:
-        path: Path to the Parquet file
-        max_age_hours: Maximum age in hours before cache is considered stale
-
-    Returns:
-        True if file doesn't exist or is older than max_age_hours, False otherwise
-    """
+    """Check if cached Parquet file is older than max_age_hours."""
     if not path.exists():
         return True
 
@@ -38,17 +31,9 @@ def _serialize_ohlc_frame(df: pd.DataFrame) -> list[dict]:
 def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
     """Get OHLC rows plus source freshness status.
 
-    Checks if cached Parquet is fresh (< max_age_hours old). If fresh, loads
-    from cache. If stale or missing, refreshes from yfinance. When refresh
-    fails but local cache can still be loaded, returns those cached rows with
-    ``status='stale'`` so the UI can show usable but dated data.
-
-    Args:
-        ticker: Stock ticker symbol (e.g., "AAPL")
-        max_age_hours: Maximum cache age in hours before refresh (default 24)
-
-    Returns:
-        Dict with rows, status, and optional message.
+    If refresh fails but a stale local cache exists, return the stale rows with
+    status metadata. If no usable cache exists, return an error payload so the
+    workspace can render a source status instead of crashing the route.
     """
     cache_path = DATA_DIR / f"{ticker}.parquet"
     is_stale = _is_cache_stale(cache_path, max_age_hours)
@@ -56,12 +41,18 @@ def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
 
     try:
         df = refresh_ohlc(ticker) if is_stale else load_ohlc(ticker)
-    except Exception as exc:
-        if not is_stale or not had_cache:
-            raise
-        return _stale_payload(ticker, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        if is_stale and had_cache:
+            return _stale_payload(ticker, str(exc))
+        logger.warning(f"Failed to fetch OHLC for {ticker}: {exc}")
+        return {"rows": [], "status": "error", "message": str(exc)}
 
-    rows = _serialize_ohlc_frame(df)
+    try:
+        rows = _serialize_ohlc_frame(df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to serialize OHLC rows for {ticker}: {exc}")
+        return {"rows": [], "status": "error", "message": str(exc)}
+
     if is_stale and had_cache and not rows:
         return _stale_payload(ticker, "refresh returned no rows")
     return {

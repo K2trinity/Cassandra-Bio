@@ -1563,6 +1563,8 @@ button.ghost-btn {{
         output_path = Path(output_path)
 
         logger.info(f"Starting PDF generation: {output_path}")
+        if not WEASYPRINT_AVAILABLE:
+            raise RuntimeError(PDF_DEP_STATUS)
 
         # Generate HTML content
         html_content = self._get_pdf_html(document_ir, optimize_layout, ir_file_path)
@@ -1604,6 +1606,9 @@ button.ghost-btn {{
         Returns:
             bytes: PDF file byte content
         """
+        if not WEASYPRINT_AVAILABLE:
+            raise RuntimeError(PDF_DEP_STATUS)
+
         html_content = self._get_pdf_html(document_ir, optimize_layout, ir_file_path)
         font_config = FontConfiguration()
         html_doc = HTML(string=html_content, base_url=str(Path.cwd()))
