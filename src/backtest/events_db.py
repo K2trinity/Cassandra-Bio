@@ -8,6 +8,15 @@ from typing import Optional
 
 import pandas as pd
 
+from src.kline.event_trust import (
+    BACKTEST_TRUSTED_OWNERSHIP_STATUSES,
+    TRUSTED_OWNERSHIP_STATUSES,
+    TRUSTED_SCHEMA_VERSION,
+    TRUSTED_STATUSES,
+    decode_metadata,
+    is_metadata_backtest_eligible,
+)
+
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "events.db"
 
 
@@ -17,6 +26,14 @@ EVENT_COLUMN_DEFINITIONS = {
     "source_ids": "TEXT",
     "confidence": "TEXT DEFAULT 'medium'",
     "metadata": "TEXT",
+    "ticker_scope": "TEXT",
+    "source_run_id": "TEXT",
+    "query_hash": "TEXT",
+    "company_identity": "TEXT",
+    "ownership_status": "TEXT DEFAULT 'unknown'",
+    "trust_status": "TEXT DEFAULT 'legacy_untrusted'",
+    "schema_version": "INTEGER DEFAULT 1",
+    "quarantine_reason": "TEXT",
 }
 
 EVENT_TABLE_SQL = """
@@ -107,6 +124,18 @@ def _serialize_event(event: dict) -> dict:
     serialized.setdefault("source_entity", None)
     serialized.setdefault("source_url", None)
     serialized.setdefault("confidence", "medium")
+    if not serialized.get("ticker_scope"):
+        serialized["ticker_scope"] = serialized.get("ticker")
+    serialized.setdefault("source_run_id", None)
+    serialized.setdefault("query_hash", None)
+    serialized.setdefault("company_identity", None)
+    if not serialized.get("ownership_status"):
+        serialized["ownership_status"] = "unknown"
+    if not serialized.get("trust_status"):
+        serialized["trust_status"] = "legacy_untrusted"
+    if serialized.get("schema_version") is None:
+        serialized["schema_version"] = 1
+    serialized.setdefault("quarantine_reason", None)
     serialized["source_ids"] = _serialize_json_field(serialized.get("source_ids"), [])
     serialized["metadata"] = _serialize_json_field(serialized.get("metadata"), {})
     return serialized
@@ -121,11 +150,15 @@ def insert_event(event: dict) -> None:
         INSERT OR IGNORE INTO biotech_events
         (
             id, date, type, priority, ticker, disease_area, catalyst, sentiment,
-            price_impact, source, source_entity, source_url, source_ids, confidence, metadata
+            price_impact, source, source_entity, source_url, source_ids, confidence, metadata,
+            ticker_scope, source_run_id, query_hash, company_identity, ownership_status,
+            trust_status, schema_version, quarantine_reason
         )
         VALUES (
             :id, :date, :type, :priority, :ticker, :disease_area, :catalyst, :sentiment,
-            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata
+            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata,
+            :ticker_scope, :source_run_id, :query_hash, :company_identity, :ownership_status,
+            :trust_status, :schema_version, :quarantine_reason
         )
     """, serialized)
     conn.commit()
@@ -141,11 +174,15 @@ def insert_events(events: list[dict]) -> int:
         INSERT OR IGNORE INTO biotech_events
         (
             id, date, type, priority, ticker, disease_area, catalyst, sentiment,
-            price_impact, source, source_entity, source_url, source_ids, confidence, metadata
+            price_impact, source, source_entity, source_url, source_ids, confidence, metadata,
+            ticker_scope, source_run_id, query_hash, company_identity, ownership_status,
+            trust_status, schema_version, quarantine_reason
         )
         VALUES (
             :id, :date, :type, :priority, :ticker, :disease_area, :catalyst, :sentiment,
-            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata
+            :price_impact, :source, :source_entity, :source_url, :source_ids, :confidence, :metadata,
+            :ticker_scope, :source_run_id, :query_hash, :company_identity, :ownership_status,
+            :trust_status, :schema_version, :quarantine_reason
         )
     """, serialized_events)
     conn.commit()
@@ -185,6 +222,116 @@ def get_events_for_chart(ticker: str) -> list[dict]:
     """Return events as list of dicts matching BiotechEvent interface."""
     df = get_events(ticker)
     return [_decode_event_row(row) for row in df.to_dict(orient="records")]
+
+
+def get_trusted_events_for_chart(ticker: str) -> list[dict]:
+    """Return trusted chart events for a ticker."""
+    conn = _get_conn()
+    _ensure_event_table(conn)
+    where_clause, params = _trusted_event_predicate(
+        ticker,
+        TRUSTED_OWNERSHIP_STATUSES,
+    )
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM biotech_events
+        WHERE {where_clause}
+        ORDER BY date
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+    return [_decode_event_row(dict(row)) for row in rows]
+
+
+def get_trusted_events_for_backtest(
+    ticker: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """Return trusted, backtest-eligible events for a ticker/date range."""
+    conn = _get_conn()
+    _ensure_event_table(conn)
+    where_clause, params = _trusted_event_predicate(
+        ticker,
+        BACKTEST_TRUSTED_OWNERSHIP_STATUSES,
+    )
+    query = f"""
+        SELECT *
+        FROM biotech_events
+        WHERE {where_clause}
+    """
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+    query += " ORDER BY date"
+
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    if df.empty:
+        return df.reset_index(drop=True)
+
+    df["metadata"] = df["metadata"].apply(decode_metadata)
+    backtest_mask = df["metadata"].apply(is_metadata_backtest_eligible)
+    return df[backtest_mask].reset_index(drop=True)
+
+
+def mark_legacy_events_untrusted(ticker: str | None = None) -> int:
+    """Mark legacy event rows untrusted without deleting them."""
+    conn = _get_conn()
+    _ensure_event_table(conn)
+    params: list[object] = ["legacy row missing trust provenance"]
+    query = """
+        UPDATE biotech_events
+        SET
+            trust_status = 'legacy_untrusted',
+            schema_version = COALESCE(schema_version, 1),
+            quarantine_reason = COALESCE(NULLIF(quarantine_reason, ''), ?)
+        WHERE (
+            trust_status IS NULL
+            OR trust_status = ''
+            OR schema_version IS NULL
+            OR schema_version < 2
+        )
+    """
+    if ticker:
+        query += " AND UPPER(ticker) = ?"
+        params.append(ticker.upper())
+    cur = conn.execute(query, params)
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return updated
+
+
+def _trusted_event_predicate(
+    ticker: str,
+    ownership_statuses: set[str],
+) -> tuple[str, list[object]]:
+    trusted_statuses = sorted(TRUSTED_STATUSES)
+    ownership_values = sorted(ownership_statuses)
+    where_clause = f"""
+        ticker_scope IS NOT NULL
+        AND UPPER(ticker_scope) = ?
+        AND trust_status IN ({_sql_placeholders(trusted_statuses)})
+        AND schema_version >= ?
+        AND ownership_status IN ({_sql_placeholders(ownership_values)})
+    """
+    params: list[object] = [
+        ticker.upper(),
+        *trusted_statuses,
+        TRUSTED_SCHEMA_VERSION,
+        *ownership_values,
+    ]
+    return where_clause, params
+
+
+def _sql_placeholders(values: list[str]) -> str:
+    return ", ".join("?" for _ in values)
 
 
 def _decode_json_field(value: object, default: object, expected_type: type) -> object:
