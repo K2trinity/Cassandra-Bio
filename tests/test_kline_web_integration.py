@@ -2,7 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -118,7 +117,9 @@ def test_kline_workspace_renders_disabled_future_capability_contracts(monkeypatc
 def test_kline_workspace_invalid_ticker_has_recovery_link(monkeypatch):
     class FailingWorkspaceService:
         def build_workspace(self, symbol: str):
-            raise ValueError("invalid ticker: use 1-16 letters, numbers, dots, or hyphens")
+            raise ValueError(
+                "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+            )
 
     monkeypatch.setattr(kline_routes, "workspace_service", FailingWorkspaceService())
     client = app.test_client()
@@ -193,6 +194,99 @@ def test_kline_workspace_api_returns_workspace_json(monkeypatch):
     assert body["ticker"] == "MRNA"
 
 
+def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
+    from src.kline.models import (
+        KlineCompany,
+        KlineEvent,
+        KlineLayer,
+        KlinePanelState,
+        KlinePriceSeries,
+    )
+
+    clinical = KlineEvent.example("MRNA")
+    clinical.id = "clinical-1"
+    news = KlineEvent(
+        id="news-1",
+        ticker="MRNA",
+        date="2026-04-21",
+        type="market_news",
+        category="news",
+        title="Market news",
+        summary="Market news",
+        sentiment="positive",
+        priority=3,
+        confidence="medium",
+        source="alphavantage",
+    )
+    macro = KlineEvent(
+        id="macro-1",
+        ticker="MRNA",
+        date="2026-04-22",
+        type="macro_economic",
+        category="macro",
+        title="Macro event",
+        summary="Macro event",
+        sentiment="neutral",
+        priority=3,
+        confidence="low",
+        source="gdelt",
+    )
+
+    class FakeWorkspaceService:
+        def build_workspace(self, symbol: str):
+            return KlineWorkspacePayload(
+                ticker="MRNA",
+                company=KlineCompany.example("MRNA"),
+                price=KlinePriceSeries.empty(),
+                layers=[
+                    KlineLayer(
+                        id="candles",
+                        kind="candles",
+                        label="Candles",
+                        visible_by_default=True,
+                        status="empty",
+                    ),
+                    KlineLayer(
+                        id="catalysts",
+                        kind="catalysts",
+                        label="Catalysts",
+                        visible_by_default=True,
+                        status="ready",
+                        points=[clinical],
+                    ),
+                    KlineLayer(
+                        id="news",
+                        kind="news",
+                        label="News",
+                        visible_by_default=True,
+                        status="ready",
+                        points=[news],
+                    ),
+                    KlineLayer(
+                        id="macro",
+                        kind="macro",
+                        label="Macro",
+                        visible_by_default=False,
+                        status="ready",
+                        points=[macro],
+                    ),
+                ],
+                panels=KlinePanelState(),
+                data_status=[],
+                warnings=[],
+                capabilities=[],
+            )
+
+    monkeypatch.setattr(kline_routes, "workspace_service", FakeWorkspaceService())
+    client = app.test_client()
+
+    response = client.get("/api/kline/events/MRNA")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert [event["id"] for event in body] == ["clinical-1", "news-1", "macro-1"]
+
+
 def test_obsolete_kline_surface_files_are_removed():
     obsolete_paths = (
         Path(PROJECT_ROOT) / "templates" / _legacy_literal("kline", ".html"),
@@ -221,7 +315,9 @@ def test_kline_template_cleanup_references_are_absent():
     for template_path in templates_dir.rglob("*.html"):
         template_source = template_path.read_text(encoding="utf-8")
         for reference in LEGACY_KLINE_TEMPLATE_REFERENCES:
-            assert reference not in template_source, f"{reference} referenced by {template_path}"
+            assert (
+                reference not in template_source
+            ), f"{reference} referenced by {template_path}"
 
 
 def test_backtest_run_api_returns_runner_payload(monkeypatch):
@@ -334,7 +430,9 @@ def test_backtest_run_api_rejects_invalid_ticker_without_runner(monkeypatch):
     body = response.get_json()
 
     assert response.status_code == 400
-    assert body["error"] == "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+    assert (
+        body["error"] == "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+    )
 
 
 def test_backtest_run_api_rejects_non_object_json_without_runner(monkeypatch):
@@ -395,7 +493,10 @@ def test_backtest_run_api_rejects_out_of_range_risk_parameters(monkeypatch):
     body = response.get_json()
 
     assert response.status_code == 400
-    assert body["error"] == "max_position_pct must be greater than 0 and less than or equal to 1"
+    assert (
+        body["error"]
+        == "max_position_pct must be greater than 0 and less than or equal to 1"
+    )
 
 
 def test_backtest_result_api_returns_saved_payload(monkeypatch):

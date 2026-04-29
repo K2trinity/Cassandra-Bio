@@ -248,6 +248,43 @@ def test_catalyst_provider_uses_raw_impact_when_score_fields_are_missing():
     assert events[0].metadata["note"] == "keep"
 
 
+def test_catalyst_provider_projects_phase2_metadata_fields():
+    contracts = _contracts()
+    provider = contracts.CatalystEventProvider(
+        fetch_events=lambda ticker, max_age_hours=6: [
+            {
+                "id": "news-1",
+                "date": "2026-04-21",
+                "type": "market_news",
+                "ticker": "MRNA",
+                "category": "clinical",
+                "title": "Market news",
+                "summary": "Market news",
+                "sentiment": "positive",
+                "source": "alphavantage",
+                "metadata": {
+                    "category": "news",
+                    "source_tier": "market_news",
+                    "source_kind": "market_news",
+                    "confidence_score": 0.76,
+                    "impact_score": 0.55,
+                    "backtest_eligible": True,
+                },
+            }
+        ],
+        fetch_statuses=None,
+    )
+
+    events, _statuses = provider.load("MRNA")
+
+    assert events[0].category == "news"
+    assert events[0].source_tier == "market_news"
+    assert events[0].source_kind == "market_news"
+    assert events[0].confidence_score == 0.76
+    assert events[0].impact_score == 0.55
+    assert events[0].backtest_eligible is True
+
+
 def test_catalyst_provider_uses_injected_status_rows():
     contracts = _contracts()
     provider = contracts.CatalystEventProvider(
@@ -459,7 +496,7 @@ def test_workspace_warnings_include_failed_source_statuses():
     assert workspace.warnings[0].message == "429 Too Many Requests"
 
 
-def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabilities():
+def test_workspace_payload_contains_phase2_layers_and_future_capabilities():
     contracts = _contracts()
     service = _service(contracts)
 
@@ -470,14 +507,24 @@ def test_workspace_payload_contains_phase1_layers_and_disabled_future_capabiliti
     assert [layer["kind"] for layer in payload["layers"]] == [
         "candles",
         "catalysts",
+        "news",
+        "macro",
         "backtest",
     ]
     assert payload["layers"][1]["points"][0]["ticker"] == "MRNA"
+    assert payload["layers"][2]["points"] == []
+    assert payload["layers"][3]["points"] == []
     assert {
         "id": "news",
-        "enabled": False,
+        "enabled": True,
         "phase": 2,
         "label": "News",
+    } in payload["capabilities"]
+    assert {
+        "id": "macro",
+        "enabled": True,
+        "phase": 2,
+        "label": "Macro",
     } in payload["capabilities"]
     assert {
         "id": "range_analysis",
@@ -502,3 +549,87 @@ def test_range_context_returns_phase1_price_and_catalyst_summary():
     assert context["end_date"] == "2026-04-20"
     assert context["catalyst_count"] == 1
     assert context["phase3_ready"] is True
+
+
+def test_workspace_payload_splits_catalyst_news_and_macro_layers():
+    contracts = _contracts()
+
+    class MixedEventProvider:
+        def load(self, ticker: str):
+            return [
+                contracts.KlineEvent(
+                    id="clinical-1",
+                    ticker=ticker,
+                    date="2026-04-20",
+                    type="trial_results_posted",
+                    category="clinical",
+                    title="Results posted",
+                    summary="Results posted",
+                    sentiment="positive",
+                    priority=1,
+                    confidence="high",
+                    source="clinicaltrials",
+                ),
+                contracts.KlineEvent(
+                    id="news-1",
+                    ticker=ticker,
+                    date="2026-04-21",
+                    type="market_news",
+                    category="news",
+                    title="Market news",
+                    summary="Market news",
+                    sentiment="positive",
+                    priority=3,
+                    confidence="medium",
+                    source="alphavantage",
+                ),
+                contracts.KlineEvent(
+                    id="macro-1",
+                    ticker=ticker,
+                    date="2026-04-22",
+                    type="macro_economic",
+                    category="clinical",
+                    title="Macro context",
+                    summary="Macro context",
+                    sentiment="neutral",
+                    priority=3,
+                    confidence="low",
+                    source="gdelt",
+                ),
+            ], []
+
+    service = contracts.KlineWorkspaceService(
+        resolver=contracts.TickerResolver(),
+        ohlc_provider=FakeOHLCProvider(
+            contracts.KlineDataStatus,
+            contracts.KlinePriceSeries,
+        ),
+        catalyst_provider=MixedEventProvider(),
+        backtest_provider=FakeBacktestProvider(),
+    )
+
+    payload = service.build_workspace("MRNA").to_dict()
+    layers = {layer["kind"]: layer for layer in payload["layers"]}
+
+    assert [layer["kind"] for layer in payload["layers"]] == [
+        "candles",
+        "catalysts",
+        "news",
+        "macro",
+        "backtest",
+    ]
+    assert [event["id"] for event in layers["catalysts"]["points"]] == ["clinical-1"]
+    assert [event["id"] for event in layers["news"]["points"]] == ["news-1"]
+    assert [event["id"] for event in layers["macro"]["points"]] == ["macro-1"]
+    assert {
+        "id": "news",
+        "enabled": True,
+        "phase": 2,
+        "label": "News",
+    } in payload["capabilities"]
+    assert {
+        "id": "macro",
+        "enabled": True,
+        "phase": 2,
+        "label": "Macro",
+    } in payload["capabilities"]

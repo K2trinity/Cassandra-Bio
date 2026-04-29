@@ -25,24 +25,36 @@
   background: #0b1120;
   border: 1px solid #334155;
   border-radius: 6px;
+  box-sizing: border-box;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   color: #e5e7eb;
   font-size: 12px;
+  line-height: 1.35;
   max-width: 280px;
+  overflow-wrap: anywhere;
   padding: 8px 10px;
   pointer-events: none;
   position: absolute;
+  white-space: normal;
   z-index: 5;
 }
 
 .pt-title {
   color: #f8fafc;
   font-weight: 700;
+  line-height: 1.35;
   margin-bottom: 4px;
+  overflow-wrap: anywhere;
 }
 
 .pt-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  justify-content: space-between;
+  justify-content: flex-start;
+}
+
+.pt-meta span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

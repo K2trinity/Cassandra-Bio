@@ -2,6 +2,7 @@
   "use strict";
 
   var rangeContextRequestId = 0;
+  var EVENT_LAYER_KINDS = ["catalysts", "news", "macro"];
 
   function byId(id) {
     return document.getElementById(id);
@@ -23,6 +24,34 @@
     return (workspace.layers || []).find(function (layer) {
       return layer.kind === "catalysts";
     }) || { points: [] };
+  }
+
+  function isEventLayerKind(kind) {
+    return EVENT_LAYER_KINDS.indexOf(kind) !== -1;
+  }
+
+  function eventLayers(workspace) {
+    return (workspace.layers || []).filter(function (layer) {
+      return isEventLayerKind(layer.kind);
+    });
+  }
+
+  function allEvents(workspace) {
+    var events = [];
+    eventLayers(workspace).forEach(function (layer) {
+      events = events.concat(layer.points || []);
+    });
+    return events;
+  }
+
+  function activeEvents(workspace, state) {
+    var events = [];
+    eventLayers(workspace).forEach(function (layer) {
+      if (state.visibleEventLayers && state.visibleEventLayers[layer.kind]) {
+        events = events.concat(layer.points || []);
+      }
+    });
+    return events;
   }
 
   function backtestLayer(workspace) {
@@ -127,7 +156,7 @@
 
     var cleanup = window.PokieChart.render(container, {
       ohlcData: (workspace.price && workspace.price.rows) || [],
-      events: state.showCatalysts ? catalystLayer(workspace).points || [] : [],
+      events: activeEvents(workspace, state),
       highlightedEventId: state.selectedEventId,
       equityCurve: state.showBacktest ? state.equityCurve : [],
       signals: state.showBacktest ? state.signals : [],
@@ -185,21 +214,23 @@
     }
     bar.replaceChildren();
 
+    var renderedLayerKinds = {};
     (workspace.layers || []).forEach(function (layer) {
       var button = makeElement("button", { type: "button", text: layer.label || layer.kind });
       button.dataset.layerKind = layer.kind;
-      var isCatalysts = layer.kind === "catalysts";
+      renderedLayerKinds[layer.kind] = true;
+      var isEventLayer = isEventLayerKind(layer.kind);
       var isBacktest = layer.kind === "backtest";
-      var isActive = isCatalysts
-        ? state.showCatalysts
+      var isActive = isEventLayer
+        ? state.visibleEventLayers && state.visibleEventLayers[layer.kind]
         : isBacktest
           ? state.showBacktest && hasBacktestOverlays(state)
           : layer.visible_by_default !== false;
       button.classList.toggle("is-active", isActive);
-      if (isCatalysts) {
+      if (isEventLayer) {
         button.addEventListener("click", function () {
-          state.showCatalysts = !state.showCatalysts;
-          button.classList.toggle("is-active", state.showCatalysts);
+          state.visibleEventLayers[layer.kind] = !state.visibleEventLayers[layer.kind];
+          renderLayerBar(workspace, state);
           renderChart(workspace, state);
         });
       } else if (isBacktest) {
@@ -219,6 +250,9 @@
     });
 
     (workspace.capabilities || []).forEach(function (capability) {
+      if (renderedLayerKinds[capability.id]) {
+        return;
+      }
       var button = makeElement("button", { type: "button", text: capability.label });
       button.disabled = !capability.enabled;
       button.dataset.capability = capability.id;
@@ -277,12 +311,22 @@
     list.appendChild(makeElement("dd", { text: value == null || value === "" ? "-" : String(value) }));
   }
 
+  function eventMetadataValue(event, key) {
+    if (event && event[key] != null) {
+      return event[key];
+    }
+    if (event && event.metadata && event.metadata[key] != null) {
+      return event.metadata[key];
+    }
+    return null;
+  }
+
   function renderDetails(workspace, state) {
     var panel = document.querySelector('[data-panel="details"]');
     if (!panel) {
       return;
     }
-    var events = catalystLayer(workspace).points || [];
+    var events = allEvents(workspace);
     var selected = events.find(function (event) {
       return event.id === state.selectedEventId;
     });
@@ -311,8 +355,11 @@
     appendDefinition(list, "Source entity", selected.source_entity);
     appendDefinition(list, "Identifiers", (selected.source_ids || []).join(", "));
     appendDefinition(list, "Confidence", selected.confidence || "medium");
+    appendDefinition(list, "Source tier", eventMetadataValue(selected, "source_tier"));
+    appendDefinition(list, "Confidence score", eventMetadataValue(selected, "confidence_score"));
+    appendDefinition(list, "Backtest eligible", eventMetadataValue(selected, "backtest_eligible"));
     appendDefinition(list, "Sentiment", selected.sentiment || "unknown");
-    appendDefinition(list, "Impact score", selected.impact_score);
+    appendDefinition(list, "Impact score", eventMetadataValue(selected, "impact_score"));
     panel.appendChild(list);
 
     var sourceUrl = safeExternalUrl(selected.source_url);
@@ -373,6 +420,10 @@
 
   function renderMetrics(node, metrics) {
     node.replaceChildren();
+    appendMetrics(node, metrics);
+  }
+
+  function appendMetrics(node, metrics) {
     var keys = Object.keys(metrics || {});
     if (!keys.length) {
       return;
@@ -382,6 +433,46 @@
       appendDefinition(list, key, metrics[key]);
     });
     node.appendChild(list);
+  }
+
+  function renderBacktestDiagnostics(node, body) {
+    ["event_filter", "signal_summary", "baseline"].forEach(function (key) {
+      if (!body || !body[key]) {
+        return;
+      }
+      var section = makeElement("section", { className: "backtest-diagnostics" });
+      section.appendChild(makeElement("h3", { className: "panel-heading", text: key }));
+      appendMetrics(section, body[key]);
+      node.appendChild(section);
+    });
+    renderEventAttribution(node, body && body.event_attribution);
+  }
+
+  function renderEventAttribution(node, attribution) {
+    if (!attribution) {
+      return;
+    }
+    var section = makeElement("section", { className: "backtest-diagnostics" });
+    section.appendChild(makeElement("h3", { className: "panel-heading", text: "event_attribution" }));
+    [
+      ["by_source", "source"],
+      ["by_category", "category"],
+      ["by_type", "type"]
+    ].forEach(function (config) {
+      var groupKey = config[0];
+      var labelKey = config[1];
+      var rows = attribution[groupKey] || [];
+      if (!rows.length) {
+        return;
+      }
+      section.appendChild(makeElement("h4", { className: "panel-subheading", text: groupKey }));
+      var list = makeElement("dl", { className: "metrics-list" });
+      rows.forEach(function (row) {
+        appendDefinition(list, row[labelKey] || "unknown", row.count);
+      });
+      section.appendChild(list);
+    });
+    node.appendChild(section);
   }
 
   function renderBacktest(workspace, state) {
@@ -409,6 +500,13 @@
     results.id = "backtest-results";
     panel.appendChild(status);
     panel.appendChild(results);
+
+    var savedSummary = (backtestLayer(workspace).summary || {});
+    if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.baseline || savedSummary.event_attribution) {
+      status.textContent = "Run " + (savedSummary.run_id || "complete") + " complete.";
+      renderMetrics(results, savedSummary.metrics || {});
+      renderBacktestDiagnostics(results, savedSummary);
+    }
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -447,6 +545,7 @@
         state.showBacktest = true;
         status.textContent = "Run " + (body.run_id || "complete") + " complete.";
         renderMetrics(results, body.metrics || {});
+        renderBacktestDiagnostics(results, body);
         renderLayerBar(workspace, state);
         renderChart(workspace, state);
       }).catch(function () {
@@ -513,7 +612,10 @@
 
     var state = {
       selectedEventId: (workspace.panels && workspace.panels.selected_event_id) || null,
-      showCatalysts: layerVisibleByDefault(workspace, "catalysts"),
+      visibleEventLayers: eventLayers(workspace).reduce(function (visibility, layer) {
+        visibility[layer.kind] = layer.visible_by_default !== false;
+        return visibility;
+      }, {}),
       showBacktest: layerVisibleByDefault(workspace, "backtest"),
       equityCurve: savedBacktest.series || [],
       signals: savedBacktestSummary.signals || [],

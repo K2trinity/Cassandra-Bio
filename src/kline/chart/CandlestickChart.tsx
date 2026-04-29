@@ -8,6 +8,10 @@ interface PlacedEvent extends BiotechEvent {
   radius: number;
   color: string;
   alpha: number;
+  confidenceScore?: number;
+  impactScore?: number;
+  sourceTier?: string;
+  backtestEligible?: boolean;
 }
 
 interface Props {
@@ -28,6 +32,7 @@ const EVENT_CATEGORY_COLOR: Record<string, string> = {
   clinical: '#00e5ff',
   regulatory: '#00e676',
   corporate: '#a78bfa',
+  news: '#38bdf8',
   macro: '#f59e0b',
   report: '#f472b6',
 };
@@ -48,6 +53,22 @@ const EVENT_TYPE_COLOR: Record<string, string> = {
 
 const EVENT_TYPE_COLOR_DEFAULT = '#64748b';
 
+interface SourceTierStyle {
+  color: string;
+  lineWidth: number;
+  dash?: number[];
+}
+
+function normalizeUnitScore(value: number, useMagnitude = false): number {
+  const raw = useMagnitude ? Math.abs(value) : value;
+  const normalized = raw > 1 && raw <= 100 ? raw / 100 : raw;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+function getNumberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function getEventColor(event: BiotechEvent): string {
   if (event.category && EVENT_CATEGORY_COLOR[event.category]) {
     return EVENT_CATEGORY_COLOR[event.category];
@@ -55,16 +76,76 @@ function getEventColor(event: BiotechEvent): string {
   return EVENT_TYPE_COLOR[event.type] || EVENT_TYPE_COLOR_DEFAULT;
 }
 
-function getEventRadius(priority: number, priceImpact?: number): number {
+function getEventRadius(priority: number, priceImpact?: number, impactScore?: number): number {
   let r = 2;
   if (priority === 1) r += 1.2;
   else if (priority === 2) r += 0.6;
-  if (priceImpact !== undefined) r += Math.min(Math.abs(priceImpact) * 15, 1.5);
-  return Math.min(r, 4.5);
+  if (impactScore !== undefined) {
+    r += normalizeUnitScore(impactScore, true) * 2.2;
+  } else if (priceImpact !== undefined) {
+    r += Math.min(Math.abs(priceImpact) * 15, 1.5);
+  }
+  return Math.min(r, 5.5);
 }
 
-function getEventAlpha(priority: number): number {
+function getEventAlpha(priority: number, confidenceScore?: number): number {
+  if (typeof confidenceScore === 'number') {
+    return Math.max(0.25, normalizeUnitScore(confidenceScore));
+  }
   return priority === 1 ? 0.8 : priority === 2 ? 0.6 : 0.4;
+}
+
+function getEventConfidenceScore(event: BiotechEvent): number | undefined {
+  return getNumberValue(event.confidence_score) ?? getNumberValue(event.metadata?.confidence_score);
+}
+
+function getEventImpactScore(event: BiotechEvent): number | undefined {
+  return getNumberValue(event.impact_score) ?? getNumberValue(event.metadata?.impact_score);
+}
+
+function getEventBacktestEligible(event: BiotechEvent): boolean | undefined {
+  if (typeof event.backtest_eligible === 'boolean') return event.backtest_eligible;
+  if (typeof event.metadata?.backtest_eligible === 'boolean') return event.metadata.backtest_eligible;
+  return undefined;
+}
+
+function getEventSourceTier(event: BiotechEvent): string | undefined {
+  if (typeof event.source_tier === 'string' && event.source_tier.trim()) {
+    return event.source_tier.trim();
+  }
+  if (typeof event.metadata?.source_tier === 'string' && event.metadata.source_tier.trim()) {
+    return event.metadata.source_tier.trim();
+  }
+  return undefined;
+}
+
+function normalizeSourceTier(sourceTier?: string): 'primary' | 'secondary' | 'tertiary' | undefined {
+  if (!sourceTier) return undefined;
+  const normalized = sourceTier.toLowerCase().replace(/[\s_-]+/g, '');
+  if (['1', 'tier1', 'primary', 'official', 'exchange', 'regulatory'].includes(normalized)) {
+    return 'primary';
+  }
+  if (['3', 'tier3', 'tertiary', 'derived', 'model', 'inferred'].includes(normalized)) {
+    return 'tertiary';
+  }
+  return 'secondary';
+}
+
+function getSourceTierStyle(sourceTier?: string): SourceTierStyle | null {
+  const tier = normalizeSourceTier(sourceTier);
+  if (tier === 'primary') return { color: '#f8fafc', lineWidth: 1.7 };
+  if (tier === 'secondary') return { color: '#cbd5e1', lineWidth: 1.2, dash: [3, 2] };
+  if (tier === 'tertiary') return { color: '#64748b', lineWidth: 1, dash: [1.5, 2.5] };
+  return null;
+}
+
+function formatSourceTier(sourceTier?: string): string {
+  if (!sourceTier) return '-';
+  return sourceTier.replace(/[_-]+/g, ' ');
+}
+
+function formatScore(score?: number, useMagnitude = false): string {
+  return score === undefined ? '-' : normalizeUnitScore(score, useMagnitude).toFixed(2);
 }
 
 export default function CandlestickChart({
@@ -124,6 +205,20 @@ export default function CandlestickChart({
       ctx.beginPath();
       ctx.arc(p.px * dpr, p.py * dpr, radius * dpr, 0, Math.PI * 2);
       ctx.fill();
+
+      const sourceTierStyle = getSourceTierStyle(p.sourceTier);
+      if (sourceTierStyle) {
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = isHover || isHighlighted ? 1 : Math.max(alpha, 0.65);
+        ctx.strokeStyle = sourceTierStyle.color;
+        ctx.lineWidth = sourceTierStyle.lineWidth * dpr;
+        ctx.setLineDash(sourceTierStyle.dash ? sourceTierStyle.dash.map((value) => value * dpr) : []);
+        ctx.beginPath();
+        ctx.arc(p.px * dpr, p.py * dpr, (radius + 1.8) * dpr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       if (isHover || isHighlighted) {
         ctx.shadowColor = p.color;
@@ -352,7 +447,11 @@ export default function CandlestickChart({
 
       for (let i = 0; i < eArr.length; i++) {
         const evt = eArr[i];
-        const radius = getEventRadius(evt.priority, evt.price_impact);
+        const confidenceScore = getEventConfidenceScore(evt);
+        const impactScore = getEventImpactScore(evt);
+        const sourceTier = getEventSourceTier(evt);
+        const backtestEligible = getEventBacktestEligible(evt);
+        const radius = getEventRadius(evt.priority, evt.price_impact, impactScore);
         const candleLowY = y(ohlc.low);
         const py = margin.top + candleLowY + 6 + i * eSpacing;
 
@@ -364,7 +463,11 @@ export default function CandlestickChart({
           py,
           radius,
           color: getEventColor(evt),
-          alpha: getEventAlpha(evt.priority),
+          alpha: getEventAlpha(evt.priority, confidenceScore),
+          confidenceScore,
+          impactScore,
+          sourceTier,
+          backtestEligible,
         });
       }
     }
@@ -557,6 +660,10 @@ export default function CandlestickChart({
               const tooltipType = hit.category || hit.type || 'event';
               const impactStr = hit.price_impact !== undefined ? `${(hit.price_impact * 100).toFixed(2)}%` : '-';
               const impactColor = hit.price_impact !== undefined ? (hit.price_impact >= 0 ? '#00e676' : '#ff5252') : '#555';
+              const confidenceScore = hit.confidenceScore ?? getEventConfidenceScore(hit);
+              const impactScore = hit.impactScore ?? getEventImpactScore(hit);
+              const sourceTier = hit.sourceTier || getEventSourceTier(hit);
+              const backtestEligible = hit.backtestEligible ?? getEventBacktestEligible(hit);
               tooltip.replaceChildren();
               const title = document.createElement('div');
               title.className = 'pt-title';
@@ -571,15 +678,32 @@ export default function CandlestickChart({
               impact.className = 'pt-ret';
               impact.style.color = impactColor;
               impact.textContent = `Impact: ${impactStr}`;
-              meta.append(type, impact);
+              const tier = document.createElement('span');
+              tier.className = 'pt-source-tier';
+              tier.textContent = `Source tier: ${formatSourceTier(sourceTier)}`;
+              const confidence = document.createElement('span');
+              confidence.className = 'pt-confidence';
+              confidence.textContent = `Confidence: ${formatScore(confidenceScore)}`;
+              const score = document.createElement('span');
+              score.className = 'pt-impact-score';
+              score.textContent = `Impact score: ${formatScore(impactScore, true)}`;
+              const backtest = document.createElement('span');
+              backtest.className = 'pt-backtest';
+              backtest.textContent = `Backtest: ${backtestEligible === true ? 'eligible' : 'visual only'}`;
+              meta.append(type, impact, tier, confidence, score, backtest);
               tooltip.append(title, meta);
               tooltip.style.display = 'block';
-              const tipW = 280;
+              tooltip.style.left = '0px';
+              tooltip.style.top = '0px';
+              const tipW = tooltip.offsetWidth || 280;
+              const tipH = tooltip.offsetHeight || 88;
               const onRight = hit.px < fullWidth / 2;
               const tipX = onRight ? hit.px + 12 : hit.px - tipW - 12;
               const tipY = hit.py - 40;
-              tooltip.style.left = `${Math.max(4, tipX)}px`;
-              tooltip.style.top = `${Math.max(4, tipY)}px`;
+              const maxX = Math.max(4, fullWidth - tipW - 4);
+              const maxY = Math.max(4, fullHeight - tipH - 4);
+              tooltip.style.left = `${Math.min(maxX, Math.max(4, tipX))}px`;
+              tooltip.style.top = `${Math.min(maxY, Math.max(4, tipY))}px`;
             } else {
               tooltip.style.display = 'none';
             }

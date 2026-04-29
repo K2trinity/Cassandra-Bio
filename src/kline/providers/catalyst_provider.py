@@ -9,8 +9,18 @@ from typing import Any
 
 from src.kline.models import KlineDataStatus, KlineEvent
 
-
 _OMITTED = object()
+_VALID_CATEGORIES = {"clinical", "regulatory", "corporate", "news", "macro", "report"}
+_MARKET_NEWS_SOURCES = {"alphavantage", "alpha_vantage", "market_news", "news"}
+_MACRO_SOURCES = {"gdelt", "fred", "worldbank", "macro"}
+_NEWS_TYPES = {"market_news", "news", "press_mention"}
+_MACRO_TYPES = {
+    "macro_economic",
+    "macro_policy",
+    "geopolitical",
+    "trade_policy",
+    "sanctions",
+}
 
 
 class CatalystEventProvider:
@@ -24,7 +34,9 @@ class CatalystEventProvider:
 
             fetch_events = get_events_for_ticker
         if fetch_statuses is _OMITTED:
-            from src.services.event_ingestion_service import get_source_statuses_for_ticker
+            from src.services.event_ingestion_service import (
+                get_source_statuses_for_ticker,
+            )
 
             fetch_statuses = get_source_statuses_for_ticker
         self.fetch_events = fetch_events
@@ -75,25 +87,32 @@ def _normalize_event(ticker: str, raw: dict[str, Any], index: int) -> KlineEvent
             metadata.setdefault("impact", raw_impact)
 
     event_type = _string_value(
-        raw.get("type")
-        or raw.get("event_type")
-        or raw.get("category")
-        or "catalyst"
+        raw.get("type") or raw.get("event_type") or raw.get("category") or "catalyst"
     )
     title = _string_value(
-        raw.get("title")
-        or raw.get("catalyst")
-        or raw.get("summary")
-        or event_type
+        raw.get("title") or raw.get("catalyst") or raw.get("summary") or event_type
     )
     summary = _string_value(raw.get("summary") or raw.get("catalyst") or title)
+    metadata_category = _category_value(metadata.get("category"))
+    category = metadata_category or _category_for(raw)
+    source_tier = _optional_string(metadata.get("source_tier")) or _source_tier(
+        raw.get("source")
+    )
+    source_kind = (
+        _optional_string(metadata.get("source_kind"))
+        or _optional_string(raw.get("source_kind"))
+        or source_tier
+    )
+    impact_score = _first_present(_impact_score(raw), metadata.get("impact_score"))
 
     return KlineEvent(
-        id=_string_value(raw.get("id") or raw.get("event_id") or f"{ticker}-{index + 1}"),
+        id=_string_value(
+            raw.get("id") or raw.get("event_id") or f"{ticker}-{index + 1}"
+        ),
         ticker=ticker,
         date=_string_value(raw.get("date") or raw.get("event_date") or ""),
         type=event_type,
-        category=_category_for(raw),
+        category=category,
         title=title,
         summary=summary,
         sentiment=_string_value(raw.get("sentiment") or "neutral"),
@@ -107,7 +126,11 @@ def _normalize_event(ticker: str, raw: dict[str, Any], index: int) -> KlineEvent
         source_entity=_optional_string(raw.get("source_entity")),
         disease_area=_optional_string(raw.get("disease_area")),
         drug_name=_optional_string(raw.get("drug_name") or raw.get("drug")),
-        impact_score=_impact_score(raw),
+        impact_score=impact_score,
+        source_tier=source_tier,
+        source_kind=source_kind,
+        confidence_score=_number_or_none(metadata.get("confidence_score")),
+        backtest_eligible=_bool_or_none(metadata.get("backtest_eligible")),
         metadata=metadata,
     )
 
@@ -172,6 +195,12 @@ def _category_for(raw: dict[str, Any]) -> str:
         or event_type == "cassandra_report"
     ):
         return "report"
+    if category in _VALID_CATEGORIES:
+        return category
+    if source in _MARKET_NEWS_SOURCES or event_type in _NEWS_TYPES:
+        return "news"
+    if source in _MACRO_SOURCES or event_type in _MACRO_TYPES:
+        return "macro"
 
     values = [
         raw.get("category"),
@@ -190,11 +219,26 @@ def _category_for(raw: dict[str, Any]) -> str:
     ):
         return "macro"
     if any(
-        token in text
-        for token in ("partnership", "financing", "patent", "competitor")
+        token in text for token in ("partnership", "financing", "patent", "competitor")
     ):
         return "corporate"
     return "clinical"
+
+
+def _category_value(value: object) -> str | None:
+    category = str(value or "").strip().lower()
+    return category if category in _VALID_CATEGORIES else None
+
+
+def _source_tier(source: object) -> str:
+    source_text = str(source or "").strip().lower()
+    if source_text in {"clinicaltrials", "clinicaltrials.gov", "openfda", "fda"}:
+        return "official"
+    if source_text in _MARKET_NEWS_SOURCES:
+        return "market_news"
+    if source_text in _MACRO_SOURCES:
+        return "macro"
+    return "other"
 
 
 def _metadata_dict(value: object) -> dict[str, Any]:
@@ -234,6 +278,13 @@ def _impact_score(raw: dict[str, Any]) -> object:
     return None
 
 
+def _first_present(*values: object) -> object:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _int_value(value: object, default: int) -> int:
     try:
         return int(value)  # type: ignore[arg-type]
@@ -250,3 +301,26 @@ def _optional_string(value: object) -> str | None:
         return None
     text = str(value)
     return text if text else None
+
+
+def _number_or_none(value: object) -> float | int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_or_none(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None

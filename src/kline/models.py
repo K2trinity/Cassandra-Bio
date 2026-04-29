@@ -111,6 +111,10 @@ class KlineEvent(_DataclassDictMixin):
     disease_area: str | None = None
     drug_name: str | None = None
     impact_score: float | int | str | None = None
+    source_tier: str | None = None
+    source_kind: str | None = None
+    confidence_score: float | int | None = None
+    backtest_eligible: bool | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -156,8 +160,8 @@ class KlinePanelState(_DataclassDictMixin):
 
 def disabled_future_capabilities() -> list[KlineCapability]:
     return [
-        KlineCapability(id="news", enabled=False, phase=2, label="News"),
-        KlineCapability(id="macro", enabled=False, phase=2, label="Macro"),
+        KlineCapability(id="news", enabled=True, phase=2, label="News"),
+        KlineCapability(id="macro", enabled=True, phase=2, label="Macro"),
         KlineCapability(id="forecast", enabled=False, phase=3, label="Forecast"),
         KlineCapability(
             id="range_analysis",

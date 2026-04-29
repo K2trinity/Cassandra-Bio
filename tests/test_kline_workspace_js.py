@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -33,8 +32,7 @@ def _run_workspace_script(body: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_workspace_js_rejects_non_absolute_web_source_urls():
-    result = _run_workspace_script(
-        r"""
+    result = _run_workspace_script(r"""
         const unsafeUrls = [
           'javascript:alert(1)',
           'data:text/html,<h1>x</h1>',
@@ -67,15 +65,13 @@ def test_workspace_js_rejects_non_absolute_web_source_urls():
             throw new Error('unsafe source_url produced a clickable link: ' + sourceUrl + ' -> ' + links[0].href);
           }
         }
-        """
-    )
+        """)
 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_workspace_js_allows_absolute_web_source_url():
-    result = _run_workspace_script(
-        r"""
+    result = _run_workspace_script(r"""
         const expected = 'https://clinicaltrials.gov/study/NCT00000001';
         installWorkspace(makeWorkspace({
           panels: { selected_event_id: 'evt-1' },
@@ -91,15 +87,13 @@ def test_workspace_js_allows_absolute_web_source_url():
         if (links[0].href !== expected) {
           throw new Error('valid source_url changed unexpectedly: ' + links[0].href);
         }
-        """
-    )
+        """)
 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_workspace_js_range_context_ignores_stale_response():
-    result = _run_workspace_script(
-        r"""
+    result = _run_workspace_script(r"""
         const deferred = [];
         fetch = function (url) {
           const request = makeDeferred();
@@ -138,15 +132,13 @@ def test_workspace_js_range_context_ignores_stale_response():
         if (text.includes('99 catalysts') || text.includes('2026-04-01')) {
           throw new Error('stale range response overwrote latest context: ' + text);
         }
-        """
-    )
+        """)
 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_workspace_js_backtest_ignores_stale_response():
-    result = _run_workspace_script(
-        r"""
+    result = _run_workspace_script(r"""
         const deferred = [];
         fetch = function (url) {
           const request = makeDeferred();
@@ -190,15 +182,13 @@ def test_workspace_js_backtest_ignores_stale_response():
         if (!latestConfig.equityCurve || latestConfig.equityCurve[0].equity !== 2) {
           throw new Error('stale backtest response overwrote chart overlays');
         }
-        """
-    )
+        """)
 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_workspace_js_backtest_layer_button_toggles_overlays():
-    result = _run_workspace_script(
-        r"""
+    result = _run_workspace_script(r"""
         fetch = function () {
           return Promise.resolve(jsonResponse({
             run_id: 'run-C',
@@ -253,15 +243,155 @@ def test_workspace_js_backtest_layer_button_toggles_overlays():
         if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
           throw new Error('backtest layer button did not restore overlays');
         }
-        """
-    )
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_combines_active_event_layers_and_toggles_news_layer():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{ id: 'clinical-1', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical', priority: 1, sentiment: 'positive' }]
+          }, {
+            kind: 'news',
+            label: 'News',
+            visible_by_default: true,
+            points: [{ id: 'news-1', date: '2026-04-20', type: 'market_news', category: 'news', priority: 3, sentiment: 'positive' }]
+          }, {
+            kind: 'macro',
+            label: 'Macro',
+            visible_by_default: false,
+            points: [{ id: 'macro-1', date: '2026-04-20', type: 'macro_economic', category: 'macro', priority: 3, sentiment: 'neutral' }]
+          }]
+        }));
+        runWorkspace();
+
+        let latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.events.map((event) => event.id).join(',') !== 'clinical-1,news-1') {
+          throw new Error('expected active catalyst and news events, got ' + latestConfig.events.map((event) => event.id).join(','));
+        }
+
+        const layerBar = document.getElementById('layer-bar');
+        const newsButton = layerBar.children.find((child) => child.dataset.layerKind === 'news');
+        if (!newsButton) {
+          throw new Error('news layer button was not rendered');
+        }
+        newsButton.dispatchEvent({ type: 'click' });
+
+        latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.events.map((event) => event.id).join(',') !== 'clinical-1') {
+          throw new Error('news toggle did not remove news events');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_renders_phase2_diagnostics():
+    result = _run_workspace_script(r"""
+        fetch = function () {
+          return Promise.resolve(jsonResponse({
+            run_id: 'phase2-run',
+            metrics: { sharpe: 1.1 },
+            equity_curve: [],
+            signals: [],
+            trades: [],
+            event_filter: { input_events: 4, eligible_events: 2, excluded_events: 2, min_confidence_score: 0.7 },
+            signal_summary: { active_signal_days: 1, long_signal_days: 1, short_signal_days: 0, mean_signal_strength: 0.25 },
+            baseline: { buy_hold_return: 0.1, strategy_return: 0.03, excess_return: -0.07 }
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        const text = document.getElementById('backtest-results').textContent;
+        if (!text.includes('eligible_events') || !text.includes('buy_hold_return')) {
+          throw new Error('phase2 diagnostics were not rendered: ' + text);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_renders_event_attribution():
+    result = _run_workspace_script(r"""
+        fetch = function () {
+          return Promise.resolve(jsonResponse({
+            run_id: 'phase2-run',
+            metrics: { sharpe: 1.1 },
+            equity_curve: [],
+            signals: [],
+            trades: [],
+            event_attribution: {
+              by_source: [{ source: 'clinicaltrials', count: 2 }],
+              by_category: [{ category: 'clinical', count: 2 }],
+              by_type: [{ type: 'trial_results_posted', count: 1 }]
+            }
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        const text = document.getElementById('backtest-results').textContent;
+        if (!text.includes('event_attribution') || !text.includes('clinicaltrials') || !text.includes('trial_results_posted')) {
+          throw new Error('event attribution diagnostics were not rendered: ' + text);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_details_renders_phase2_event_metadata():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          panels: { selected_event_id: 'evt-1' },
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{
+              id: 'evt-1',
+              date: '2026-04-20',
+              type: 'trial_results_posted',
+              category: 'clinical',
+              priority: 1,
+              sentiment: 'positive',
+              confidence: 'high',
+              source: 'clinicaltrials',
+              source_tier: 'official',
+              confidence_score: 0.92,
+              backtest_eligible: true,
+              metadata: { impact_score: 0.88 }
+            }]
+          }]
+        }));
+        runWorkspace();
+
+        const text = document.querySelector('[data-panel="details"]').textContent;
+        if (!text.includes('Source tier') || !text.includes('official') || !text.includes('Confidence score') || !text.includes('0.92') || !text.includes('Backtest eligible') || !text.includes('true')) {
+          throw new Error('phase2 event metadata missing from details: ' + text);
+        }
+        """)
 
     assert result.returncode == 0, result.stderr + result.stdout
 
 
 def _dom_harness() -> str:
-    return textwrap.dedent(
-        r"""
+    return textwrap.dedent(r"""
         const fs = require('fs');
         const vm = require('vm');
 
@@ -549,5 +679,4 @@ def _dom_harness() -> str:
         }
 
         (async () => {
-        """
-    )
+        """)

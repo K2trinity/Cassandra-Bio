@@ -20,6 +20,9 @@ from src.kline.providers.catalyst_provider import CatalystEventProvider
 from src.kline.providers.ohlc_provider import OHLCProvider
 from src.kline.ticker_resolver import TickerResolver
 
+_MARKET_NEWS_SOURCES = {"alphavantage", "alpha_vantage", "market_news", "news"}
+_MACRO_SOURCES = {"gdelt", "fred", "worldbank", "macro"}
+
 
 class KlineWorkspaceService:
     def __init__(
@@ -51,9 +54,12 @@ class KlineWorkspaceService:
             )
         ]
 
+        hard_events, news_events, macro_events = _split_event_layers(catalysts)
         layers = [
             _candles_layer(price),
-            _catalysts_layer(catalysts),
+            _events_layer("catalysts", "catalysts", "Catalysts", hard_events, True),
+            _events_layer("news", "news", "News", news_events, True),
+            _events_layer("macro", "macro", "Macro", macro_events, False),
             _backtest_layer(last_backtest),
         ]
         data_status = price_statuses + catalyst_statuses + backtest_statuses
@@ -125,15 +131,79 @@ def _candles_layer(price: KlinePriceSeries) -> KlineLayer:
 
 
 def _catalysts_layer(catalysts: list[KlineEvent]) -> KlineLayer:
+    return _events_layer("catalysts", "catalysts", "Catalysts", catalysts, True)
+
+
+def _events_layer(
+    layer_id: str,
+    kind: str,
+    label: str,
+    events: list[KlineEvent],
+    visible_by_default: bool,
+) -> KlineLayer:
     return KlineLayer(
-        id="catalysts",
-        kind="catalysts",
-        label="Catalysts",
-        visible_by_default=True,
-        status="ready" if catalysts else "empty",
-        points=catalysts,
-        summary={"count": len(catalysts)},
+        id=layer_id,
+        kind=kind,
+        label=label,
+        visible_by_default=visible_by_default,
+        status="ready" if events else "empty",
+        points=events,
+        summary={"count": len(events)},
     )
+
+
+def _split_event_layers(
+    events: list[KlineEvent],
+) -> tuple[list[KlineEvent], list[KlineEvent], list[KlineEvent]]:
+    hard_events: list[KlineEvent] = []
+    news_events: list[KlineEvent] = []
+    macro_events: list[KlineEvent] = []
+    for event in events:
+        kind = _event_layer_kind(event)
+        if kind == "news":
+            news_events.append(event)
+        elif kind == "macro":
+            macro_events.append(event)
+        else:
+            hard_events.append(event)
+    return hard_events, news_events, macro_events
+
+
+def _event_layer_kind(event: KlineEvent) -> str:
+    category = _normalized_token(event.category)
+    source = _normalized_token(event.source)
+    source_tier = _normalized_token(event.source_tier)
+    source_kind = _normalized_token(event.source_kind)
+    event_type = _normalized_token(event.type)
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    metadata_tier = _normalized_token(metadata.get("source_tier"))
+    metadata_kind = _normalized_token(metadata.get("source_kind"))
+
+    if (
+        category == "macro"
+        or source_tier == "macro"
+        or source_kind == "macro"
+        or metadata_tier == "macro"
+        or metadata_kind == "macro"
+        or source in _MACRO_SOURCES
+        or event_type.startswith("macro_")
+    ):
+        return "macro"
+    if (
+        category == "news"
+        or source_tier in {"market_news", "news"}
+        or source_kind in {"market_news", "news"}
+        or metadata_tier in {"market_news", "news"}
+        or metadata_kind in {"market_news", "news"}
+        or source in _MARKET_NEWS_SOURCES
+        or event_type in {"market_news", "news"}
+    ):
+        return "news"
+    return "catalysts"
+
+
+def _normalized_token(value: object) -> str:
+    return str(value or "").strip().lower()
 
 
 def _backtest_layer(last_backtest: dict[str, Any] | None) -> KlineLayer:

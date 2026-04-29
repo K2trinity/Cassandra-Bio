@@ -9,12 +9,19 @@ export interface OHLCRow {
   volume: number;
 }
 
+export interface BiotechEventMetadata extends Record<string, unknown> {
+  backtest_eligible?: boolean;
+  confidence_score?: number;
+  impact_score?: number;
+  source_tier?: string;
+}
+
 export interface BiotechEvent {
   id: string;
   ticker: string;
   date: string;
   type: string;
-  category?: 'clinical' | 'regulatory' | 'corporate' | 'macro' | 'report';
+  category?: 'clinical' | 'regulatory' | 'corporate' | 'news' | 'macro' | 'report';
   title?: string;
   summary?: string;
   priority: 1 | 2 | 3 | 4 | 5;
@@ -24,11 +31,14 @@ export interface BiotechEvent {
   confidence?: 'high' | 'medium' | 'low';
   price_impact?: number;
   impact_score?: number;
+  confidence_score?: number;
+  backtest_eligible?: boolean;
   source?: string;
+  source_tier?: string;
   source_entity?: string;
   source_ids?: string[];
   source_url?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: BiotechEventMetadata;
 }
 
 export interface HoverData {

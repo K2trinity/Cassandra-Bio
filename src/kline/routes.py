@@ -7,10 +7,13 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.backtest.runner import load_saved_run, normalize_kline_ticker, run_kline_backtest
+from src.backtest.runner import (
+    load_saved_run,
+    normalize_kline_ticker,
+    run_kline_backtest,
+)
 from src.kline.ticker_resolver import TickerResolver
 from src.kline.workspace_service import KlineWorkspaceService
-
 
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
@@ -62,15 +65,16 @@ def api_kline_tickers():
 
 @kline_bp.get("/api/kline/events/<symbol>")
 def api_kline_events(symbol: str):
-    """Return catalyst event points for a symbol."""
+    """Return Phase 2 event points for a symbol."""
     try:
         workspace = workspace_service.build_workspace(symbol)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    event_layer_kinds = {"catalysts", "news", "macro"}
     events = [
         event
         for layer in workspace.layers
-        if layer.kind == "catalysts"
+        if layer.kind in event_layer_kinds
         for event in layer.points
     ]
     return jsonify([event.to_dict() for event in events])
@@ -102,9 +106,14 @@ def api_backtest_run():
     """Run a single ticker backtest for K-line workflow."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({
-            "error": "request body must be a JSON object",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "request body must be a JSON object",
+                }
+            ),
+            400,
+        )
 
     raw_ticker = data.get("ticker")
     ticker = normalize_kline_ticker(raw_ticker)
@@ -112,57 +121,102 @@ def api_backtest_run():
     end_date = str(data.get("end_date") or "").strip()
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
-        return jsonify({
-            "error": "ticker, start_date, and end_date are required",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "ticker, start_date, and end_date are required",
+                }
+            ),
+            400,
+        )
 
     if ticker is None:
-        return jsonify({
-            "error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens",
+                }
+            ),
+            400,
+        )
 
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
     except ValueError:
-        return jsonify({
-            "error": "start_date and end_date must be in YYYY-MM-DD format",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "start_date and end_date must be in YYYY-MM-DD format",
+                }
+            ),
+            400,
+        )
 
     if start_dt > end_dt:
-        return jsonify({
-            "error": "invalid date range: start_date must be <= end_date",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "invalid date range: start_date must be <= end_date",
+                }
+            ),
+            400,
+        )
 
     try:
         stop_loss_pct = float(data.get("stop_loss_pct", -0.08))
         max_position_pct = float(data.get("max_position_pct", 0.2))
         slippage_pct = float(data.get("slippage_pct", 0.001))
     except (TypeError, ValueError):
-        return jsonify({
-            "error": "risk parameters must be numeric",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "risk parameters must be numeric",
+                }
+            ),
+            400,
+        )
 
     risk_values = (stop_loss_pct, max_position_pct, slippage_pct)
     if not all(math.isfinite(value) for value in risk_values):
-        return jsonify({
-            "error": "risk parameters must be finite numbers",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "risk parameters must be finite numbers",
+                }
+            ),
+            400,
+        )
 
     if not (-1.0 < stop_loss_pct < 0):
-        return jsonify({
-            "error": "stop_loss_pct must be greater than -1 and less than 0",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "stop_loss_pct must be greater than -1 and less than 0",
+                }
+            ),
+            400,
+        )
 
     if not (0 < max_position_pct <= 1):
-        return jsonify({
-            "error": "max_position_pct must be greater than 0 and less than or equal to 1",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "max_position_pct must be greater than 0 and less than or equal to 1",
+                }
+            ),
+            400,
+        )
 
     if not (0 <= slippage_pct <= 0.2):
-        return jsonify({
-            "error": "slippage_pct must be between 0 and 0.2",
-        }), 400
+        return (
+            jsonify(
+                {
+                    "error": "slippage_pct must be between 0 and 0.2",
+                }
+            ),
+            400,
+        )
 
     result = run_kline_backtest(
         ticker=ticker,
