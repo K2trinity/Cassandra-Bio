@@ -1,6 +1,7 @@
 """Event ingestion service with 6-hour cache freshness."""
 
 from datetime import datetime, timedelta
+import os
 from typing import Optional
 from loguru import logger
 
@@ -13,8 +14,17 @@ from src.backtest.events_db import (
     get_last_fetch_at,
     get_fetch_log_entries,
 )
-from src.tools.openfda_client import OpenFDAClient, normalize_biotech_events as normalize_openfda
-from src.tools.clinical_trials_client import search_trials, normalize_biotech_events as normalize_clinical_trials
+from src.tools.openfda_client import (
+    OpenFDAClient,
+    normalize_biotech_events as normalize_openfda,
+)
+from src.tools.clinical_trials_client import (
+    search_trials,
+    normalize_clinical_trial_milestone_events,
+)
+from src.tools.alpha_vantage_news_client import fetch_market_news_events
+from src.tools.gdelt_client import fetch_biotech_macro_events
+from src.kline.event_filter import enrich_event_metadata
 
 
 def _is_cache_stale(last_fetch_at: Optional[str], max_age_hours: int) -> bool:
@@ -44,6 +54,36 @@ def _status_for_exception(exc: Exception) -> str:
     return "error"
 
 
+def _source_cache_is_stale(
+    source: str,
+    last_fetch_at: Optional[str],
+    cached_status: str | None,
+    max_age_hours: int,
+) -> bool:
+    if _is_cache_stale(last_fetch_at, max_age_hours):
+        return True
+    if (
+        source == "alphavantage"
+        and cached_status == "disabled"
+        and os.getenv("ALPHA_VANTAGE_API_KEY")
+    ):
+        return True
+    return False
+
+
+def _cached_source_statuses(ticker: str) -> dict[str, str | None]:
+    return {
+        str(row.get("source")): row.get("status")
+        for row in get_fetch_log_entries(ticker)
+        if isinstance(row, dict) and row.get("source")
+    }
+
+
+def _enrich_events(events: list[dict]) -> list[dict]:
+    """Apply phase2 event taxonomy/scoring metadata before persistence."""
+    return [enrich_event_metadata(event) for event in events]
+
+
 def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
     """
     Fetch and cache biotech events for a ticker with 6-hour freshness.
@@ -67,12 +107,14 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
     init_db()
     init_fetch_log_table()
 
-    sources = ["openfda", "clinicaltrials"]
+    sources = ["openfda", "clinicaltrials", "alphavantage", "gdelt"]
+    source_statuses = _cached_source_statuses(ticker)
 
     for source in sources:
         last_fetch = get_last_fetch_at(ticker, source)
+        cached_status = source_statuses.get(source)
 
-        if not _is_cache_stale(last_fetch, max_age_hours):
+        if not _source_cache_is_stale(source, last_fetch, cached_status, max_age_hours):
             logger.info(f"Cache hit for {ticker}/{source} (age < {max_age_hours}h)")
             continue
 
@@ -96,6 +138,7 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                             )
                         )
 
+                events = _enrich_events(events)
                 item_count = len(events)
                 if events:
                     insert_events(events)
@@ -114,16 +157,58 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                     max_results=50,
                     raise_on_error=True,
                 )
-                events = normalize_clinical_trials(
+                events = normalize_clinical_trial_milestone_events(
                     trials,
                     source="clinicaltrials",
                     requested_ticker=ticker,
                 )
 
+                events = _enrich_events(events)
                 item_count = len(events)
                 if events:
                     insert_events(events)
-                    logger.info(f"Inserted {item_count} ClinicalTrials events for {ticker}")
+                    logger.info(
+                        f"Inserted {item_count} ClinicalTrials events for {ticker}"
+                    )
+
+                record_fetch_attempt(
+                    ticker,
+                    source,
+                    item_count,
+                    status="ready" if item_count > 0 else "empty",
+                )
+
+            elif source == "alphavantage":
+                events, source_status = fetch_market_news_events(ticker)
+
+                events = _enrich_events(events)
+                item_count = len(events)
+                if events:
+                    insert_events(events)
+                    logger.info(
+                        f"Inserted {item_count} Alpha Vantage news events for {ticker}"
+                    )
+
+                record_fetch_attempt(
+                    ticker,
+                    source,
+                    item_count,
+                    status=source_status.get("status"),
+                    message=source_status.get("message"),
+                )
+
+            elif source == "gdelt":
+                events = fetch_biotech_macro_events(
+                    ticker,
+                    max_records=20,
+                    raise_on_error=True,
+                )
+
+                events = _enrich_events(events)
+                item_count = len(events)
+                if events:
+                    insert_events(events)
+                    logger.info(f"Inserted {item_count} GDELT events for {ticker}")
 
                 record_fetch_attempt(
                     ticker,

@@ -9,8 +9,8 @@ import pytest
 from datetime import datetime
 from typing import Dict, Any
 
-
 # ========== Test Fixtures ==========
+
 
 @pytest.fixture(autouse=True)
 def isolated_events_db(tmp_path, monkeypatch):
@@ -18,6 +18,7 @@ def isolated_events_db(tmp_path, monkeypatch):
     from src.backtest import events_db
 
     monkeypatch.setattr(events_db, "DB_PATH", tmp_path / "events.db")
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -99,6 +100,7 @@ def clinical_trials_terminated_payload() -> Dict[str, Any]:
 
 # ========== openFDA Normalization Tests ==========
 
+
 def test_normalize_openfda_approval(openfda_approval_payload):
     """Test normalization of openFDA approval into fda_decision event."""
     from src.tools.openfda_client import normalize_biotech_events
@@ -111,10 +113,10 @@ def test_normalize_openfda_approval(openfda_approval_payload):
     # Verify required fields
     assert "id" in event
     assert "date" in event
-    assert event["type"] == "fda_decision"
+    assert event["type"] == "fda_approval"
     assert event["sentiment"] == "positive"
     assert event["source"] == "openfda"
-    assert event["priority"] in range(1, 6)
+    assert event["priority"] == 1
     assert "ticker" in event
     assert "catalyst" in event
     assert event["ticker"] == "SPIKEVAX"
@@ -173,7 +175,8 @@ def test_normalize_openfda_recall(openfda_recall_payload):
     event = events[0]
 
     # Verify required fields
-    assert event["type"] == "regulatory_change"
+    assert event["type"] == "fda_recall"
+    assert event["priority"] == 1
     assert event["source"] == "openfda"
     assert "id" in event
     assert "date" in event
@@ -235,13 +238,96 @@ def test_normalize_openfda_legacy_no_brand_null_or_missing_sponsor_uses_unknown(
     assert [event["ticker"] for event in events] == ["UNKNOWN", "UNKNOWN"]
 
 
+def test_normalize_openfda_uses_stable_ids_for_same_source_event():
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "BLA-STABLE",
+                "sponsor_name": "Moderna Inc",
+                "openfda": {"brand_name": ["SPIKEVAX"]},
+                "products": [{"brand_name": "SPIKEVAX"}],
+                "action_type": "APPROVAL",
+                "approval_date": "20260420",
+            }
+        ]
+    }
+
+    first = normalize_biotech_events(payload, source="openfda", requested_ticker="MRNA")
+    second = normalize_biotech_events(
+        payload, source="openfda", requested_ticker="MRNA"
+    )
+
+    assert first[0]["id"] == second[0]["id"]
+
+
+def test_normalize_openfda_approval_uses_real_submissions_shape():
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "BLA761223",
+                "sponsor_name": "ModernaTX, Inc.",
+                "openfda": {"brand_name": ["SPIKEVAX"]},
+                "products": [{"brand_name": "SPIKEVAX"}],
+                "submissions": [
+                    {
+                        "submission_type": "ORIG",
+                        "submission_number": "1",
+                        "submission_status": "AP",
+                        "submission_status_date": "20260420",
+                    }
+                ],
+            }
+        ]
+    }
+
+    events = normalize_biotech_events(
+        payload, source="openfda", requested_ticker="MRNA"
+    )
+
+    assert len(events) == 1
+    assert events[0]["type"] == "fda_approval"
+    assert events[0]["date"] == "2026-04-20"
+    assert events[0]["priority"] == 1
+
+
+def test_openfda_stable_ids_dedupe_inserted_events():
+    from src.backtest.events_db import get_events, init_db, insert_events
+    from src.tools.openfda_client import normalize_biotech_events
+
+    payload = {
+        "results": [
+            {
+                "application_number": "BLA-DEDUP",
+                "sponsor_name": "Moderna Inc",
+                "openfda": {"brand_name": ["SPIKEVAX"]},
+                "products": [{"brand_name": "SPIKEVAX"}],
+                "action_type": "APPROVAL",
+                "approval_date": "20260420",
+            }
+        ]
+    }
+    events = normalize_biotech_events(
+        payload, source="openfda", requested_ticker="MRNA"
+    )
+
+    init_db()
+    assert insert_events(events) == 1
+    assert insert_events(events) == 0
+
+    rows = get_events("MRNA", start_date="2026-04-20", end_date="2026-04-20")
+    assert rows["id"].tolist() == [events[0]["id"]]
+
+
 def test_normalize_clinical_trials_completed(clinical_trials_completed_payload):
     """Test normalization of completed ClinicalTrials into clinical_readout event."""
     from src.tools.clinical_trials_client import normalize_biotech_events
 
     events = normalize_biotech_events(
-        [clinical_trials_completed_payload],
-        source="clinicaltrials"
+        [clinical_trials_completed_payload], source="clinicaltrials"
     )
 
     assert len(events) > 0, "Should produce at least one event"
@@ -325,8 +411,7 @@ def test_normalize_clinical_trials_terminated(clinical_trials_terminated_payload
     from src.tools.clinical_trials_client import normalize_biotech_events
 
     events = normalize_biotech_events(
-        [clinical_trials_terminated_payload],
-        source="clinicaltrials"
+        [clinical_trials_terminated_payload], source="clinicaltrials"
     )
 
     assert len(events) > 0, "Should produce at least one event"
@@ -393,8 +478,19 @@ def test_normalized_event_schema():
     assert len(events) > 0
 
     event = events[0]
-    required_keys = {"id", "date", "type", "priority", "ticker", "catalyst", "sentiment", "source"}
-    assert required_keys.issubset(event.keys()), f"Missing keys: {required_keys - set(event.keys())}"
+    required_keys = {
+        "id",
+        "date",
+        "type",
+        "priority",
+        "ticker",
+        "catalyst",
+        "sentiment",
+        "source",
+    }
+    assert required_keys.issubset(
+        event.keys()
+    ), f"Missing keys: {required_keys - set(event.keys())}"
 
     # Verify types
     assert isinstance(event["id"], str)
@@ -411,6 +507,7 @@ def test_normalized_event_schema():
 
 
 # ========== Event Ingestion Service Tests ==========
+
 
 def test_fetch_log_table_init():
     """Test that fetch_log table is created successfully."""
@@ -465,7 +562,9 @@ def test_empty_result_caching():
 
     # Clear any existing records
     conn = _get_conn()
-    conn.execute("DELETE FROM fetch_log WHERE ticker = 'EMPTY' AND source = 'clinicaltrials'")
+    conn.execute(
+        "DELETE FROM fetch_log WHERE ticker = 'EMPTY' AND source = 'clinicaltrials'"
+    )
     conn.commit()
     conn.close()
 
@@ -515,8 +614,9 @@ def test_ingestion_service_first_request_fetches():
     conn.close()
 
     # Mock the API clients
-    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
-         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, patch(
+        "src.services.event_ingestion_service.search_trials"
+    ) as mock_trials:
 
         # Mock openFDA response
         mock_fda_instance = MagicMock()
@@ -550,6 +650,7 @@ def test_ingestion_service_first_request_fetches():
 
         # Verify fetch log was recorded
         from src.backtest.events_db import get_last_fetch_at
+
         assert get_last_fetch_at("TESTFIRST", "openfda") is not None
         assert get_last_fetch_at("TESTFIRST", "clinicaltrials") is not None
 
@@ -578,18 +679,19 @@ def test_ingestion_service_cache_hit():
     recent_time = (datetime.now() - timedelta(hours=2)).isoformat()
     conn.execute(
         "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
-        ("TESTCACHE", "openfda", recent_time, 1)
+        ("TESTCACHE", "openfda", recent_time, 1),
     )
     conn.execute(
         "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
-        ("TESTCACHE", "clinicaltrials", recent_time, 0)
+        ("TESTCACHE", "clinicaltrials", recent_time, 0),
     )
     conn.commit()
     conn.close()
 
     # Mock the API clients
-    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
-         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, patch(
+        "src.services.event_ingestion_service.search_trials"
+    ) as mock_trials:
 
         mock_fda_instance = MagicMock()
         mock_fda.return_value = mock_fda_instance
@@ -604,7 +706,12 @@ def test_ingestion_service_cache_hit():
 
 def test_event_db_roundtrips_source_ids_and_metadata():
     """Event DB should persist structured attribution fields as decoded objects."""
-    from src.backtest.events_db import init_db, insert_event, get_events_for_chart, _get_conn
+    from src.backtest.events_db import (
+        init_db,
+        insert_event,
+        get_events_for_chart,
+        _get_conn,
+    )
 
     init_db()
 
@@ -647,7 +754,12 @@ def test_event_db_insert_applies_optional_field_defaults():
     """Event inserts should apply defaults for omitted optional bound fields."""
     import pandas as pd
 
-    from src.backtest.events_db import init_db, insert_event, get_events_for_chart, _get_conn
+    from src.backtest.events_db import (
+        init_db,
+        insert_event,
+        get_events_for_chart,
+        _get_conn,
+    )
 
     init_db()
 
@@ -684,8 +796,7 @@ def test_event_db_insert_migrates_old_shape_table_without_init_db():
     from src.backtest.events_db import insert_event, get_events_for_chart, _get_conn
 
     conn = _get_conn()
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE biotech_events (
             id TEXT PRIMARY KEY,
             date TEXT NOT NULL,
@@ -699,8 +810,7 @@ def test_event_db_insert_migrates_old_shape_table_without_init_db():
             source TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         )
-        """
-    )
+        """)
     conn.commit()
     conn.close()
 
@@ -766,7 +876,11 @@ def test_event_db_decodes_legacy_rows_with_default_attribution_fields():
 
 def test_get_source_statuses_for_ticker_returns_fetch_log_rows():
     """Status helper should expose fetch attempts for the requested ticker."""
-    from src.backtest.events_db import init_fetch_log_table, record_fetch_attempt, _get_conn
+    from src.backtest.events_db import (
+        init_fetch_log_table,
+        record_fetch_attempt,
+        _get_conn,
+    )
     from src.services.event_ingestion_service import get_source_statuses_for_ticker
 
     init_fetch_log_table()
@@ -788,7 +902,11 @@ def test_get_source_statuses_for_ticker_returns_fetch_log_rows():
 
 def test_fetch_log_preserves_error_status_and_message():
     """Fetch status rows should distinguish failed sources from empty sources."""
-    from src.backtest.events_db import init_fetch_log_table, record_fetch_attempt, _get_conn
+    from src.backtest.events_db import (
+        init_fetch_log_table,
+        record_fetch_attempt,
+        _get_conn,
+    )
     from src.services.event_ingestion_service import get_source_statuses_for_ticker
 
     init_fetch_log_table()
@@ -839,9 +957,12 @@ def test_ingestion_records_error_status_when_source_fetch_fails():
     conn.commit()
     conn.close()
 
-    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
-         patch("src.services.event_ingestion_service.search_trials") as mock_trials:
-        mock_fda.return_value.collect.side_effect = RuntimeError("429 Too Many Requests")
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, patch(
+        "src.services.event_ingestion_service.search_trials"
+    ) as mock_trials:
+        mock_fda.return_value.collect.side_effect = RuntimeError(
+            "429 Too Many Requests"
+        )
         mock_trials.return_value = []
 
         get_events_for_ticker("ERRSTAT", max_age_hours=0)
@@ -852,6 +973,107 @@ def test_ingestion_records_error_status_when_source_fetch_fails():
     assert by_source["openfda"]["status"] == "rate_limited"
     assert by_source["openfda"]["message"] == "429 Too Many Requests"
     assert by_source["clinicaltrials"]["status"] == "empty"
+
+
+@pytest.mark.parametrize(
+    ("gdelt_events", "expected_status"),
+    [
+        ([], "empty"),
+        (
+            [
+                {
+                    "id": "gdelt-ready-1",
+                    "date": "2026-04-20",
+                    "type": "macro",
+                    "priority": 3,
+                    "ticker": "GDELTREADY",
+                    "catalyst": "GDELT macro event",
+                    "sentiment": "neutral",
+                    "source": "gdelt",
+                }
+            ],
+            "ready",
+        ),
+    ],
+)
+def test_ingestion_records_explicit_gdelt_success_status(
+    gdelt_events,
+    expected_status,
+    monkeypatch,
+):
+    """GDELT success rows should not rely on fetch-log default status inference."""
+    from datetime import datetime, timedelta
+
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services import event_ingestion_service
+
+    ticker = f"GDELT{expected_status.upper()}"
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = ?", (ticker,))
+    conn.execute("DELETE FROM fetch_log WHERE ticker = ?", (ticker,))
+    recent_time = (datetime.now() - timedelta(hours=2)).isoformat()
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        (ticker, "openfda", recent_time, 0),
+    )
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        (ticker, "clinicaltrials", recent_time, 0),
+    )
+    conn.execute(
+        "INSERT INTO fetch_log (ticker, source, last_fetch_at, item_count) VALUES (?, ?, ?, ?)",
+        (ticker, "alphavantage", recent_time, 0),
+    )
+    conn.commit()
+    conn.close()
+
+    attempts = []
+    fetch_calls = []
+
+    def record_fetch_attempt_spy(*args, **kwargs):
+        attempts.append((args, kwargs))
+
+    def fetch_gdelt_spy(query, max_records=20, raise_on_error=False):
+        fetch_calls.append((query, max_records, raise_on_error))
+        return gdelt_events
+
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_biotech_macro_events",
+        fetch_gdelt_spy,
+    )
+    monkeypatch.setattr(event_ingestion_service, "insert_events", lambda events: None)
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "record_fetch_attempt",
+        record_fetch_attempt_spy,
+    )
+
+    event_ingestion_service.get_events_for_ticker(ticker, max_age_hours=6)
+
+    assert fetch_calls == [(ticker, 20, True)]
+    assert attempts == [
+        ((ticker, "gdelt", len(gdelt_events)), {"status": expected_status})
+    ]
+
+
+def test_gdelt_client_can_raise_fetch_errors(monkeypatch):
+    """GDELT fetch errors should be exposable to source-status recording."""
+    import requests
+
+    from src.tools import gdelt_client
+
+    def fail_request(*args, **kwargs):
+        raise requests.HTTPError("429 Too Many Requests")
+
+    monkeypatch.setattr(gdelt_client.requests, "get", fail_request)
+
+    with pytest.raises(requests.HTTPError, match="429 Too Many Requests"):
+        gdelt_client.fetch_biotech_macro_events("MRNA", raise_on_error=True)
 
 
 def test_ingestion_records_openfda_client_http_failure_status():
@@ -957,9 +1179,9 @@ def test_ingestion_records_clinicaltrials_request_failure_status():
     conn.commit()
     conn.close()
 
-    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, \
-         patch("src.tools.clinical_trials_client.requests.get") as mock_get, \
-         patch("src.tools.clinical_trials_client.time.sleep"):
+    with patch("src.services.event_ingestion_service.OpenFDAClient") as mock_fda, patch(
+        "src.tools.clinical_trials_client.requests.get"
+    ) as mock_get, patch("src.tools.clinical_trials_client.time.sleep"):
         mock_fda.return_value.collect.return_value = {
             "label": {"results": []},
             "event": {"results": []},
@@ -975,3 +1197,351 @@ def test_ingestion_records_clinicaltrials_request_failure_status():
     assert by_source["openfda"]["status"] == "empty"
     assert by_source["clinicaltrials"]["status"] == "error"
     assert "503 Service Unavailable" in by_source["clinicaltrials"]["message"]
+
+
+def test_normalize_clinical_trial_milestone_events_expands_key_dates():
+    from src.tools.clinical_trials_client import (
+        normalize_clinical_trial_milestone_events,
+    )
+
+    events = normalize_clinical_trial_milestone_events(
+        [
+            {
+                "nct_id": "NCT00000001",
+                "title": "A Phase 3 Study",
+                "status": "COMPLETED",
+                "sponsor": "ModernaTX, Inc.",
+                "conditions": "Melanoma",
+                "interventions": "mRNA-4157",
+                "phase": "Phase 3",
+                "has_results": True,
+                "primary_completion_date": "2026-04-18",
+                "completion_date": "2026-04-19",
+                "results_first_posted": "2026-04-20",
+                "last_update_posted": "2026-04-21",
+            }
+        ],
+        requested_ticker="MRNA",
+    )
+
+    assert [event["type"] for event in events] == [
+        "trial_results_posted",
+        "trial_primary_completion",
+        "trial_completion",
+        "trial_status_change",
+    ]
+    assert all(event["ticker"] == "MRNA" for event in events)
+    assert all(event["source_ids"] == ["NCT00000001"] for event in events)
+    assert all(event["metadata"]["source_tier"] == "official" for event in events)
+
+
+def test_normalize_clinical_trial_milestone_events_emits_termination():
+    from src.tools.clinical_trials_client import (
+        normalize_clinical_trial_milestone_events,
+    )
+
+    events = normalize_clinical_trial_milestone_events(
+        [
+            {
+                "nct_id": "NCT00000002",
+                "title": "A Stopped Phase 2 Study",
+                "status": "TERMINATED",
+                "why_stopped": "Safety concerns",
+                "sponsor": "ModernaTX, Inc.",
+                "conditions": "Melanoma",
+                "phase": "Phase 2",
+                "has_results": False,
+                "completion_date": "2026-04-19",
+                "last_update_posted": "2026-04-21",
+            }
+        ],
+        requested_ticker="MRNA",
+    )
+
+    assert [event["type"] for event in events] == [
+        "trial_termination",
+        "trial_status_change",
+    ]
+    assert events[0]["sentiment"] == "negative"
+    assert events[0]["metadata"]["why_stopped"] == "Safety concerns"
+
+
+def test_normalize_clinical_trial_milestones_drops_unowned_ticker_matches():
+    from src.tools.clinical_trials_client import (
+        normalize_clinical_trial_milestone_events,
+    )
+
+    events = normalize_clinical_trial_milestone_events(
+        [
+            {
+                "nct_id": "NCT00000003",
+                "title": "Academic mRNA vaccine study",
+                "status": "COMPLETED",
+                "sponsor": "Example University",
+                "collaborators": "Pfizer Inc.",
+                "conditions": "Influenza",
+                "interventions": "mRNA vaccine candidate",
+                "phase": "Phase 2",
+                "has_results": True,
+                "completion_date": "2026-04-19",
+                "results_first_posted": "2026-04-20",
+                "last_update_posted": "2026-04-21",
+            }
+        ],
+        requested_ticker="MRNA",
+    )
+
+    assert events == []
+
+
+def test_normalize_clinical_trial_milestones_rejects_company_prefix_false_positive():
+    from src.tools.clinical_trials_client import (
+        normalize_clinical_trial_milestone_events,
+    )
+
+    events = normalize_clinical_trial_milestone_events(
+        [
+            {
+                "nct_id": "NCT00000005",
+                "title": "Modern analytics mRNA vaccine study",
+                "status": "COMPLETED",
+                "sponsor": "Modern Analytics Institute",
+                "collaborators": "None",
+                "conditions": "Influenza",
+                "interventions": "mRNA vaccine candidate",
+                "phase": "Phase 2",
+                "has_results": True,
+                "completion_date": "2026-04-19",
+                "results_first_posted": "2026-04-20",
+                "last_update_posted": "2026-04-21",
+            }
+        ],
+        requested_ticker="MRNA",
+    )
+
+    assert events == []
+
+
+def test_normalize_clinical_trial_milestones_accepts_collaborator_ownership():
+    from src.tools.clinical_trials_client import (
+        normalize_clinical_trial_milestone_events,
+    )
+
+    events = normalize_clinical_trial_milestone_events(
+        [
+            {
+                "nct_id": "NCT00000004",
+                "title": "Investigator-sponsored Moderna vaccine study",
+                "status": "COMPLETED",
+                "sponsor": "Example University",
+                "collaborators": "ModernaTX, Inc.",
+                "conditions": "Melanoma",
+                "interventions": "mRNA-4157",
+                "phase": "Phase 2",
+                "has_results": True,
+                "completion_date": "2026-04-19",
+                "results_first_posted": "2026-04-20",
+                "last_update_posted": "2026-04-21",
+            }
+        ],
+        requested_ticker="MRNA",
+    )
+
+    assert events
+    assert all(event["ticker"] == "MRNA" for event in events)
+    assert all(event["metadata"]["entity_match"] == "collaborator" for event in events)
+
+
+def test_ingestion_records_alphavantage_disabled_when_key_missing(monkeypatch):
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services import event_ingestion_service
+
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = 'AVDISABLED'")
+    conn.execute("DELETE FROM fetch_log WHERE ticker = 'AVDISABLED'")
+    conn.commit()
+    conn.close()
+
+    class EmptyFDA:
+        def collect(self, ticker, limit=20):
+            return {
+                "label": {"results": []},
+                "event": {"results": []},
+                "drugsfda": {"results": []},
+            }
+
+    monkeypatch.setattr(
+        event_ingestion_service, "OpenFDAClient", lambda *args, **kwargs: EmptyFDA()
+    )
+    monkeypatch.setattr(
+        event_ingestion_service, "search_trials", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_biotech_macro_events",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_market_news_events",
+        lambda ticker: (
+            [],
+            {
+                "source": "alphavantage",
+                "status": "disabled",
+                "item_count": 0,
+                "message": "ALPHA_VANTAGE_API_KEY is not set",
+            },
+        ),
+    )
+
+    event_ingestion_service.get_events_for_ticker("AVDISABLED", max_age_hours=0)
+    rows = event_ingestion_service.get_source_statuses_for_ticker("AVDISABLED")
+    by_source = {row["source"]: row for row in rows}
+
+    assert by_source["alphavantage"]["status"] == "disabled"
+    assert "ALPHA_VANTAGE_API_KEY" in by_source["alphavantage"]["message"]
+
+
+def test_alphavantage_disabled_cache_refreshes_after_api_key_is_set(monkeypatch):
+    from src.backtest.events_db import (
+        init_db,
+        init_fetch_log_table,
+        record_fetch_attempt,
+    )
+    from src.services import event_ingestion_service
+
+    ticker = "AVKEYREADY"
+    init_db()
+    init_fetch_log_table()
+    for source in ("openfda", "clinicaltrials", "gdelt"):
+        record_fetch_attempt(ticker, source, 0, status="empty")
+    record_fetch_attempt(
+        ticker,
+        "alphavantage",
+        0,
+        status="disabled",
+        message="ALPHA_VANTAGE_API_KEY is not set",
+    )
+
+    fetch_calls: list[str] = []
+
+    def fetch_news(ticker):
+        fetch_calls.append(ticker)
+        return (
+            [
+                {
+                    "id": "av-key-ready",
+                    "date": "2026-04-20",
+                    "type": "market_news",
+                    "category": "news",
+                    "priority": 3,
+                    "ticker": ticker,
+                    "catalyst": "Alpha Vantage news",
+                    "sentiment": "positive",
+                    "source": "alphavantage",
+                    "metadata": {},
+                }
+            ],
+            {"source": "alphavantage", "status": "ready", "message": None},
+        )
+
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "test-key")
+    monkeypatch.setattr(event_ingestion_service, "fetch_market_news_events", fetch_news)
+    monkeypatch.setattr(
+        event_ingestion_service, "insert_events", lambda events: len(events)
+    )
+
+    event_ingestion_service.get_events_for_ticker(ticker, max_age_hours=24)
+
+    assert fetch_calls == [ticker]
+
+
+def test_ingestion_enriches_openfda_and_gdelt_events_before_insert(monkeypatch):
+    from src.backtest.events_db import init_db, init_fetch_log_table, _get_conn
+    from src.services import event_ingestion_service
+
+    ticker = "ENRICHMETA"
+    init_db()
+    init_fetch_log_table()
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM biotech_events WHERE ticker = ?", (ticker,))
+    conn.execute("DELETE FROM fetch_log WHERE ticker = ?", (ticker,))
+    conn.commit()
+    conn.close()
+
+    class FDA:
+        def collect(self, ticker, limit=20):
+            return {
+                "label": {"results": []},
+                "event": {"results": []},
+                "drugsfda": {
+                    "results": [
+                        {
+                            "application_number": "BLA999",
+                            "sponsor_name": "Enrich Bio",
+                            "openfda": {"brand_name": ["EnrichDrug"]},
+                            "products": [{"brand_name": "EnrichDrug"}],
+                            "action_type": "APPROVAL",
+                            "approval_date": "20260420",
+                        }
+                    ]
+                },
+            }
+
+    inserted: list[dict] = []
+
+    def capture_insert(events):
+        inserted.extend(events)
+        return len(events)
+
+    monkeypatch.setattr(
+        event_ingestion_service, "OpenFDAClient", lambda *args, **kwargs: FDA()
+    )
+    monkeypatch.setattr(
+        event_ingestion_service, "search_trials", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_market_news_events",
+        lambda ticker: (
+            [],
+            {
+                "source": "alphavantage",
+                "status": "disabled",
+                "item_count": 0,
+                "message": "ALPHA_VANTAGE_API_KEY is not set",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_biotech_macro_events",
+        lambda *args, **kwargs: [
+            {
+                "id": "gdelt-enrich",
+                "date": "2026-04-21",
+                "type": "macro_economic",
+                "priority": 3,
+                "ticker": ticker,
+                "catalyst": "Macro biotech policy update",
+                "sentiment": "neutral",
+                "source": "gdelt",
+            }
+        ],
+    )
+    monkeypatch.setattr(event_ingestion_service, "insert_events", capture_insert)
+
+    event_ingestion_service.get_events_for_ticker(ticker, max_age_hours=0)
+
+    by_source = {event["source"]: event for event in inserted}
+    assert by_source["openfda"]["metadata"]["source_tier"] == "official"
+    assert by_source["openfda"]["metadata"]["backtest_eligible"] is True
+    assert by_source["openfda"]["metadata"]["confidence_score"] >= 0.7
+    assert by_source["gdelt"]["metadata"]["source_tier"] == "macro"
+    assert by_source["gdelt"]["metadata"]["backtest_eligible"] is False
+    assert "impact_score" in by_source["gdelt"]["metadata"]

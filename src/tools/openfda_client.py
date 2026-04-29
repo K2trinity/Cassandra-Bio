@@ -42,7 +42,10 @@ class OpenFDAClient:
             return response.json()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"openFDA request failed for {endpoint}: {e}")
-            if isinstance(e, requests.HTTPError) and getattr(response, "status_code", None) == 404:
+            if (
+                isinstance(e, requests.HTTPError)
+                and getattr(response, "status_code", None) == 404
+            ):
                 return {"meta": {"results": {"total": 0}}, "results": []}
             if self.raise_on_error:
                 raise
@@ -93,18 +96,7 @@ def normalize_biotech_events(
 
     Returns:
         List of normalized event dictionaries with schema:
-        {
-            "id": "...",
-            "date": "YYYY-MM-DD",
-            "type": "fda_decision" | "regulatory_change",
-            "priority": 1-5,
-            "ticker": "MRNA",
-            "disease_area": "",
-            "catalyst": "...",
-            "sentiment": "positive" | "negative" | "neutral",
-            "price_impact": None,
-            "source": "openfda",
-        }
+        {"id": "...", "date": "YYYY-MM-DD", "type": "fda_approval" | "fda_recall", ...}
     """
     events = []
     results = payload.get("results", [])
@@ -113,7 +105,10 @@ def normalize_biotech_events(
         try:
             # Extract key fields
             action_type = result.get("action_type", "").upper()
-            approval_date = result.get("approval_date")
+            submission = _approval_submission(result)
+            approval_date = result.get("approval_date") or (
+                submission.get("submission_status_date") if submission else None
+            )
             recall_date = result.get("recall_initiation_date")
             event_date = approval_date or recall_date
 
@@ -130,14 +125,14 @@ def normalize_biotech_events(
                 continue
 
             # Determine event type and sentiment
-            if action_type == "APPROVAL":
-                event_type = "fda_decision"
+            if action_type == "APPROVAL" or submission is not None:
+                event_type = "fda_approval"
                 sentiment = "positive"
-                priority = 5
+                priority = 1
             elif "RECALL" in action_type or result.get("recall_number"):
-                event_type = "regulatory_change"
+                event_type = "fda_recall"
                 sentiment = "negative"
-                priority = 4
+                priority = 1
             else:
                 logger.debug(f"Skipping unknown action type: {action_type}")
                 continue
@@ -166,10 +161,18 @@ def normalize_biotech_events(
                 catalyst = f"FDA Approval: {product_desc}"
             else:
                 reason = result.get("reason_for_recall", "Regulatory action")
-                catalyst = f"Regulatory Change: {reason}"
+                catalyst = f"FDA Recall: {reason}"
+            event_id = _stable_openfda_id(
+                ticker=ticker,
+                source=source,
+                event_type=event_type,
+                date=date_str,
+                source_ids=source_ids,
+                catalyst=catalyst,
+            )
 
             event = {
-                "id": str(uuid.uuid4()),
+                "id": event_id,
                 "date": date_str,
                 "type": event_type,
                 "priority": priority,
@@ -188,6 +191,12 @@ def normalize_biotech_events(
                     "generic_names": generic_names,
                     "application_number": application_number,
                     "recall_number": recall_number,
+                    "submission_type": (
+                        submission.get("submission_type") if submission else None
+                    ),
+                    "submission_number": (
+                        submission.get("submission_number") if submission else None
+                    ),
                     "raw_ticker": raw_ticker,
                 },
             }
@@ -199,3 +208,39 @@ def normalize_biotech_events(
             continue
 
     return events
+
+
+def _approval_submission(result: Dict[str, Any]) -> dict[str, Any] | None:
+    submissions = result.get("submissions") or []
+    if not isinstance(submissions, list):
+        return None
+    approved = [
+        submission
+        for submission in submissions
+        if isinstance(submission, dict)
+        and str(submission.get("submission_status") or "").upper() == "AP"
+        and submission.get("submission_status_date")
+    ]
+    if not approved:
+        return None
+    return sorted(
+        approved, key=lambda submission: str(submission.get("submission_status_date"))
+    )[-1]
+
+
+def _stable_openfda_id(
+    *,
+    ticker: str,
+    source: str,
+    event_type: str,
+    date: str,
+    source_ids: list[str],
+    catalyst: str,
+) -> str:
+    source_key = source_ids[0] if source_ids else catalyst
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"{ticker}|{source}|{event_type}|{source_key}|{date}",
+        )
+    )
