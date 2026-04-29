@@ -10,7 +10,6 @@ from loguru import logger
 
 from src.llms import create_report_client
 
-
 ALLOWED_EVENT_TYPES = {
     "fda_decision",
     "clinical_readout",
@@ -128,7 +127,13 @@ def extract_report_events(report_text: str, ticker: str) -> list[dict]:
                         "estimated_impact": {"type": "string"},
                         "date": {"type": "string"},
                     },
-                    "required": ["event_type", "sentiment", "priority", "catalyst", "date"],
+                    "required": [
+                        "event_type",
+                        "sentiment",
+                        "priority",
+                        "catalyst",
+                        "date",
+                    ],
                 },
             }
         },

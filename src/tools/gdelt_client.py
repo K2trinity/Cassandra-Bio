@@ -9,7 +9,6 @@ import hashlib
 import requests
 from loguru import logger
 
-
 GDELT_DOC_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 
 
@@ -107,7 +106,9 @@ def fetch_biotech_macro_events(
     raise_on_error: bool = False,
 ) -> list[dict]:
     """Fetch and normalize biotech-related macro events from GDELT."""
-    search_query = f"({query}) AND (biotech OR pharmaceutical OR pharma OR vaccine OR drug)"
+    search_query = (
+        f"({query}) AND (biotech OR pharmaceutical OR pharma OR vaccine OR drug)"
+    )
     params = {
         "query": search_query,
         "mode": "ArtList",
@@ -143,9 +144,7 @@ def fetch_biotech_macro_events(
             continue
 
         event_date = _normalize_date(
-            article.get("seendate")
-            or article.get("date")
-            or article.get("published")
+            article.get("seendate") or article.get("date") or article.get("published")
         )
         if not event_date:
             continue
@@ -171,7 +170,9 @@ def fetch_biotech_macro_events(
         else:
             priority = 3
 
-        event_id_basis = f"{url}|{event_date}|{summary}".encode("utf-8", errors="ignore")
+        event_id_basis = f"{url}|{event_date}|{summary}".encode(
+            "utf-8", errors="ignore"
+        )
         event_id = "gdelt-" + hashlib.sha1(event_id_basis).hexdigest()[:16]
 
         events.append(

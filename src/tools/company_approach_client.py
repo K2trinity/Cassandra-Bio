@@ -5,7 +5,6 @@ from typing import Callable
 
 import requests
 
-
 DATA_INSUFFICIENT = "数据不足"
 
 KNOWN_COMPANY_PIPELINE_URLS = {
@@ -40,8 +39,7 @@ class CompanyApproachClient:
         self.fetch_text = fetch_text or self._default_fetch_text
         url_map = KNOWN_COMPANY_PIPELINE_URLS if company_urls is None else company_urls
         self.company_urls = {
-            self._slugify(company): url
-            for company, url in url_map.items()
+            self._slugify(company): url for company, url in url_map.items()
         }
 
     def fetch_company_route(
@@ -56,11 +54,15 @@ class CompanyApproachClient:
         url = self._build_pipeline_url(company_name)
 
         if not url:
-            return self._data_insufficient_result(company_name, assets, target_list, modality)
+            return self._data_insufficient_result(
+                company_name, assets, target_list, modality
+            )
 
         text = self.fetch_text(url)
         if not text:
-            return self._data_insufficient_result(company_name, assets, target_list, modality)
+            return self._data_insufficient_result(
+                company_name, assets, target_list, modality
+            )
 
         route_terms = self._extract_route_terms(text, target_list, modality)
         route_summary = self._summarize_route(company_name, assets, route_terms, text)
@@ -89,7 +91,10 @@ class CompanyApproachClient:
             return self.company_urls[slug]
         base_slug = self._company_base_slug(company_name)
         for candidate_slug, url in self.company_urls.items():
-            if candidate_slug == base_slug or self._company_base_slug(candidate_slug) == base_slug:
+            if (
+                candidate_slug == base_slug
+                or self._company_base_slug(candidate_slug) == base_slug
+            ):
                 return url
         return ""
 
@@ -119,9 +124,7 @@ class CompanyApproachClient:
 
         if not route_parts:
             route_parts = [
-                str(target).strip()
-                for target in (targets or [])
-                if str(target).strip()
+                str(target).strip() for target in (targets or []) if str(target).strip()
             ]
             if modality and str(modality).strip():
                 route_parts.append(str(modality).strip())
@@ -137,7 +140,9 @@ class CompanyApproachClient:
             return f"{company_name} pipeline text links {asset_text} to {route_terms}."
         return f"{company_name} pipeline text supports {route_terms}."
 
-    def _data_insufficient_result(self, company_name, assets, targets, modality) -> dict:
+    def _data_insufficient_result(
+        self, company_name, assets, targets, modality
+    ) -> dict:
         return {
             "company_name": company_name,
             "company": company_name,
