@@ -96,6 +96,17 @@ def _company_identity(ticker: str) -> str:
     return f"{company.ticker}|{company.name}"
 
 
+_CLINICAL_OWNERSHIP_EVIDENCE_TOKENS = frozenset(
+    {
+        "sponsor",
+        "collaborator",
+        "sponsor_alias",
+        "collaborator_alias",
+        "company_alias",
+    }
+)
+
+
 def _ownership_for_event(
     event: dict,
     source: str,
@@ -105,13 +116,35 @@ def _ownership_for_event(
     if source_key == "clinicaltrials":
         metadata = decode_metadata(event.get("metadata"))
         ownership_status = str(metadata.get("ownership_status") or "").strip().lower()
-        entity_match = str(metadata.get("entity_match") or "").strip().lower()
+        raw_entity_match = metadata.get("entity_match")
         quarantine_reason = metadata.get("quarantine_reason")
-        if (
-            ownership_status == "owned"
-            and entity_match not in {"", "unknown", "unowned"}
-        ):
-            return ("owned", "trusted", None)
+        if ownership_status == "owned":
+            if raw_entity_match is None:
+                return (
+                    "unknown",
+                    "quarantined",
+                    quarantine_reason or "missing clinical ownership evidence",
+                )
+            if not isinstance(raw_entity_match, str):
+                return (
+                    "unknown",
+                    "quarantined",
+                    quarantine_reason or "malformed clinical ownership evidence",
+                )
+            entity_match = raw_entity_match.strip().lower()
+            if entity_match in _CLINICAL_OWNERSHIP_EVIDENCE_TOKENS:
+                return ("owned", "trusted", None)
+            if entity_match in {"", "unknown", "unowned"}:
+                return (
+                    "unknown",
+                    "quarantined",
+                    quarantine_reason or "missing clinical ownership evidence",
+                )
+            return (
+                "unknown",
+                "quarantined",
+                quarantine_reason or "malformed clinical ownership evidence",
+            )
         if ownership_status == "unowned":
             return (
                 "unowned",

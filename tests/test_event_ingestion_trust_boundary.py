@@ -254,3 +254,23 @@ def test_clinical_event_without_ownership_status_metadata_is_quarantined():
     assert ownership_status == "unknown"
     assert trust_status == "quarantined"
     assert quarantine_reason == "missing clinical ownership evidence"
+
+
+@pytest.mark.parametrize("entity_match", [True, ["sponsor"], "bogus"])
+def test_owned_clinical_event_with_invalid_entity_match_is_quarantined(entity_match):
+    from src.services.event_ingestion_service import _ownership_for_event
+
+    ownership_status, trust_status, quarantine_reason = _ownership_for_event(
+        {
+            "source": "clinicaltrials",
+            "metadata": {
+                "ownership_status": "owned",
+                "entity_match": entity_match,
+            },
+        },
+        "clinicaltrials",
+    )
+
+    assert ownership_status == "unknown"
+    assert trust_status == "quarantined"
+    assert quarantine_reason == "malformed clinical ownership evidence"
