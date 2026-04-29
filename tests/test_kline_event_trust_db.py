@@ -151,3 +151,51 @@ def test_mark_legacy_events_untrusted_updates_missing_schema():
         row["schema_version"],
         row["quarantine_reason"],
     ) == ("legacy_untrusted", 1, "legacy row missing trust provenance")
+
+
+def test_mark_legacy_events_untrusted_normalizes_schema_version_for_all_updated_rows():
+    from src.backtest.events_db import (
+        _get_conn,
+        init_db,
+        mark_legacy_events_untrusted,
+    )
+
+    init_db()
+    conn = _get_conn()
+    conn.executemany(
+        """
+        INSERT INTO biotech_events (
+            id, date, type, priority, ticker, trust_status, schema_version
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("schema-zero", "2026-04-20", "clinical_readout", 2, "MRNA", "trusted", 0),
+            ("blank-trust", "2026-04-20", "clinical_readout", 2, "MRNA", "", 2),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    updated = mark_legacy_events_untrusted("MRNA")
+
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT id, trust_status, schema_version
+        FROM biotech_events
+        WHERE id IN (?, ?)
+        ORDER BY id
+        """,
+        ("schema-zero", "blank-trust"),
+    ).fetchall()
+    conn.close()
+
+    assert updated == 2
+    assert {
+        row["id"]: (row["trust_status"], row["schema_version"])
+        for row in rows
+    } == {
+        "blank-trust": ("legacy_untrusted", 1),
+        "schema-zero": ("legacy_untrusted", 1),
+    }

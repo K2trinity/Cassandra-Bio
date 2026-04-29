@@ -289,7 +289,7 @@ def mark_legacy_events_untrusted(ticker: str | None = None) -> int:
         UPDATE biotech_events
         SET
             trust_status = 'legacy_untrusted',
-            schema_version = COALESCE(schema_version, 1),
+            schema_version = 1,
             quarantine_reason = COALESCE(NULLIF(quarantine_reason, ''), ?)
         WHERE (
             trust_status IS NULL
