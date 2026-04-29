@@ -1,4 +1,4 @@
-# Biotech Quant Framework Design
+[text](../../../../../PokieTicker/README.md)# Biotech Quant Framework Design
 
 日期：2026-04-20
 
