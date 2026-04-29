@@ -1023,8 +1023,13 @@ def normalize_clinical_trial_milestone_events(
     trials: List[Dict[str, Any]],
     source: str = "clinicaltrials",
     requested_ticker: str | None = None,
+    include_unowned: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Expand ClinicalTrials records into phase2 milestone events."""
+    """Expand ClinicalTrials records into phase2 milestone events.
+
+    Unowned requested-ticker rows are skipped unless include_unowned is set, in
+    which case callers can persist them with quarantine metadata.
+    """
     from src.kline.event_filter import enrich_event_metadata
 
     events: List[Dict[str, Any]] = []
@@ -1032,7 +1037,8 @@ def normalize_clinical_trial_milestone_events(
         try:
             sponsor = _coerce_text(trial.get("sponsor"), "UNKNOWN")
             entity_match = _clinical_ownership_match(trial, requested_ticker, sponsor)
-            if requested_ticker is not None and entity_match is None:
+            is_unowned = requested_ticker is not None and entity_match is None
+            if is_unowned and not include_unowned:
                 logger.debug(
                     "Skipping ClinicalTrials milestone event without ticker ownership: "
                     f"{requested_ticker}/{trial.get('nct_id')}"
@@ -1117,9 +1123,14 @@ def normalize_clinical_trial_milestone_events(
                     "status": status,
                     "has_results": _to_bool(trial.get("has_results")),
                     "interventions": interventions,
-                    "entity_match": entity_match or "sponsor",
+                    "entity_match": entity_match or "unowned",
+                    "ownership_status": "unowned" if is_unowned else "owned",
                     "raw_type": event_type,
                 }
+                if is_unowned:
+                    metadata["quarantine_reason"] = (
+                        "clinical trial sponsor/collaborator did not match requested ticker"
+                    )
                 why_stopped = trial.get("why_stopped")
                 if why_stopped and why_stopped not in {"Reason not provided", "N/A"}:
                     metadata["why_stopped"] = why_stopped

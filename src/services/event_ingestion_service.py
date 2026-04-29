@@ -9,7 +9,7 @@ from src.backtest.events_db import (
     init_db,
     init_fetch_log_table,
     insert_events,
-    get_events_for_chart,
+    get_trusted_events_for_chart,
     record_fetch_attempt,
     get_last_fetch_at,
     get_fetch_log_entries,
@@ -25,6 +25,13 @@ from src.tools.clinical_trials_client import (
 from src.tools.alpha_vantage_news_client import fetch_market_news_events
 from src.tools.gdelt_client import fetch_biotech_macro_events
 from src.kline.event_filter import enrich_event_metadata
+from src.kline.event_trust import (
+    apply_event_trust,
+    build_query_hash,
+    build_source_run_id,
+    decode_metadata,
+)
+from src.kline.ticker_resolver import TickerResolver
 
 
 def _is_cache_stale(last_fetch_at: Optional[str], max_age_hours: int) -> bool:
@@ -79,9 +86,68 @@ def _cached_source_statuses(ticker: str) -> dict[str, str | None]:
     }
 
 
-def _enrich_events(events: list[dict]) -> list[dict]:
-    """Apply phase2 event taxonomy/scoring metadata before persistence."""
-    return [enrich_event_metadata(event) for event in events]
+def _company_identity(ticker: str) -> str:
+    """Return a stable ticker/company identity string for trust metadata."""
+    normalized_ticker = str(ticker or "").strip().upper() or "UNKNOWN"
+    try:
+        company = TickerResolver().resolve(normalized_ticker)
+    except ValueError:
+        return f"{normalized_ticker}|{normalized_ticker}"
+    return f"{company.ticker}|{company.name}"
+
+
+def _ownership_for_event(
+    event: dict,
+    source: str,
+) -> tuple[str, str, str | None]:
+    """Classify event ownership for trust-boundary persistence."""
+    source_key = str(source or event.get("source") or "").strip().lower()
+    if source_key == "clinicaltrials":
+        metadata = decode_metadata(event.get("metadata"))
+        if metadata.get("ownership_status") == "unowned":
+            return (
+                "unowned",
+                "quarantined",
+                metadata.get("quarantine_reason")
+                or "clinical trial sponsor/collaborator did not match requested ticker",
+            )
+        return ("owned", "trusted", None)
+    if source_key in {"openfda", "alphavantage", "gdelt"}:
+        return ("market_relevant", "trusted", None)
+    return ("unknown", "quarantined", "unknown event source")
+
+
+def _enrich_events(
+    events: list[dict],
+    *,
+    ticker: str,
+    source: str,
+    source_run_id: str,
+    query_hash: str,
+) -> list[dict]:
+    """Apply phase2 event taxonomy/scoring and trust metadata before persistence."""
+    company_identity = _company_identity(ticker)
+    enriched_events = []
+    for event in events:
+        enriched = enrich_event_metadata(event)
+        ownership_status, trust_status, quarantine_reason = _ownership_for_event(
+            enriched,
+            source,
+        )
+        enriched_events.append(
+            apply_event_trust(
+                enriched,
+                ticker=ticker,
+                source=source,
+                source_run_id=source_run_id,
+                query_hash=query_hash,
+                company_identity=company_identity,
+                ownership_status=ownership_status,
+                trust_status=trust_status,
+                quarantine_reason=quarantine_reason,
+            )
+        )
+    return enriched_events
 
 
 def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
@@ -122,6 +188,8 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
 
         try:
             if source == "openfda":
+                source_run_id = build_source_run_id(ticker, source)
+                query_hash = build_query_hash(source, ticker, {"limit": 20})
                 client = OpenFDAClient(raise_on_error=True)
                 payload = client.collect(ticker, limit=20)
 
@@ -138,7 +206,13 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                             )
                         )
 
-                events = _enrich_events(events)
+                events = _enrich_events(
+                    events,
+                    ticker=ticker,
+                    source=source,
+                    source_run_id=source_run_id,
+                    query_hash=query_hash,
+                )
                 item_count = len(events)
                 if events:
                     insert_events(events)
@@ -152,6 +226,8 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 )
 
             elif source == "clinicaltrials":
+                source_run_id = build_source_run_id(ticker, source)
+                query_hash = build_query_hash(source, ticker, {"max_results": 50})
                 trials = search_trials(
                     ticker,
                     max_results=50,
@@ -161,9 +237,16 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                     trials,
                     source="clinicaltrials",
                     requested_ticker=ticker,
+                    include_unowned=True,
                 )
 
-                events = _enrich_events(events)
+                events = _enrich_events(
+                    events,
+                    ticker=ticker,
+                    source=source,
+                    source_run_id=source_run_id,
+                    query_hash=query_hash,
+                )
                 item_count = len(events)
                 if events:
                     insert_events(events)
@@ -179,9 +262,17 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 )
 
             elif source == "alphavantage":
+                source_run_id = build_source_run_id(ticker, source)
+                query_hash = build_query_hash(source, ticker)
                 events, source_status = fetch_market_news_events(ticker)
 
-                events = _enrich_events(events)
+                events = _enrich_events(
+                    events,
+                    ticker=ticker,
+                    source=source,
+                    source_run_id=source_run_id,
+                    query_hash=query_hash,
+                )
                 item_count = len(events)
                 if events:
                     insert_events(events)
@@ -198,13 +289,21 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 )
 
             elif source == "gdelt":
+                source_run_id = build_source_run_id(ticker, source)
+                query_hash = build_query_hash(source, ticker, {"max_records": 20})
                 events = fetch_biotech_macro_events(
                     ticker,
                     max_records=20,
                     raise_on_error=True,
                 )
 
-                events = _enrich_events(events)
+                events = _enrich_events(
+                    events,
+                    ticker=ticker,
+                    source=source,
+                    source_run_id=source_run_id,
+                    query_hash=query_hash,
+                )
                 item_count = len(events)
                 if events:
                     insert_events(events)
@@ -227,5 +326,5 @@ def get_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
                 message=str(e),
             )
 
-    # Return all events for the ticker
-    return get_events_for_chart(ticker)
+    # Return only trusted projections for the ticker.
+    return get_trusted_events_for_chart(ticker)
