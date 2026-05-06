@@ -355,6 +355,56 @@ def test_workspace_js_backtest_renders_event_attribution():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_backtest_renders_factor_attribution_without_mock_disclosure():
+    result = _run_workspace_script(r"""
+        fetch = function () {
+          return Promise.resolve(jsonResponse({
+            run_id: 'factor-run',
+            metrics: { sharpe: 1.1 },
+            equity_curve: [],
+            signals: [],
+            trades: [],
+            factor_attribution: {
+              active_factor_days: 3,
+              mean_mock_score: 0.4,
+              mean_event_factor: 0.7,
+              mean_liquidity_factor: 0.2
+            },
+            mock_metadata: {
+              data_mode: 'mock',
+              synthetic: true,
+              positive_demo_expected: true
+            },
+            strategy: {
+              id: 'mock_multifactor_demo',
+              data_mode: 'mock'
+            }
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        const text = document.getElementById('backtest-results').textContent;
+        if (!text.includes('factor_attribution') || !text.includes('active_factor_days') || !text.includes('mean_event_factor')) {
+          throw new Error('factor attribution diagnostics were not rendered: ' + text);
+        }
+
+        const lowerText = text.toLowerCase();
+        ['mock', 'synthetic', 'positive_demo_expected', 'data_mode'].forEach((forbidden) => {
+          if (lowerText.includes(forbidden)) {
+            throw new Error('mock disclosure leaked into diagnostics: ' + forbidden + ' in ' + text);
+          }
+        });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_details_renders_phase2_event_metadata():
     result = _run_workspace_script(r"""
         installWorkspace(makeWorkspace({

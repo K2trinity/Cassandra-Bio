@@ -436,16 +436,27 @@
   }
 
   function renderBacktestDiagnostics(node, body) {
-    ["event_filter", "signal_summary", "baseline"].forEach(function (key) {
+    ["event_filter", "signal_summary", "baseline", "factor_attribution"].forEach(function (key) {
       if (!body || !body[key]) {
         return;
       }
       var section = makeElement("section", { className: "backtest-diagnostics" });
       section.appendChild(makeElement("h3", { className: "panel-heading", text: key }));
-      appendMetrics(section, body[key]);
+      appendMetrics(section, publicBacktestDiagnostics(body[key]));
       node.appendChild(section);
     });
     renderEventAttribution(node, body && body.event_attribution);
+  }
+
+  function publicBacktestDiagnostics(metrics) {
+    var filtered = {};
+    Object.keys(metrics || {}).forEach(function (key) {
+      if (key.indexOf("mock") !== -1 || key === "synthetic" || key === "positive_demo_expected" || key === "data_mode") {
+        return;
+      }
+      filtered[key] = metrics[key];
+    });
+    return filtered;
   }
 
   function renderEventAttribution(node, attribution) {
@@ -502,7 +513,7 @@
     panel.appendChild(results);
 
     var savedSummary = (backtestLayer(workspace).summary || {});
-    if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.baseline || savedSummary.event_attribution) {
+    if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.baseline || savedSummary.factor_attribution || savedSummary.event_attribution) {
       status.textContent = "Run " + (savedSummary.run_id || "complete") + " complete.";
       renderMetrics(results, savedSummary.metrics || {});
       renderBacktestDiagnostics(results, savedSummary);
