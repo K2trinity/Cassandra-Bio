@@ -996,6 +996,56 @@ def test_run_kline_backtest_uses_mock_multifactor_demo_for_a_tickers(
     assert payload["baseline"]["strategy_return"] > 0
 
 
+def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatch):
+    from src.backtest import runner
+
+    def ohlc_for(ticker):
+        base = {"MRNA": 100.0, "JNJ": 150.0, "LLY": 700.0, "ABBA": 20.0}[ticker]
+        rows = []
+        price = base
+        for index in range(55):
+            date = pd.Timestamp("2025-01-02") + pd.offsets.BDay(index)
+            open_price = price
+            close_price = open_price + (2.5 if index % 5 in {1, 2, 3} else -0.4)
+            rows.append(
+                {
+                    "date": date,
+                    "open": open_price,
+                    "high": max(open_price, close_price) + 1.0,
+                    "low": min(open_price, close_price) - 1.0,
+                    "close": close_price,
+                    "volume": 1_000_000 + index * 15_000,
+                }
+            )
+            price = close_price
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", ohlc_for)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
+
+    for ticker in ["MRNA", "JNJ", "LLY", "ABBA"]:
+        payload = runner.run_kline_backtest(
+            ticker=ticker,
+            start_date="2025-01-02",
+            end_date="2025-03-31",
+        )
+        assert payload["strategy"]["id"] == "mock_multifactor_demo"
+        assert payload["mock_metadata"]["ticker"] == ticker
+        assert payload["signal_summary"]["active_signal_days"] >= 6
+        assert len(payload["trades"]) >= 5
+        assert payload["baseline"]["strategy_return"] > 0
+
+
 def test_run_kline_backtest_does_not_use_mock_strategy_for_non_a_ticker(
     tmp_path, monkeypatch
 ):

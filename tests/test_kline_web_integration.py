@@ -607,3 +607,22 @@ def test_backtest_api_rejects_explicit_mock_strategy_for_non_a_ticker(
         response.get_json()["error"]
         == "mock_multifactor_demo requires mock_scope='biotech_mock_v1'"
     )
+
+
+def test_backtest_api_rejects_mock_strategy_in_real_mode():
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-01-08",
+            "strategy_id": "mock_multifactor_demo",
+            "data_mode": "real",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "mock_multifactor_demo requires data_mode='mock'"
+    }
