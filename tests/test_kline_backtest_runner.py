@@ -796,3 +796,124 @@ def test_factor_attribution_uses_custom_threshold_for_active_days():
     assert summary["active_factor_days"] == 1
     assert summary["mean_mock_score"] == 0.5
     assert summary["mean_event_factor"] == 0.3
+
+
+def test_mock_multifactor_signals_handles_empty_and_dateless_factors():
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame(
+        [
+            {"date": pd.Timestamp("2025-01-02")},
+            {"date": pd.Timestamp("2025-01-03")},
+        ]
+    )
+
+    for factors in [
+        pd.DataFrame(),
+        pd.DataFrame([{"mock_score": 0.8}]),
+    ]:
+        signals = generate_mock_multifactor_signals(price_window, factors)
+
+        assert len(signals) == len(price_window)
+        assert set(signals["signal"]) == {0}
+        assert set(signals["signal_strength"]) == {0.0}
+
+
+def test_factor_attribution_deduplicates_by_date_and_ignores_invalid_dates():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": 0.1,
+                "momentum_factor": 0.0,
+                "volume_shock": 0.0,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.0,
+                "regime_factor": 0.0,
+                "mock_score": 0.2,
+            },
+            {
+                "date": "2025-01-02",
+                "event_factor": 0.8,
+                "momentum_factor": 0.3,
+                "volume_shock": 0.2,
+                "volatility_penalty": -0.1,
+                "liquidity_factor": 0.4,
+                "regime_factor": 0.5,
+                "mock_score": 0.6,
+            },
+            {
+                "date": "not-a-date",
+                "event_factor": 0.9,
+                "momentum_factor": 0.9,
+                "volume_shock": 0.9,
+                "volatility_penalty": 0.9,
+                "liquidity_factor": 0.9,
+                "regime_factor": 0.9,
+                "mock_score": 0.9,
+            },
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors)
+
+    assert summary["active_factor_days"] == 1
+    assert summary["mean_mock_score"] == 0.6
+    assert summary["mean_event_factor"] == 0.8
+    assert summary["mean_regime_factor"] == 0.5
+
+
+def test_mock_multifactor_signals_matches_timezone_aware_factor_dates():
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame([{"date": pd.Timestamp("2025-01-02")}])
+    factors = pd.DataFrame(
+        [{"date": "2025-01-02T00:00:00Z", "mock_score": 0.4}]
+    )
+
+    signals = generate_mock_multifactor_signals(price_window, factors)
+
+    assert len(signals) == 1
+    assert signals.iloc[0]["signal"] == 1
+    assert signals.iloc[0]["signal_strength"] == 0.4
+
+
+def test_multifactor_helpers_reject_duplicate_factor_columns():
+    import pytest
+
+    from src.backtest.multifactor_strategy import (
+        generate_mock_multifactor_signals,
+        summarize_factor_attribution,
+    )
+
+    price_window = pd.DataFrame([{"date": pd.Timestamp("2025-01-02")}])
+    factors = pd.DataFrame(
+        [["2025-01-02", 0.2, 0.4]],
+        columns=["date", "mock_score", "mock_score"],
+    )
+
+    with pytest.raises(ValueError, match="unique columns"):
+        generate_mock_multifactor_signals(price_window, factors)
+
+    with pytest.raises(ValueError, match="unique columns"):
+        summarize_factor_attribution(factors)
+
+
+def test_multifactor_helpers_reject_negative_threshold():
+    import pytest
+
+    from src.backtest.multifactor_strategy import (
+        generate_mock_multifactor_signals,
+        summarize_factor_attribution,
+    )
+
+    price_window = pd.DataFrame([{"date": pd.Timestamp("2025-01-02")}])
+    factors = pd.DataFrame([{"date": "2025-01-02", "mock_score": -0.1}])
+
+    with pytest.raises(ValueError, match="threshold must be non-negative"):
+        generate_mock_multifactor_signals(price_window, factors, threshold=-0.2)
+
+    with pytest.raises(ValueError, match="threshold must be non-negative"):
+        summarize_factor_attribution(factors, threshold=-0.2)

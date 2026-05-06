@@ -21,8 +21,9 @@ def generate_mock_multifactor_signals(
     factors: pd.DataFrame,
     threshold: float = DEFAULT_MOCK_SIGNAL_THRESHOLD,
 ) -> pd.DataFrame:
+    threshold = _validate_threshold(threshold)
     signals = price_window[["date"]].copy()
-    signals["date"] = pd.to_datetime(signals["date"])
+    signals["date"] = _normalize_dates(signals["date"])
     signals = signals.merge(
         _factor_scores(factors),
         on="date",
@@ -30,13 +31,12 @@ def generate_mock_multifactor_signals(
         validate="many_to_one",
     )
     signals["mock_score"] = signals["mock_score"].fillna(0.0)
-    signals["signal"] = 0
     active = signals["mock_score"] > threshold
-    signals.loc[active, "signal"] = 1
-    signals["signal_strength"] = 0.0
-    signals.loc[active, "signal_strength"] = signals.loc[
-        active, "mock_score"
-    ].clip(upper=1.0)
+    signals["signal"] = active.astype(int)
+    signals["signal_strength"] = signals["mock_score"].where(active, 0.0).clip(
+        lower=0.0,
+        upper=1.0,
+    )
     return signals[["date", "signal", "signal_strength"]]
 
 
@@ -44,7 +44,8 @@ def summarize_factor_attribution(
     factors: pd.DataFrame,
     threshold: float = DEFAULT_MOCK_SIGNAL_THRESHOLD,
 ) -> dict[str, Any]:
-    rows = _coerce_factor_frame(factors)
+    threshold = _validate_threshold(threshold)
+    rows = _normalized_factor_rows(factors)
     if rows.empty:
         return _empty_factor_attribution()
 
@@ -62,24 +63,67 @@ def summarize_factor_attribution(
 
 
 def _factor_scores(factors: pd.DataFrame) -> pd.DataFrame:
-    if factors.empty or "date" not in factors.columns:
-        return pd.DataFrame(columns=["date", "mock_score"])
-    rows = _coerce_factor_frame(factors)
-    rows["date"] = pd.to_datetime(rows["date"], errors="coerce")
-    rows = rows.dropna(subset=["date"])
-    if rows.empty:
-        return pd.DataFrame(columns=["date", "mock_score"])
-    return rows.groupby("date", as_index=False, sort=True)["mock_score"].max()
+    return _normalized_factor_rows(factors)[["date", "mock_score"]]
 
 
-def _coerce_factor_frame(factors: pd.DataFrame) -> pd.DataFrame:
+def _normalized_factor_rows(factors: pd.DataFrame) -> pd.DataFrame:
+    if factors.empty:
+        return _empty_normalized_factor_rows()
+    if not factors.columns.is_unique:
+        raise ValueError("factors must have unique columns")
+    if "date" not in factors.columns:
+        return _empty_normalized_factor_rows()
+
     rows = factors.copy()
+    rows["date"] = _normalize_dates(rows["date"])
     for column in ["mock_score", *FACTOR_COLUMNS]:
         if column not in rows.columns:
             rows[column] = 0.0
-        numeric = pd.to_numeric(rows[column], errors="coerce")
-        rows[column] = numeric.replace([math.inf, -math.inf], 0.0).fillna(0.0)
-    return rows
+        rows[column] = _coerce_numeric_series(rows[column])
+
+    rows = rows.dropna(subset=["date"])
+    if rows.empty:
+        return _empty_normalized_factor_rows()
+
+    rows = rows[["date", "mock_score", *FACTOR_COLUMNS]].reset_index(drop=True)
+    rows["_source_order"] = range(len(rows))
+    rows = rows.sort_values(
+        ["date", "mock_score", "_source_order"],
+        ascending=[True, False, True],
+        kind="mergesort",
+    )
+    rows = rows.drop_duplicates(subset=["date"], keep="first")
+    return rows.drop(columns=["_source_order"]).reset_index(drop=True)
+
+
+def _normalize_dates(values: pd.Series) -> pd.Series:
+    dates = pd.to_datetime(values, utc=True, errors="coerce")
+    return dates.dt.tz_convert(None).dt.normalize().astype("datetime64[ns]")
+
+
+def _coerce_numeric_series(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    return numeric.replace([math.inf, -math.inf], 0.0).fillna(0.0).astype(float)
+
+
+def _empty_normalized_factor_rows() -> pd.DataFrame:
+    rows = {
+        "date": pd.Series(dtype="datetime64[ns]"),
+        "mock_score": pd.Series(dtype="float64"),
+    }
+    for column in FACTOR_COLUMNS:
+        rows[column] = pd.Series(dtype="float64")
+    return pd.DataFrame(rows)
+
+
+def _validate_threshold(threshold: float) -> float:
+    try:
+        number = float(threshold)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("threshold must be non-negative") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("threshold must be non-negative")
+    return number
 
 
 def _empty_factor_attribution() -> dict[str, Any]:
