@@ -390,7 +390,7 @@ def test_workspace_js_backtest_renders_factor_attribution_without_mock_disclosur
         await settle();
 
         const text = document.getElementById('backtest-results').textContent;
-        if (!text.includes('factor_attribution') || !text.includes('active_factor_days') || !text.includes('mean_event_factor')) {
+        if (!text.includes('factor_attribution') || !text.includes('active_factor_days') || !text.includes('mean_event_factor') || !text.includes('mean_liquidity_factor')) {
           throw new Error('factor attribution diagnostics were not rendered: ' + text);
         }
 

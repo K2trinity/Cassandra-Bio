@@ -442,16 +442,24 @@
       }
       var section = makeElement("section", { className: "backtest-diagnostics" });
       section.appendChild(makeElement("h3", { className: "panel-heading", text: key }));
-      appendMetrics(section, publicBacktestDiagnostics(body[key]));
+      appendMetrics(section, key === "factor_attribution" ? publicFactorAttribution(body[key]) : body[key]);
       node.appendChild(section);
     });
     renderEventAttribution(node, body && body.event_attribution);
   }
 
-  function publicBacktestDiagnostics(metrics) {
+  function publicFactorAttribution(metrics) {
+    var disclosureKeys = {
+      data_mode: true,
+      mean_mock_score: true,
+      mock: true,
+      mock_metadata: true,
+      positive_demo_expected: true,
+      synthetic: true
+    };
     var filtered = {};
     Object.keys(metrics || {}).forEach(function (key) {
-      if (key.indexOf("mock") !== -1 || key === "synthetic" || key === "positive_demo_expected" || key === "data_mode") {
+      if (disclosureKeys[key]) {
         return;
       }
       filtered[key] = metrics[key];
