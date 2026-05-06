@@ -880,6 +880,21 @@ def test_mock_multifactor_signals_matches_timezone_aware_factor_dates():
     assert signals.iloc[0]["signal_strength"] == 0.4
 
 
+def test_mock_multifactor_signals_preserves_local_factor_calendar_dates():
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame([{"date": pd.Timestamp("2025-01-02")}])
+    factors = pd.DataFrame(
+        [{"date": "2025-01-02T23:30:00-05:00", "mock_score": 0.4}]
+    )
+
+    signals = generate_mock_multifactor_signals(price_window, factors)
+
+    assert len(signals) == 1
+    assert signals.iloc[0]["signal"] == 1
+    assert signals.iloc[0]["signal_strength"] == 0.4
+
+
 def test_multifactor_helpers_reject_duplicate_factor_columns():
     import pytest
 

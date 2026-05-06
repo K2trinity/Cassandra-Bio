@@ -100,8 +100,20 @@ def _normalized_factor_rows(factors: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_dates(values: pd.Series) -> pd.Series:
-    dates = pd.to_datetime(values, utc=True, errors="coerce")
-    return dates.dt.tz_convert(None).dt.normalize().astype("datetime64[ns]")
+    dates = values.apply(_normalize_date_value)
+    return pd.to_datetime(dates, errors="coerce").astype("datetime64[ns]")
+
+
+def _normalize_date_value(value: object) -> pd.Timestamp:
+    try:
+        date = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(date):
+        return pd.NaT
+    if date.tzinfo is not None:
+        date = date.tz_localize(None)
+    return date.normalize()
 
 
 def _coerce_numeric_series(values: pd.Series) -> pd.Series:
