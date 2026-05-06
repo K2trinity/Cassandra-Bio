@@ -7,10 +7,24 @@ import pandas as pd
 MOCK_BACKTEST_TICKERS: Final[tuple[str, ...]] = ("MRNA", "JNJ", "LLY", "ABBA")
 MOCK_SCOPE: Final[str] = "biotech_mock_v1"
 MOCK_DATA_MODE: Final[str] = "mock"
+MOCK_FACTOR_COLUMNS: Final[tuple[str, ...]] = (
+    "date",
+    "event_factor",
+    "momentum_factor",
+    "volume_shock",
+    "volatility_penalty",
+    "liquidity_factor",
+    "regime_factor",
+    "mock_score",
+)
 
 
 def normalize_ticker(value: object) -> str:
-    return str(value or "").strip().upper()
+    if value is None:
+        return ""
+    if pd.api.types.is_scalar(value) and pd.isna(value):
+        return ""
+    return str(value).strip().upper()
 
 
 def is_mock_backtest_ticker(ticker: object) -> bool:
@@ -39,7 +53,7 @@ def build_mock_factor_frame(
     The selected rows are synthetic hindsight fixtures and must remain limited
     to the A demo path. B/C must not call this function.
     """
-    if price_window.empty or len(price_window) < 3:
+    if not is_mock_backtest_ticker(ticker) or price_window.empty or len(price_window) < 3:
         return _empty_factor_frame()
 
     rows = price_window[["date", "open", "close", "volume"]].copy()
@@ -81,30 +95,8 @@ def build_mock_factor_frame(
         + factors["liquidity_factor"]
         + factors["regime_factor"]
     ).clip(lower=0.0, upper=1.0)
-    return factors[
-        [
-            "date",
-            "event_factor",
-            "momentum_factor",
-            "volume_shock",
-            "volatility_penalty",
-            "liquidity_factor",
-            "regime_factor",
-            "mock_score",
-        ]
-    ]
+    return factors[list(MOCK_FACTOR_COLUMNS)]
 
 
 def _empty_factor_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=[
-            "date",
-            "event_factor",
-            "momentum_factor",
-            "volume_shock",
-            "volatility_penalty",
-            "liquidity_factor",
-            "regime_factor",
-            "mock_score",
-        ]
-    )
+    return pd.DataFrame(columns=list(MOCK_FACTOR_COLUMNS))

@@ -33,6 +33,14 @@ def test_mock_universe_is_limited_to_four_demo_tickers():
     assert not is_mock_backtest_ticker("PFE")
 
 
+def test_ticker_normalization_handles_null_like_values():
+    from src.backtest.mock_dataset import is_mock_backtest_ticker, normalize_ticker
+
+    assert normalize_ticker(None) == ""
+    assert normalize_ticker(pd.NA) == ""
+    assert is_mock_backtest_ticker(pd.NA) is False
+
+
 def test_mock_run_metadata_marks_backend_only_demo_scope():
     from src.backtest.mock_dataset import mock_run_metadata
 
@@ -65,3 +73,21 @@ def test_build_mock_factor_frame_creates_multiple_high_score_rows():
     assert len(factors[factors["mock_score"] > 0.15]) >= 5
     assert factors["mock_score"].max() <= 1.0
     assert factors["volatility_penalty"].max() <= 0.0
+
+
+def test_build_mock_factor_frame_returns_empty_frame_for_unsupported_ticker():
+    from src.backtest.mock_dataset import build_mock_factor_frame
+
+    factors = build_mock_factor_frame("PFE", _price_window(), min_signal_days=5)
+
+    assert list(factors.columns) == [
+        "date",
+        "event_factor",
+        "momentum_factor",
+        "volume_shock",
+        "volatility_penalty",
+        "liquidity_factor",
+        "regime_factor",
+        "mock_score",
+    ]
+    assert factors.empty
