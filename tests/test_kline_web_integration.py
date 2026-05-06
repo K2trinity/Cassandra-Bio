@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -517,3 +519,58 @@ def test_backtest_result_api_returns_saved_payload(monkeypatch):
 
     assert response.status_code == 200
     assert body["run_id"] == "run-123"
+
+
+def test_backtest_api_returns_mock_metadata_without_template_mock_disclosure(
+    monkeypatch, tmp_path
+):
+    from src.backtest import runner
+
+    ohlc = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0 + index,
+                "high": 103.0 + index,
+                "low": 99.0 + index,
+                "close": 102.0 + index if index % 4 in {1, 2} else 100.5 + index,
+                "volume": 1_000_000 + index * 20_000,
+            }
+            for index in range(45)
+        ]
+    )
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "stop_loss_pct": -0.08,
+            "max_position_pct": 0.2,
+            "slippage_pct": 0.001,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["mock_metadata"]["data_mode"] == "mock"
+    assert body["strategy"]["id"] == "mock_multifactor_demo"
+
+    html = client.get("/kline/MRNA").get_data(as_text=True).lower()
+    assert "mock" not in html
+    assert "synthetic" not in html

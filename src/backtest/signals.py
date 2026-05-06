@@ -41,6 +41,36 @@ PRIORITY_WEIGHT = {1: 1.0, 2: 0.6, 3: 0.3, 4: 0.2, 5: 0.15}
 SENTIMENT_DIRECTION = {"positive": 1.0, "negative": -1.0, "neutral": 0.0}
 
 
+def align_events_to_trading_dates(
+    events_df: pd.DataFrame, ohlc_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Map event dates to the next available trading date in the OHLC window."""
+    if events_df.empty or ohlc_df.empty:
+        return events_df.copy()
+    if "date" not in events_df.columns or "date" not in ohlc_df.columns:
+        return events_df.copy()
+
+    events = events_df.copy()
+    ohlc_dates = pd.to_datetime(ohlc_df["date"], errors="coerce").dropna()
+    if ohlc_dates.empty:
+        return events
+
+    trading_dates = pd.Series(ohlc_dates.dt.normalize().unique()).sort_values()
+    event_dates = pd.to_datetime(events["date"], errors="coerce").dt.normalize()
+    positions = trading_dates.searchsorted(event_dates, side="left")
+    valid_mask = event_dates.notna() & (positions < len(trading_dates))
+
+    events = events.loc[valid_mask].copy()
+    if events.empty:
+        return events.reset_index(drop=True)
+
+    valid_positions = positions[valid_mask.to_numpy()]
+    if "original_event_date" not in events.columns:
+        events["original_event_date"] = event_dates[valid_mask].to_numpy()
+    events["date"] = trading_dates.iloc[valid_positions].to_numpy()
+    return events.reset_index(drop=True)
+
+
 def score_event(event: dict) -> float:
     """Score a single event using phase2 metadata when available."""
     metadata = decode_metadata(event.get("metadata"))

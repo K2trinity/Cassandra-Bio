@@ -24,9 +24,26 @@ from src.backtest.events_db import (
     init_db,
 )
 from src.backtest.features_v2 import build_features_v2
+from src.backtest.mock_dataset import (
+    MOCK_DATA_MODE,
+    MOCK_SCOPE,
+    build_mock_factor_frame,
+    is_mock_backtest_ticker,
+    mock_run_metadata,
+)
+from src.backtest.multifactor_strategy import (
+    generate_mock_multifactor_signals,
+    summarize_factor_attribution,
+)
 from src.backtest.result_store import RESULTS_DIR, load_run_payload
-from src.backtest.signals import generate_signals
+from src.backtest.signals import align_events_to_trading_dates, generate_signals
 from src.backtest.strategy import apply_strategy
+from src.backtest.strategy_registry import (
+    MOCK_MULTIFACTOR_DEMO,
+    StrategyAccessError,
+    default_strategy_for_kline,
+    validate_strategy_access,
+)
 from src.backtest.metrics import compute_metrics, compute_event_car
 from src.kline.event_filter import filter_backtest_events
 
@@ -198,6 +215,15 @@ def _trust_summary(events: pd.DataFrame) -> dict:
     }
 
 
+def _empty_event_filter() -> dict:
+    return {
+        "input_events": 0,
+        "eligible_events": 0,
+        "excluded_events": 0,
+        "min_confidence_score": 0.7,
+    }
+
+
 def _serialize_signals(signals: pd.DataFrame, events: pd.DataFrame) -> list[dict]:
     if signals.empty or "date" not in signals.columns:
         return []
@@ -346,7 +372,9 @@ def run_kline_backtest(
     stop_loss_pct: float = -0.08,
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
-    report_confidence: float = 0.5,
+    report_confidence: float = 1.0,
+    strategy_id: str | None = None,
+    data_mode: str | None = None,
 ) -> dict:
     """Run a single-ticker backtest and persist result as JSON.
 
@@ -358,6 +386,30 @@ def run_kline_backtest(
         return {"error": "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"}
 
     ticker = normalized_ticker
+    requested_strategy_id = str(strategy_id).strip() if strategy_id else None
+    requested_data_mode = str(data_mode).strip() if data_mode else None
+    resolved_strategy_id = requested_strategy_id or default_strategy_for_kline(ticker)
+    resolved_data_mode = requested_data_mode or (
+        MOCK_DATA_MODE
+        if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
+        and is_mock_backtest_ticker(ticker)
+        else "real"
+    )
+    resolved_mock_scope = (
+        MOCK_SCOPE
+        if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
+        and resolved_data_mode == MOCK_DATA_MODE
+        else None
+    )
+    try:
+        validate_strategy_access(
+            strategy_id=resolved_strategy_id,
+            data_mode=resolved_data_mode,
+            mock_scope=resolved_mock_scope,
+        )
+    except StrategyAccessError as exc:
+        return {"error": str(exc)}
+
     cache_path = _ohlc_cache_path(ticker)
 
     try:
@@ -398,15 +450,30 @@ def run_kline_backtest(
         end_date=end_date,
     )
     if events.empty:
+        eligible_events = pd.DataFrame()
+        event_filter = _empty_event_filter()
+    else:
+        eligible_events, event_filter = filter_backtest_events(events)
+
+    if (
+        resolved_strategy_id != MOCK_MULTIFACTOR_DEMO
+        and eligible_events.empty
+    ):
         return {"error": "no trusted backtest-eligible events in date range"}
 
-    eligible_events, event_filter = filter_backtest_events(events)
-    if eligible_events.empty:
-        return {"error": "no trusted backtest-eligible events in date range"}
-
-    signals = generate_signals(
-        price_window, eligible_events, report_confidence=report_confidence
-    )
+    mock_metadata = None
+    factor_attribution = {}
+    if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO:
+        factors = build_mock_factor_frame(ticker, price_window)
+        signals = generate_mock_multifactor_signals(price_window, factors)
+        signal_events = align_events_to_trading_dates(eligible_events, price_window)
+        factor_attribution = summarize_factor_attribution(factors)
+        mock_metadata = mock_run_metadata(ticker)
+    else:
+        signal_events = align_events_to_trading_dates(eligible_events, price_window)
+        signals = generate_signals(
+            price_window, signal_events, report_confidence=report_confidence
+        )
     results = apply_strategy(
         price_window,
         signals,
@@ -441,7 +508,7 @@ def run_kline_backtest(
             }
         )
 
-    car_df = compute_event_car(price_window, eligible_events)
+    car_df = compute_event_car(price_window, signal_events)
     event_car = []
     if not car_df.empty:
         for row in car_df.itertuples(index=False):
@@ -463,13 +530,19 @@ def run_kline_backtest(
         "ticker": ticker,
         "start_date": start_date,
         "end_date": end_date,
+        "strategy": {
+            "id": resolved_strategy_id,
+            "data_mode": resolved_data_mode,
+        },
+        "mock_metadata": mock_metadata,
+        "factor_attribution": factor_attribution,
         "input_event_ids": _input_event_ids(eligible_events),
         "trust_summary": _trust_summary(eligible_events),
         "source_status_at_run": get_fetch_log_entries(ticker),
         "metrics": metrics,
         "equity_curve": equity_curve,
         "event_car": event_car,
-        "signals": _serialize_signals(signals, eligible_events),
+        "signals": _serialize_signals(signals, signal_events),
         "trades": _derive_trades(price_window, results),
         "event_filter": event_filter,
         "event_attribution": summarize_events(eligible_events),

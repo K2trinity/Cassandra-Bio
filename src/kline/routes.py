@@ -119,6 +119,10 @@ def api_backtest_run():
     ticker = normalize_kline_ticker(raw_ticker)
     start_date = str(data.get("start_date") or "").strip()
     end_date = str(data.get("end_date") or "").strip()
+    raw_strategy_id = data.get("strategy_id")
+    strategy_id = str(raw_strategy_id).strip() if raw_strategy_id else None
+    raw_data_mode = data.get("data_mode")
+    data_mode = str(raw_data_mode).strip() if raw_data_mode else None
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return (
@@ -225,6 +229,8 @@ def api_backtest_run():
         stop_loss_pct=stop_loss_pct,
         max_position_pct=max_position_pct,
         slippage_pct=slippage_pct,
+        strategy_id=strategy_id,
+        data_mode=data_mode,
     )
 
     if isinstance(result, dict) and result.get("error"):

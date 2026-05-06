@@ -562,7 +562,7 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
     monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
 
     payload = runner.run_kline_backtest(
-        ticker="MRNA",
+        ticker="BIIB",
         start_date="2026-04-20",
         end_date="2026-04-22",
     )
@@ -946,3 +946,106 @@ def test_multifactor_helpers_reject_negative_threshold():
 
     with pytest.raises(ValueError, match="threshold must be non-negative"):
         summarize_factor_attribution(factors, threshold=-0.2)
+
+
+def test_run_kline_backtest_uses_mock_multifactor_demo_for_a_tickers(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    ohlc = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0 + index,
+                "high": 103.0 + index,
+                "low": 99.0 + index,
+                "close": 102.0 + index if index % 4 in {1, 2} else 100.5 + index,
+                "volume": 1_000_000 + index * 20_000,
+            }
+            for index in range(45)
+        ]
+    )
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-03-31",
+    )
+
+    assert payload["strategy"]["id"] == "mock_multifactor_demo"
+    assert payload["mock_metadata"]["data_mode"] == "mock"
+    assert payload["mock_metadata"]["mock_scope"] == "biotech_mock_v1"
+    assert payload["mock_metadata"]["ui_disclosure"] is False
+    assert payload["factor_attribution"]["active_factor_days"] >= 6
+    assert payload["signal_summary"]["active_signal_days"] >= 6
+    assert len(payload["trades"]) >= 5
+    assert payload["baseline"]["strategy_return"] > 0
+
+
+def test_run_kline_backtest_does_not_use_mock_strategy_for_non_a_ticker(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    ohlc = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1_000_000,
+            }
+            for index in range(5)
+        ]
+    )
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="PFE",
+        start_date="2025-01-02",
+        end_date="2025-01-08",
+    )
+
+    assert payload == {"error": "no trusted backtest-eligible events in date range"}
+
+
+def test_run_kline_backtest_rejects_mock_strategy_when_not_mock_mode(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-01-08",
+        strategy_id="mock_multifactor_demo",
+        data_mode="real",
+    )
+
+    assert payload["error"] == "mock_multifactor_demo requires data_mode='mock'"
