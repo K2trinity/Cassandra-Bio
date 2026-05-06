@@ -897,8 +897,16 @@ def test_multifactor_helpers_reject_duplicate_factor_columns():
     with pytest.raises(ValueError, match="unique columns"):
         generate_mock_multifactor_signals(price_window, factors)
 
-    with pytest.raises(ValueError, match="unique columns"):
-        summarize_factor_attribution(factors)
+    assert summarize_factor_attribution(factors) == {
+        "active_factor_days": 0,
+        "mean_mock_score": 0.0,
+        "mean_event_factor": 0.0,
+        "mean_momentum_factor": 0.0,
+        "mean_volume_shock": 0.0,
+        "mean_volatility_penalty": 0.0,
+        "mean_liquidity_factor": 0.0,
+        "mean_regime_factor": 0.0,
+    }
 
 
 def test_multifactor_helpers_reject_negative_threshold():

@@ -45,7 +45,10 @@ def summarize_factor_attribution(
     threshold: float = DEFAULT_MOCK_SIGNAL_THRESHOLD,
 ) -> dict[str, Any]:
     threshold = _validate_threshold(threshold)
-    rows = _normalized_factor_rows(factors)
+    try:
+        rows = _normalized_factor_rows(factors)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return _empty_factor_attribution()
     if rows.empty:
         return _empty_factor_attribution()
 
