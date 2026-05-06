@@ -130,6 +130,24 @@ def test_build_mock_factor_frame_returns_empty_frame_for_short_signal_window():
     assert factors.empty
 
 
+def test_build_mock_factor_frame_requires_enough_non_terminal_candidate_rows():
+    from src.backtest.mock_dataset import build_mock_factor_frame
+
+    factors = build_mock_factor_frame("MRNA", _price_window().head(5), min_signal_days=5)
+
+    assert list(factors.columns) == [
+        "date",
+        "event_factor",
+        "momentum_factor",
+        "volume_shock",
+        "volatility_penalty",
+        "liquidity_factor",
+        "regime_factor",
+        "mock_score",
+    ]
+    assert factors.empty
+
+
 def test_build_mock_factor_frame_tops_up_sparse_positive_candidates():
     from src.backtest.mock_dataset import build_mock_factor_frame
 
