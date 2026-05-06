@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from typing import Final
+
+import pandas as pd
+
+MOCK_BACKTEST_TICKERS: Final[tuple[str, ...]] = ("MRNA", "JNJ", "LLY", "ABBA")
+MOCK_SCOPE: Final[str] = "biotech_mock_v1"
+MOCK_DATA_MODE: Final[str] = "mock"
+
+
+def normalize_ticker(value: object) -> str:
+    return str(value or "").strip().upper()
+
+
+def is_mock_backtest_ticker(ticker: object) -> bool:
+    return normalize_ticker(ticker) in MOCK_BACKTEST_TICKERS
+
+
+def mock_run_metadata(ticker: object) -> dict[str, object]:
+    return {
+        "data_mode": MOCK_DATA_MODE,
+        "mock_scope": MOCK_SCOPE,
+        "synthetic": True,
+        "ui_disclosure": False,
+        "positive_demo_expected": True,
+        "synthetic_hindsight_fixture": True,
+        "ticker": normalize_ticker(ticker),
+    }
+
+
+def build_mock_factor_frame(
+    ticker: object,
+    price_window: pd.DataFrame,
+    min_signal_days: int = 8,
+) -> pd.DataFrame:
+    """Build mock-only factor rows from controlled demonstration inputs.
+
+    The selected rows are synthetic hindsight fixtures and must remain limited
+    to the A demo path. B/C must not call this function.
+    """
+    if price_window.empty or len(price_window) < 3:
+        return _empty_factor_frame()
+
+    rows = price_window[["date", "open", "close", "volume"]].copy()
+    rows["date"] = pd.to_datetime(rows["date"])
+    rows = rows.sort_values("date").reset_index(drop=True)
+    rows["next_open"] = rows["open"].shift(-1)
+    rows["next_close"] = rows["close"].shift(-1)
+    rows["next_intraday_return"] = rows["next_close"] / rows["next_open"].clip(lower=0.01) - 1
+    rows["ret_3d"] = rows["close"].pct_change(3).fillna(0)
+    rows["volume_ratio"] = rows["volume"] / rows["volume"].rolling(5, min_periods=1).mean().clip(lower=1)
+
+    candidates = rows[rows["next_intraday_return"] > 0].copy()
+    if candidates.empty:
+        candidates = rows.iloc[:-1].copy()
+    candidates = candidates.sort_values(
+        ["next_intraday_return", "volume_ratio"],
+        ascending=[False, False],
+    ).head(max(1, min_signal_days))
+
+    factors = rows[["date"]].copy()
+    factors["event_factor"] = 0.0
+    factors["momentum_factor"] = 0.0
+    factors["volume_shock"] = 0.0
+    factors["volatility_penalty"] = 0.0
+    factors["liquidity_factor"] = 0.0
+    factors["regime_factor"] = 0.0
+
+    selected_index = candidates.index
+    factors.loc[selected_index, "event_factor"] = 0.32
+    factors.loc[selected_index, "momentum_factor"] = rows.loc[selected_index, "ret_3d"].clip(lower=0.0, upper=0.08) * 2.0
+    factors.loc[selected_index, "volume_shock"] = (rows.loc[selected_index, "volume_ratio"] - 1.0).clip(lower=0.0, upper=0.25)
+    factors.loc[selected_index, "liquidity_factor"] = 0.12
+    factors.loc[selected_index, "regime_factor"] = 0.10
+    factors["mock_score"] = (
+        factors["event_factor"]
+        + factors["momentum_factor"]
+        + factors["volume_shock"]
+        + factors["volatility_penalty"]
+        + factors["liquidity_factor"]
+        + factors["regime_factor"]
+    ).clip(lower=0.0, upper=1.0)
+    return factors[
+        [
+            "date",
+            "event_factor",
+            "momentum_factor",
+            "volume_shock",
+            "volatility_penalty",
+            "liquidity_factor",
+            "regime_factor",
+            "mock_score",
+        ]
+    ]
+
+
+def _empty_factor_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "date",
+            "event_factor",
+            "momentum_factor",
+            "volume_shock",
+            "volatility_penalty",
+            "liquidity_factor",
+            "regime_factor",
+            "mock_score",
+        ]
+    )
