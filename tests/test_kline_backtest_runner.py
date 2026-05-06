@@ -1046,6 +1046,42 @@ def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatc
         assert payload["baseline"]["strategy_return"] > 0
 
 
+def test_mock_a_backtest_uses_deterministic_prices_without_ohlc_cache(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    def fail_load_ohlc(ticker):
+        raise AssertionError("mock demo path should not require cached or online OHLC")
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", fail_load_ohlc)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
+
+    for ticker in ["MRNA", "JNJ", "LLY", "ABBA"]:
+        payload = runner.run_kline_backtest(
+            ticker=ticker,
+            start_date="2025-01-02",
+            end_date="2025-03-31",
+        )
+
+        assert "error" not in payload
+        assert payload["strategy"]["id"] == "mock_multifactor_demo"
+        assert payload["mock_metadata"]["ticker"] == ticker
+        assert payload["signal_summary"]["active_signal_days"] >= 6
+        assert len(payload["trades"]) >= 5
+        assert payload["baseline"]["strategy_return"] > 0
+
+
 def test_run_kline_backtest_does_not_use_mock_strategy_for_non_a_ticker(
     tmp_path, monkeypatch
 ):

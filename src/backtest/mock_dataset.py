@@ -17,6 +17,12 @@ MOCK_FACTOR_COLUMNS: Final[tuple[str, ...]] = (
     "regime_factor",
     "mock_score",
 )
+MOCK_BASE_PRICES: Final[dict[str, float]] = {
+    "MRNA": 100.0,
+    "JNJ": 150.0,
+    "LLY": 700.0,
+    "ABBA": 20.0,
+}
 
 
 def normalize_ticker(value: object) -> str:
@@ -41,6 +47,47 @@ def mock_run_metadata(ticker: object) -> dict[str, object]:
         "synthetic_hindsight_fixture": True,
         "ticker": normalize_ticker(ticker),
     }
+
+
+def build_mock_ohlc_frame(
+    ticker: object,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Build deterministic mock-only OHLC rows for the A demo path."""
+    normalized_ticker = normalize_ticker(ticker)
+    if normalized_ticker not in MOCK_BASE_PRICES:
+        return _empty_ohlc_frame()
+
+    try:
+        start = pd.Timestamp(start_date).normalize()
+        end = pd.Timestamp(end_date).normalize()
+    except (TypeError, ValueError):
+        return _empty_ohlc_frame()
+    if pd.isna(start) or pd.isna(end) or start > end:
+        return _empty_ohlc_frame()
+
+    dates = pd.bdate_range(start, end)
+    if len(dates) < 3:
+        return _empty_ohlc_frame()
+
+    rows = []
+    price = MOCK_BASE_PRICES[normalized_ticker]
+    for index, date in enumerate(dates):
+        open_price = price
+        close_price = open_price + (2.5 if index % 5 in {1, 2, 3} else -0.4)
+        rows.append(
+            {
+                "date": date,
+                "open": open_price,
+                "high": max(open_price, close_price) + 1.0,
+                "low": min(open_price, close_price) - 1.0,
+                "close": close_price,
+                "volume": 1_000_000 + index * 15_000,
+            }
+        )
+        price = close_price
+    return pd.DataFrame(rows)
 
 
 def build_mock_factor_frame(
@@ -110,3 +157,7 @@ def build_mock_factor_frame(
 
 def _empty_factor_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(MOCK_FACTOR_COLUMNS))
+
+
+def _empty_ohlc_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])

@@ -28,6 +28,7 @@ from src.backtest.mock_dataset import (
     MOCK_DATA_MODE,
     MOCK_SCOPE,
     build_mock_factor_frame,
+    build_mock_ohlc_frame,
     is_mock_backtest_ticker,
     mock_run_metadata,
 )
@@ -402,23 +403,32 @@ def run_kline_backtest(
     except StrategyAccessError as exc:
         return {"error": str(exc)}
 
-    cache_path = _ohlc_cache_path(ticker)
-
-    try:
-        ohlc = load_ohlc(ticker)
-    except ModuleNotFoundError as exc:
-        return {
-            "error": (
-                f"failed to load OHLC: {exc}. "
-                "Use the Python 3.11 project interpreter and install requirements.txt "
-                "in that environment."
-            )
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {"error": f"failed to load OHLC: {exc}"}
+    use_mock_ohlc = (
+        resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
+        and resolved_data_mode == MOCK_DATA_MODE
+    )
+    if use_mock_ohlc:
+        ohlc = build_mock_ohlc_frame(ticker, start_date, end_date)
+        cache_path = None
+    else:
+        cache_path = _ohlc_cache_path(ticker)
+        try:
+            ohlc = load_ohlc(ticker)
+        except ModuleNotFoundError as exc:
+            return {
+                "error": (
+                    f"failed to load OHLC: {exc}. "
+                    "Use the Python 3.11 project interpreter and install requirements.txt "
+                    "in that environment."
+                )
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"failed to load OHLC: {exc}"}
 
     if ohlc.empty:
-        if not cache_path.exists():
+        if use_mock_ohlc:
+            return {"error": "no mock OHLC data"}
+        if cache_path is not None and not cache_path.exists():
             return {
                 "error": (
                     "no OHLC data. No local cache exists and the online fetch returned "

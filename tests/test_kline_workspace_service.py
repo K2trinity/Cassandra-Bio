@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 
@@ -532,6 +533,66 @@ def test_workspace_payload_contains_phase2_layers_and_future_capabilities():
         "phase": 3,
         "label": "Range Analysis",
     } in payload["capabilities"]
+
+
+def test_workspace_backtest_layer_omits_backend_mock_metadata():
+    contracts = _contracts()
+
+    class MockBacktestProvider:
+        def load_last_run(self, ticker: str):
+            return {
+                "run_id": "run-1",
+                "ticker": ticker,
+                "metrics": {"sharpe": 1.2},
+                "equity_curve": [{"date": "2026-04-20", "equity": 1.03}],
+                "signals": [{"date": "2026-04-20", "signal": 1}],
+                "trades": [{"entry_date": "2026-04-20", "exit_date": "2026-04-20"}],
+                "factor_attribution": {
+                    "active_factor_days": 8,
+                    "mean_mock_score": 0.61,
+                    "mean_event_factor": 0.32,
+                    "mean_liquidity_factor": 0.12,
+                },
+                "mock_metadata": {
+                    "data_mode": "mock",
+                    "synthetic": True,
+                    "positive_demo_expected": True,
+                },
+                "strategy": {
+                    "id": "mock_multifactor_demo",
+                    "data_mode": "mock",
+                },
+            }
+
+    service = contracts.KlineWorkspaceService(
+        resolver=contracts.TickerResolver(),
+        ohlc_provider=FakeOHLCProvider(
+            contracts.KlineDataStatus,
+            contracts.KlinePriceSeries,
+        ),
+        catalyst_provider=FakeCatalystProvider(
+            contracts.KlineDataStatus,
+            contracts.KlineEvent,
+        ),
+        backtest_provider=MockBacktestProvider(),
+    )
+
+    payload = service.build_workspace("MRNA").to_dict()
+    backtest_layer = next(
+        layer for layer in payload["layers"] if layer["kind"] == "backtest"
+    )
+    summary = backtest_layer["summary"]
+
+    assert summary["run_id"] == "run-1"
+    assert summary["factor_attribution"]["active_factor_days"] == 8
+    assert summary["factor_attribution"]["mean_event_factor"] == 0.32
+    assert summary["factor_attribution"]["mean_liquidity_factor"] == 0.12
+    assert "mean_mock_score" not in summary["factor_attribution"]
+    assert backtest_layer["series"] == [{"date": "2026-04-20", "equity": 1.03}]
+
+    summary_text = json.dumps(summary, sort_keys=True).lower()
+    for forbidden in ["mock", "synthetic", "positive_demo_expected", "data_mode"]:
+        assert forbidden not in summary_text
 
 
 def test_range_context_returns_phase1_price_and_catalyst_summary():

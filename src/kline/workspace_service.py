@@ -22,6 +22,30 @@ from src.kline.ticker_resolver import TickerResolver
 
 _MARKET_NEWS_SOURCES = {"alphavantage", "alpha_vantage", "market_news", "news"}
 _MACRO_SOURCES = {"gdelt", "fred", "worldbank", "macro"}
+_PUBLIC_BACKTEST_SUMMARY_KEYS = (
+    "run_id",
+    "created_at",
+    "ticker",
+    "start_date",
+    "end_date",
+    "metrics",
+    "event_filter",
+    "signal_summary",
+    "baseline",
+    "event_attribution",
+    "factor_attribution",
+    "signals",
+    "trades",
+    "event_car",
+)
+_PUBLIC_FACTOR_ATTRIBUTION_DENYLIST = {
+    "data_mode",
+    "mean_mock_score",
+    "mock",
+    "mock_metadata",
+    "positive_demo_expected",
+    "synthetic",
+}
 
 
 class KlineWorkspaceService:
@@ -214,8 +238,27 @@ def _backtest_layer(last_backtest: dict[str, Any] | None) -> KlineLayer:
         visible_by_default=False,
         status="ready" if last_backtest else "empty",
         series=_backtest_series(last_backtest),
-        summary=last_backtest or {},
+        summary=_public_backtest_summary(last_backtest),
     )
+
+
+def _public_backtest_summary(last_backtest: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(last_backtest, dict):
+        return {}
+
+    summary = {
+        key: last_backtest[key]
+        for key in _PUBLIC_BACKTEST_SUMMARY_KEYS
+        if key in last_backtest
+    }
+    factor_attribution = summary.get("factor_attribution")
+    if isinstance(factor_attribution, dict):
+        summary["factor_attribution"] = {
+            key: value
+            for key, value in factor_attribution.items()
+            if key not in _PUBLIC_FACTOR_ATTRIBUTION_DENYLIST
+        }
+    return summary
 
 
 def _backtest_series(last_backtest: dict[str, Any] | None) -> list[Any]:
