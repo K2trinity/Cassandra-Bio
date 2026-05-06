@@ -1049,3 +1049,76 @@ def test_run_kline_backtest_rejects_mock_strategy_when_not_mock_mode(
     )
 
     assert payload["error"] == "mock_multifactor_demo requires data_mode='mock'"
+
+
+def test_run_kline_backtest_rejects_explicit_mock_strategy_for_non_a_ticker(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+
+    payload = runner.run_kline_backtest(
+        ticker="PFE",
+        start_date="2025-01-02",
+        end_date="2025-01-08",
+        strategy_id="mock_multifactor_demo",
+        data_mode="mock",
+    )
+
+    assert (
+        payload["error"]
+        == "mock_multifactor_demo requires mock_scope='biotech_mock_v1'"
+    )
+
+
+def test_align_events_to_trading_dates_handles_mixed_timezone_inputs():
+    from src.backtest.signals import align_events_to_trading_dates
+
+    ohlc = pd.DataFrame(
+        {
+            "date": [
+                pd.Timestamp("2025-01-03 09:30:00", tz="America/New_York"),
+                pd.Timestamp("2025-01-06 09:30:00", tz="America/New_York"),
+            ]
+        }
+    )
+    events = pd.DataFrame(
+        [
+            {"event_id": "weekend", "date": "2025-01-04"},
+            {"event_id": "invalid", "date": "not-a-date"},
+            {"event_id": "after-window", "date": "2025-01-07"},
+        ]
+    )
+
+    aligned = align_events_to_trading_dates(events, ohlc)
+
+    assert aligned["event_id"].tolist() == ["weekend"]
+    assert aligned.loc[0, "date"] == pd.Timestamp("2025-01-06")
+    assert aligned.loc[0, "original_event_date"] == pd.Timestamp("2025-01-04")
+
+
+def test_align_events_to_trading_dates_returns_copy_when_date_column_missing():
+    from src.backtest.signals import align_events_to_trading_dates
+
+    events_without_date = pd.DataFrame(
+        {"event_id": ["evt-1"], "type": ["clinical_readout"]},
+        index=pd.DatetimeIndex([pd.Timestamp("2025-01-04")], name="date"),
+    )
+    ohlc = pd.DataFrame({"date": [pd.Timestamp("2025-01-06")]})
+
+    aligned = align_events_to_trading_dates(events_without_date, ohlc)
+
+    assert aligned is not events_without_date
+    pd.testing.assert_frame_equal(aligned, events_without_date.copy())
+
+    events = pd.DataFrame({"event_id": ["evt-1"], "date": [pd.Timestamp("2025-01-04")]})
+    ohlc_without_date = pd.DataFrame(
+        {"close": [101.0]},
+        index=pd.DatetimeIndex([pd.Timestamp("2025-01-06")], name="date"),
+    )
+
+    aligned = align_events_to_trading_dates(events, ohlc_without_date)
+
+    assert aligned is not events
+    pd.testing.assert_frame_equal(aligned, events.copy())

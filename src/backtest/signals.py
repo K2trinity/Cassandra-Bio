@@ -51,12 +51,12 @@ def align_events_to_trading_dates(
         return events_df.copy()
 
     events = events_df.copy()
-    ohlc_dates = pd.to_datetime(ohlc_df["date"], errors="coerce").dropna()
+    ohlc_dates = _normalize_dates(ohlc_df["date"]).dropna()
     if ohlc_dates.empty:
         return events
 
-    trading_dates = pd.Series(ohlc_dates.dt.normalize().unique()).sort_values()
-    event_dates = pd.to_datetime(events["date"], errors="coerce").dt.normalize()
+    trading_dates = pd.Series(ohlc_dates.unique()).sort_values()
+    event_dates = _normalize_dates(events["date"])
     positions = trading_dates.searchsorted(event_dates, side="left")
     valid_mask = event_dates.notna() & (positions < len(trading_dates))
 
@@ -69,6 +69,23 @@ def align_events_to_trading_dates(
         events["original_event_date"] = event_dates[valid_mask].to_numpy()
     events["date"] = trading_dates.iloc[valid_positions].to_numpy()
     return events.reset_index(drop=True)
+
+
+def _normalize_dates(values: pd.Series) -> pd.Series:
+    dates = values.apply(_normalize_date_value)
+    return pd.to_datetime(dates, errors="coerce").astype("datetime64[ns]")
+
+
+def _normalize_date_value(value: object) -> pd.Timestamp:
+    try:
+        date = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return pd.NaT
+    if pd.isna(date):
+        return pd.NaT
+    if date.tzinfo is not None:
+        date = date.tz_localize(None)
+    return date.normalize()
 
 
 def score_event(event: dict) -> float:

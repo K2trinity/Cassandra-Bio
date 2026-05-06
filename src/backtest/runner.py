@@ -390,6 +390,7 @@ def run_kline_backtest(
         MOCK_SCOPE
         if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
         and resolved_data_mode == MOCK_DATA_MODE
+        and is_mock_backtest_ticker(ticker)
         else None
     )
     try:
