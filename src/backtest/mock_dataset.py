@@ -66,13 +66,20 @@ def build_mock_factor_frame(
     rows["ret_3d"] = rows["close"].pct_change(3).fillna(0)
     rows["volume_ratio"] = rows["volume"] / rows["volume"].rolling(5, min_periods=1).mean().clip(lower=1)
 
-    candidates = rows[rows["next_intraday_return"] > 0].copy()
-    if candidates.empty:
-        candidates = rows.iloc[:-1].copy()
+    target_signal_days = max(1, min_signal_days)
+    eligible_rows = rows.iloc[:-1].copy()
+    candidates = eligible_rows[eligible_rows["next_intraday_return"] > 0].copy()
     candidates = candidates.sort_values(
-        ["next_intraday_return", "volume_ratio"],
-        ascending=[False, False],
-    ).head(max(1, min_signal_days))
+        ["next_intraday_return", "volume_ratio", "ret_3d"],
+        ascending=[False, False, False],
+    ).head(target_signal_days)
+    if len(candidates) < target_signal_days:
+        remaining = eligible_rows.drop(index=candidates.index)
+        remaining = remaining.sort_values(
+            ["next_intraday_return", "volume_ratio", "ret_3d"],
+            ascending=[False, False, False],
+        ).head(target_signal_days - len(candidates))
+        candidates = pd.concat([candidates, remaining])
 
     factors = rows[["date"]].copy()
     factors["event_factor"] = 0.0

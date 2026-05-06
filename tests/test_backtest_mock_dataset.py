@@ -24,6 +24,25 @@ def _price_window() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _sparse_positive_price_window() -> pd.DataFrame:
+    rows = []
+    for index in range(10):
+        date = pd.Timestamp("2025-01-02") + pd.offsets.BDay(index)
+        open_price = 100.0 + index
+        close_price = open_price + (2.0 if index == 5 else -1.0)
+        rows.append(
+            {
+                "date": date,
+                "open": open_price,
+                "high": max(open_price, close_price) + 1.0,
+                "low": min(open_price, close_price) - 1.0,
+                "close": close_price,
+                "volume": 1_000_000 + index * 10_000,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def test_mock_universe_is_limited_to_four_demo_tickers():
     from src.backtest.mock_dataset import MOCK_BACKTEST_TICKERS, is_mock_backtest_ticker
 
@@ -109,3 +128,21 @@ def test_build_mock_factor_frame_returns_empty_frame_for_short_signal_window():
         "mock_score",
     ]
     assert factors.empty
+
+
+def test_build_mock_factor_frame_tops_up_sparse_positive_candidates():
+    from src.backtest.mock_dataset import build_mock_factor_frame
+
+    factors = build_mock_factor_frame("MRNA", _sparse_positive_price_window(), min_signal_days=5)
+
+    assert list(factors.columns) == [
+        "date",
+        "event_factor",
+        "momentum_factor",
+        "volume_shock",
+        "volatility_penalty",
+        "liquidity_factor",
+        "regime_factor",
+        "mock_score",
+    ]
+    assert len(factors[factors["mock_score"] > 0.15]) >= 5
