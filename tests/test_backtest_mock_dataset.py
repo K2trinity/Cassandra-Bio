@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 
 def _price_window() -> pd.DataFrame:
@@ -164,3 +165,20 @@ def test_build_mock_factor_frame_tops_up_sparse_positive_candidates():
         "mock_score",
     ]
     assert len(factors[factors["mock_score"] > 0.15]) >= 5
+
+
+def test_build_mock_factor_frame_rejects_duplicate_price_window_columns():
+    from src.backtest.mock_dataset import build_mock_factor_frame
+
+    bad_frame = _price_window().head(6)
+    bad_frame.columns = [
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "close",
+    ]
+
+    with pytest.raises(ValueError, match="unique columns"):
+        build_mock_factor_frame("MRNA", bad_frame, min_signal_days=5)

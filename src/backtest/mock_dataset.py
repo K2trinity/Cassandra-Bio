@@ -56,6 +56,8 @@ def build_mock_factor_frame(
     required_rows = max(3, min_signal_days + 1 if min_signal_days > 0 else 3)
     if not is_mock_backtest_ticker(ticker) or price_window.empty or len(price_window) < required_rows:
         return _empty_factor_frame()
+    if not price_window.columns.is_unique:
+        raise ValueError("price_window must have unique columns")
 
     rows = price_window[["date", "open", "close", "volume"]].copy()
     rows["date"] = pd.to_datetime(rows["date"])
