@@ -215,15 +215,6 @@ def _trust_summary(events: pd.DataFrame) -> dict:
     }
 
 
-def _empty_event_filter() -> dict:
-    return {
-        "input_events": 0,
-        "eligible_events": 0,
-        "excluded_events": 0,
-        "min_confidence_score": 0.7,
-    }
-
-
 def _serialize_signals(signals: pd.DataFrame, events: pd.DataFrame) -> list[dict]:
     if signals.empty or "date" not in signals.columns:
         return []
@@ -449,11 +440,7 @@ def run_kline_backtest(
         start_date=start_date,
         end_date=end_date,
     )
-    if events.empty:
-        eligible_events = pd.DataFrame()
-        event_filter = _empty_event_filter()
-    else:
-        eligible_events, event_filter = filter_backtest_events(events)
+    eligible_events, event_filter = filter_backtest_events(events)
 
     if (
         resolved_strategy_id != MOCK_MULTIFACTOR_DEMO

@@ -120,9 +120,13 @@ def api_backtest_run():
     start_date = str(data.get("start_date") or "").strip()
     end_date = str(data.get("end_date") or "").strip()
     raw_strategy_id = data.get("strategy_id")
-    strategy_id = str(raw_strategy_id).strip() if raw_strategy_id else None
+    strategy_id = str(raw_strategy_id).strip() if raw_strategy_id is not None else None
+    if not strategy_id:
+        strategy_id = None
     raw_data_mode = data.get("data_mode")
-    data_mode = str(raw_data_mode).strip() if raw_data_mode else None
+    data_mode = str(raw_data_mode).strip() if raw_data_mode is not None else None
+    if not data_mode:
+        data_mode = None
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return (
