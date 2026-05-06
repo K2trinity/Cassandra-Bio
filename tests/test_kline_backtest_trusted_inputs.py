@@ -105,7 +105,12 @@ def test_backtest_reads_trusted_events_only(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
 
-    result = runner.run_kline_backtest("MRNA", "2025-01-01", "2025-01-05")
+    result = runner.run_kline_backtest(
+        "MRNA",
+        "2025-01-01",
+        "2025-01-05",
+        strategy_id="event_baseline",
+    )
 
     assert called == [("MRNA", "2025-01-01", "2025-01-05")]
     assert result["input_event_ids"] == ["trusted-event"]
@@ -125,7 +130,12 @@ def test_backtest_returns_error_without_trusted_events(tmp_path, monkeypatch):
         lambda ticker, start_date, end_date: pd.DataFrame(),
     )
 
-    result = runner.run_kline_backtest("MRNA", "2025-01-01", "2025-01-05")
+    result = runner.run_kline_backtest(
+        "MRNA",
+        "2025-01-01",
+        "2025-01-05",
+        strategy_id="event_baseline",
+    )
 
     assert result == {"error": "no trusted backtest-eligible events in date range"}
     assert not (tmp_path / "index.json").exists()
@@ -145,7 +155,12 @@ def test_backtest_returns_error_when_filter_excludes_all_trusted_events(
         lambda ticker, start_date, end_date: trusted_but_backtest_ineligible_events(),
     )
 
-    result = runner.run_kline_backtest("MRNA", "2025-01-01", "2025-01-05")
+    result = runner.run_kline_backtest(
+        "MRNA",
+        "2025-01-01",
+        "2025-01-05",
+        strategy_id="event_baseline",
+    )
 
     assert result == {"error": "no trusted backtest-eligible events in date range"}
     assert not (tmp_path / "index.json").exists()

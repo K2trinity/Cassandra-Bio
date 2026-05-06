@@ -552,6 +552,7 @@ def test_backtest_api_returns_mock_metadata_without_template_mock_disclosure(
     monkeypatch.setattr(
         runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
     )
+    _install_fake_workspace_service(monkeypatch)
 
     client = app.test_client()
     response = client.post(
