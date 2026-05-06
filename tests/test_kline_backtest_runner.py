@@ -651,3 +651,148 @@ def test_factor_attribution_summarizes_active_signal_drivers():
     assert summary["mean_mock_score"] == 0.69
     assert summary["mean_event_factor"] == 0.32
     assert summary["mean_liquidity_factor"] == 0.12
+
+
+def test_mock_multifactor_signals_deduplicates_factor_dates_with_max_score():
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame(
+        [
+            {"date": pd.Timestamp("2025-01-02")},
+            {"date": pd.Timestamp("2025-01-03")},
+        ]
+    )
+    factors = pd.DataFrame(
+        [
+            {"date": "2025-01-02", "mock_score": 0.10},
+            {"date": "2025-01-02", "mock_score": 0.40},
+            {"date": "2025-01-03", "mock_score": 0.0},
+        ]
+    )
+
+    signals = generate_mock_multifactor_signals(price_window, factors)
+
+    assert len(signals) == len(price_window)
+    assert signals["date"].is_unique
+    assert signals.iloc[0]["signal"] == 1
+    assert signals.iloc[0]["signal_strength"] == 0.40
+
+
+def test_mock_multifactor_signals_zeroes_strength_for_negative_scores():
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame([{"date": pd.Timestamp("2025-01-02")}])
+    factors = pd.DataFrame([{"date": "2025-01-02", "mock_score": -0.80}])
+
+    signals = generate_mock_multifactor_signals(price_window, factors)
+
+    assert signals.iloc[0]["signal"] == 0
+    assert signals.iloc[0]["signal_strength"] == 0.0
+
+
+def test_factor_attribution_coerces_string_numeric_values():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": "0.1",
+                "momentum_factor": "0.03",
+                "volume_shock": "0.02",
+                "volatility_penalty": "0.0",
+                "liquidity_factor": "0.05",
+                "regime_factor": "0.0",
+                "mock_score": "0.2",
+            }
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors)
+
+    assert summary["active_factor_days"] == 1
+    assert summary["mean_mock_score"] == 0.2
+    assert summary["mean_event_factor"] == 0.1
+
+
+def test_factor_attribution_handles_missing_factor_columns():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": 0.2,
+                "momentum_factor": 0.1,
+                "volume_shock": 0.0,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.05,
+                "mock_score": 0.45,
+            }
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors)
+
+    assert summary["active_factor_days"] == 1
+    assert summary["mean_regime_factor"] == 0.0
+
+
+def test_factor_attribution_coerces_invalid_and_non_finite_values():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": "bad",
+                "momentum_factor": float("nan"),
+                "volume_shock": float("inf"),
+                "volatility_penalty": "-inf",
+                "liquidity_factor": None,
+                "regime_factor": "0.2",
+                "mock_score": float("inf"),
+            }
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors)
+
+    assert summary["active_factor_days"] == 0
+    assert summary["mean_mock_score"] == 0.0
+    assert summary["mean_event_factor"] == 0.0
+
+
+def test_factor_attribution_uses_custom_threshold_for_active_days():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": 0.1,
+                "momentum_factor": 0.0,
+                "volume_shock": 0.0,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.0,
+                "regime_factor": 0.0,
+                "mock_score": 0.2,
+            },
+            {
+                "date": "2025-01-03",
+                "event_factor": 0.3,
+                "momentum_factor": 0.0,
+                "volume_shock": 0.0,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.0,
+                "regime_factor": 0.0,
+                "mock_score": 0.5,
+            },
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors, threshold=0.4)
+
+    assert summary["active_factor_days"] == 1
+    assert summary["mean_mock_score"] == 0.5
+    assert summary["mean_event_factor"] == 0.3
