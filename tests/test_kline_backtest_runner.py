@@ -893,11 +893,8 @@ def test_multifactor_helpers_reject_duplicate_factor_columns():
         [["2025-01-02", 0.2, 0.4]],
         columns=["date", "mock_score", "mock_score"],
     )
-
-    with pytest.raises(ValueError, match="unique columns"):
-        generate_mock_multifactor_signals(price_window, factors)
-
-    assert summarize_factor_attribution(factors) == {
+    empty_factors = pd.DataFrame(columns=["date", "mock_score", "mock_score"])
+    empty_attribution = {
         "active_factor_days": 0,
         "mean_mock_score": 0.0,
         "mean_event_factor": 0.0,
@@ -907,6 +904,15 @@ def test_multifactor_helpers_reject_duplicate_factor_columns():
         "mean_liquidity_factor": 0.0,
         "mean_regime_factor": 0.0,
     }
+
+    with pytest.raises(ValueError, match="unique columns"):
+        generate_mock_multifactor_signals(price_window, factors)
+
+    with pytest.raises(ValueError, match="unique columns"):
+        generate_mock_multifactor_signals(price_window, empty_factors)
+
+    assert summarize_factor_attribution(factors) == empty_attribution
+    assert summarize_factor_attribution(empty_factors) == empty_attribution
 
 
 def test_multifactor_helpers_reject_negative_threshold():

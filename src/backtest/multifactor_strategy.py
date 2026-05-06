@@ -70,10 +70,10 @@ def _factor_scores(factors: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalized_factor_rows(factors: pd.DataFrame) -> pd.DataFrame:
-    if factors.empty:
-        return _empty_normalized_factor_rows()
     if not factors.columns.is_unique:
         raise ValueError("factors must have unique columns")
+    if factors.empty:
+        return _empty_normalized_factor_rows()
     if "date" not in factors.columns:
         return _empty_normalized_factor_rows()
 
