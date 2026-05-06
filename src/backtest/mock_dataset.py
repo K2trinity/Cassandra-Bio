@@ -53,7 +53,8 @@ def build_mock_factor_frame(
     The selected rows are synthetic hindsight fixtures and must remain limited
     to the A demo path. B/C must not call this function.
     """
-    if not is_mock_backtest_ticker(ticker) or price_window.empty or len(price_window) < 3:
+    required_rows = max(3, min_signal_days)
+    if not is_mock_backtest_ticker(ticker) or price_window.empty or len(price_window) < required_rows:
         return _empty_factor_frame()
 
     rows = price_window[["date", "open", "close", "volume"]].copy()
