@@ -588,3 +588,66 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
         for signal in payload["signals"]
     )
     assert runner.load_saved_run(payload["run_id"]) == payload
+
+
+def test_mock_multifactor_signals_create_multiple_long_signals():
+    from src.backtest.mock_dataset import build_mock_factor_frame
+    from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
+
+    price_window = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0 + index,
+                "high": 102.0 + index,
+                "low": 99.0 + index,
+                "close": 101.0 + index + (1.0 if index % 3 == 1 else 0.0),
+                "volume": 1_000_000 + index * 25_000,
+            }
+            for index in range(35)
+        ]
+    )
+    factors = build_mock_factor_frame("MRNA", price_window, min_signal_days=6)
+
+    signals = generate_mock_multifactor_signals(price_window, factors)
+
+    active = signals[signals["signal"] != 0]
+    assert len(active) >= 6
+    assert set(active["signal"]) == {1}
+    assert active["signal_strength"].min() > 0.15
+
+
+def test_factor_attribution_summarizes_active_signal_drivers():
+    from src.backtest.multifactor_strategy import summarize_factor_attribution
+
+    factors = pd.DataFrame(
+        [
+            {
+                "date": "2025-01-02",
+                "event_factor": 0.32,
+                "momentum_factor": 0.10,
+                "volume_shock": 0.05,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.12,
+                "regime_factor": 0.10,
+                "mock_score": 0.69,
+            },
+            {
+                "date": "2025-01-03",
+                "event_factor": 0.0,
+                "momentum_factor": 0.0,
+                "volume_shock": 0.0,
+                "volatility_penalty": 0.0,
+                "liquidity_factor": 0.0,
+                "regime_factor": 0.0,
+                "mock_score": 0.0,
+            },
+        ]
+    )
+
+    summary = summarize_factor_attribution(factors)
+
+    assert summary["active_factor_days"] == 1
+    assert summary["mean_mock_score"] == 0.69
+    assert summary["mean_event_factor"] == 0.32
+    assert summary["mean_liquidity_factor"] == 0.12
