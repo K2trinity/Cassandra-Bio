@@ -61,3 +61,4 @@ black>=23.0.0
 flake8>=6.0.0
 yfinance>=0.2.40
 pyarrow>=15.0.0
+duckdb>=1.0.0
