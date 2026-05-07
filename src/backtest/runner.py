@@ -16,6 +16,12 @@ from src.backtest.attribution import (
     summarize_events,
     summarize_signals,
 )
+from src.backtest.data_sources import (
+    BacktestMode,
+    SourcePolicyError,
+    YFINANCE_PROFILE,
+    validate_source_for_mode,
+)
 from src.backtest.data_loader import DATA_DIR, load_ohlc
 from src.backtest.events_db import (
     get_events,
@@ -346,7 +352,10 @@ def run_kline_backtest(
     stop_loss_pct: float = -0.08,
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
-    report_confidence: float = 0.5,
+    report_confidence: float = 1.0,
+    backtest_mode: str = "exploratory",
+    price_source: str = "yfinance",
+    data_snapshot_id: str | None = None,
 ) -> dict:
     """Run a single-ticker backtest and persist result as JSON.
 
@@ -359,6 +368,19 @@ def run_kline_backtest(
 
     ticker = normalized_ticker
     cache_path = _ohlc_cache_path(ticker)
+
+    source_profile = YFINANCE_PROFILE
+    if price_source != source_profile.source_id:
+        return {"error": f"unsupported price_source: {price_source}"}
+
+    try:
+        resolved_mode = BacktestMode(backtest_mode)
+        source_validation = validate_source_for_mode(
+            source_profile,
+            resolved_mode,
+        )
+    except (SourcePolicyError, ValueError) as exc:
+        return {"error": str(exc)}
 
     try:
         ohlc = load_ohlc(ticker)
@@ -463,6 +485,11 @@ def run_kline_backtest(
         "ticker": ticker,
         "start_date": start_date,
         "end_date": end_date,
+        "data_snapshot_id": data_snapshot_id,
+        "backtest_mode": str(resolved_mode.value),
+        "price_source": price_source,
+        "bias_profile": str(source_validation.bias_profile.value),
+        "bias_warnings": list(source_validation.bias_warnings),
         "input_event_ids": _input_event_ids(eligible_events),
         "trust_summary": _trust_summary(eligible_events),
         "source_status_at_run": get_fetch_log_entries(ticker),

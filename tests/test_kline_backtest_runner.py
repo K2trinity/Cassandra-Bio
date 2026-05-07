@@ -588,3 +588,124 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
         for signal in payload["signals"]
     )
     assert runner.load_saved_run(payload["run_id"]) == payload
+
+
+def test_run_kline_backtest_rejects_yfinance_for_research_grade_mode(monkeypatch):
+    from src.backtest import runner
+
+    monkeypatch.setattr(
+        runner,
+        "load_ohlc",
+        lambda ticker: pd.DataFrame(
+            [
+                {
+                    "date": "2026-04-20",
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100,
+                    "volume": 1000,
+                },
+                {
+                    "date": "2026-04-21",
+                    "open": 101,
+                    "high": 102,
+                    "low": 100,
+                    "close": 102,
+                    "volume": 1100,
+                },
+            ]
+        ),
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2026-04-20",
+        end_date="2026-04-21",
+        backtest_mode="research_grade",
+        price_source="yfinance",
+    )
+
+    assert payload["error"] == (
+        "Source yfinance cannot be used for research-grade backtests because "
+        "it is not survivorship-bias-free."
+    )
+
+
+def test_run_kline_backtest_exploratory_payload_includes_bias_warning(
+    tmp_path,
+    monkeypatch,
+):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner,
+        "load_ohlc",
+        lambda ticker: pd.DataFrame(
+            [
+                {
+                    "date": "2026-04-20",
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100,
+                    "volume": 1000,
+                },
+                {
+                    "date": "2026-04-21",
+                    "open": 101,
+                    "high": 103,
+                    "low": 100,
+                    "close": 102,
+                    "volume": 1100,
+                },
+                {
+                    "date": "2026-04-22",
+                    "open": 102,
+                    "high": 104,
+                    "low": 101,
+                    "close": 103,
+                    "volume": 1200,
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda ticker, start_date, end_date: pd.DataFrame(
+            [
+                {
+                    "id": "evt-1",
+                    "date": "2026-04-20",
+                    "type": "clinical_readout",
+                    "priority": 1,
+                    "sentiment": "positive",
+                    "ticker_scope": "MRNA",
+                    "metadata": {
+                        "backtest_eligible": True,
+                        "impact_score": 1.0,
+                        "confidence_score": 1.0,
+                    },
+                }
+            ]
+        ),
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2026-04-20",
+        end_date="2026-04-22",
+        backtest_mode="exploratory",
+        price_source="yfinance",
+        data_snapshot_id="snap-test",
+    )
+
+    assert payload["bias_profile"] == "survivorship_biased"
+    assert payload["data_snapshot_id"] == "snap-test"
+    assert payload["bias_warnings"] == [
+        "Source yfinance is survivorship-biased and is not research-grade."
+    ]
