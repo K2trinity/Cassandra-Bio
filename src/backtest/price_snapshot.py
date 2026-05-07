@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from src.backtest.data_loader import DATA_DIR
@@ -105,8 +106,19 @@ def normalize_ohlc_frame(
     for column in REQUIRED_NUMERIC_COLUMNS:
         df[column] = pd.to_numeric(df[column], errors="coerce")
     df = df.dropna(subset=["date", *REQUIRED_NUMERIC_COLUMNS])
+    finite_values = np.isfinite(df[REQUIRED_NUMERIC_COLUMNS]).all(axis=1)
+    df = df[finite_values]
+    valid_price_rows = (
+        (df["volume"] >= 0)
+        & (df["high"] >= df["low"])
+        & (df["high"] >= df["open"])
+        & (df["high"] >= df["close"])
+        & (df["low"] <= df["open"])
+        & (df["low"] <= df["close"])
+    )
+    df = df[valid_price_rows]
     if df.empty:
-        return pd.DataFrame(columns=PRICE_COLUMNS)
+        return _empty_price_frame()
 
     source_id = source.upper().replace("-", "_")
     df["security_id"] = f"{source_id}:{ticker.upper()}"
@@ -148,6 +160,7 @@ def _write_partition(
     source: str,
     data_snapshot_id: str,
 ) -> None:
+    pending_writes = []
     for year, group in frame.groupby(pd.to_datetime(frame["date"]).dt.year):
         partition = (
             root
@@ -155,9 +168,16 @@ def _write_partition(
             / f"source={source}"
             / f"year={int(year)}"
         )
-        partition.mkdir(parents=True, exist_ok=True)
         tickers = "_".join(sorted(group["ticker"].unique()))
         path = partition / f"{tickers}.parquet"
+        pending_writes.append((group, partition, path))
+
+    for _, _, path in pending_writes:
+        if path.exists():
+            raise FileExistsError(f"Price snapshot already exists: {path}")
+
+    for group, partition, path in pending_writes:
+        partition.mkdir(parents=True, exist_ok=True)
         group.to_parquet(path, index=False)
 
 
@@ -175,3 +195,12 @@ def _safe_partition_token(name: str, value: str) -> str:
     if not SAFE_PARTITION_TOKEN.fullmatch(value):
         raise ValueError(f"{name} contains unsupported path characters: {value!r}.")
     return value
+
+
+def _empty_price_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            column: pd.Series(dtype="float64" if column in FLOAT_COLUMNS else "object")
+            for column in PRICE_COLUMNS
+        }
+    )
