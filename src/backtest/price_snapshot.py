@@ -61,6 +61,7 @@ def import_ohlc_cache_to_prices_daily(
     data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
     input_dir = Path(ohlc_dir)
     root = Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
+    snapshot_root = root / f"data_snapshot_id={data_snapshot_id}"
     tickers = 0
     rows = 0
     pending_writes = []
@@ -89,6 +90,8 @@ def import_ohlc_cache_to_prices_daily(
         tickers += 1
         rows += len(normalized)
 
+    if pending_writes and snapshot_root.exists():
+        raise FileExistsError(f"Price snapshot already exists: {snapshot_root}")
     _preflight_partition_writes(pending_writes)
     _write_planned_partitions(pending_writes)
 
