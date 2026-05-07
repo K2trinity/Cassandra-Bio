@@ -10,6 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.backtest.data_loader import DATA_DIR
 from src.backtest.data_sources import YFINANCE_PROFILE
+from src.backtest.events_db import DB_PATH as EVENTS_DB_PATH
 from src.backtest.migrations import apply_sqlite_migrations
 from src.backtest.price_snapshot import import_ohlc_cache_to_prices_daily
 from src.backtest.research_db import (
@@ -28,11 +29,16 @@ def bootstrap_snapshot(
     *,
     ohlc_dir: str | Path = DATA_DIR,
     research_dir: str | Path = RESEARCH_DIR,
-    db_path: str | Path = RESEARCH_DB_PATH,
+    db_path: str | Path | None = None,
+    event_db_path: str | Path = EVENTS_DB_PATH,
     snapshot_date: str,
     universe_id: str,
 ) -> dict:
     research_root = Path(research_dir)
+    resolved_db_path = (
+        Path(db_path) if db_path is not None else research_root / RESEARCH_DB_PATH.name
+    )
+    resolved_event_db_path = Path(event_db_path)
     price_root = research_root / "prices_daily"
     security_master_hash = "local-yfinance-security-master-v1"
     event_snapshot_hash = "events-db-current"
@@ -44,8 +50,8 @@ def bootstrap_snapshot(
         event_snapshot_hash=event_snapshot_hash,
     )
 
-    apply_sqlite_migrations()
-    initialize_research_database(db_path)
+    apply_sqlite_migrations(resolved_event_db_path)
+    initialize_research_database(resolved_db_path)
     coverage = import_ohlc_cache_to_prices_daily(
         ohlc_dir=ohlc_dir,
         output_root=price_root,
@@ -57,7 +63,7 @@ def bootstrap_snapshot(
             data_snapshot_id=snapshot_id,
             snapshot_date=snapshot_date,
             price_source=YFINANCE_PROFILE.source_id,
-            event_source_db="data/events.db",
+            event_source_db=str(resolved_event_db_path),
             universe_id=universe_id,
             bias_profile=YFINANCE_PROFILE.bias_profile.value,
             price_partition_root=str(price_root),
@@ -65,7 +71,7 @@ def bootstrap_snapshot(
             security_master_hash=security_master_hash,
             coverage=coverage,
         ),
-        db_path=db_path,
+        db_path=resolved_db_path,
     )
     return {"data_snapshot_id": snapshot_id, "coverage": coverage}
 
