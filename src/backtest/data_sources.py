@@ -31,7 +31,7 @@ class SourceProfile:
 class SourceValidation:
     allowed: bool
     bias_profile: BiasProfile
-    bias_warnings: list[str]
+    bias_warnings: tuple[str, ...]
 
 
 class SourcePolicyError(ValueError):
@@ -47,6 +47,15 @@ YFINANCE_PROFILE = SourceProfile(
     supports_delisting_returns=False,
 )
 
+MOCK_PROFILE = SourceProfile(
+    source_id="mock",
+    display_name="Controlled mock dataset",
+    bias_profile=BiasProfile.MOCK,
+    supports_delisted=False,
+    supports_point_in_time_universe=False,
+    supports_delisting_returns=False,
+)
+
 
 def validate_source_for_mode(
     profile: SourceProfile,
@@ -56,10 +65,15 @@ def validate_source_for_mode(
     warnings = _warnings_for(profile)
 
     if resolved_mode == BacktestMode.MOCK:
+        if profile.bias_profile != BiasProfile.MOCK:
+            raise SourcePolicyError(
+                f"Source {profile.source_id} cannot be used in mock mode "
+                "because it is not a mock source."
+            )
         return SourceValidation(
             allowed=True,
             bias_profile=BiasProfile.MOCK,
-            bias_warnings=[],
+            bias_warnings=(),
         )
 
     if (
@@ -71,6 +85,16 @@ def validate_source_for_mode(
             "backtests because it is not survivorship-bias-free."
         )
 
+    if resolved_mode == BacktestMode.RESEARCH_GRADE and not (
+        profile.supports_delisted
+        and profile.supports_point_in_time_universe
+        and profile.supports_delisting_returns
+    ):
+        raise SourcePolicyError(
+            f"Source {profile.source_id} lacks research-grade coverage for "
+            "delisted securities, point-in-time universes, or delisting returns."
+        )
+
     return SourceValidation(
         allowed=True,
         bias_profile=profile.bias_profile,
@@ -78,13 +102,13 @@ def validate_source_for_mode(
     )
 
 
-def _warnings_for(profile: SourceProfile) -> list[str]:
+def _warnings_for(profile: SourceProfile) -> tuple[str, ...]:
     if profile.bias_profile == BiasProfile.SURVIVORSHIP_BIASED:
-        return [
-            f"Source {profile.source_id} is survivorship-biased and is not research-grade."
-        ]
+        return (
+            f"Source {profile.source_id} is survivorship-biased and is not research-grade.",
+        )
     if profile.bias_profile == BiasProfile.UNKNOWN_BIAS:
-        return [
-            f"Source {profile.source_id} has unknown survivorship-bias coverage."
-        ]
-    return []
+        return (
+            f"Source {profile.source_id} has unknown survivorship-bias coverage.",
+        )
+    return ()
