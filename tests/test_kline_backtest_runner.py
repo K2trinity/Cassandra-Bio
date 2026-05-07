@@ -593,30 +593,13 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
 def test_run_kline_backtest_rejects_yfinance_for_research_grade_mode(monkeypatch):
     from src.backtest import runner
 
-    monkeypatch.setattr(
-        runner,
-        "load_ohlc",
-        lambda ticker: pd.DataFrame(
-            [
-                {
-                    "date": "2026-04-20",
-                    "open": 100,
-                    "high": 101,
-                    "low": 99,
-                    "close": 100,
-                    "volume": 1000,
-                },
-                {
-                    "date": "2026-04-21",
-                    "open": 101,
-                    "high": 102,
-                    "low": 100,
-                    "close": 102,
-                    "volume": 1100,
-                },
-            ]
-        ),
-    )
+    load_ohlc_calls = []
+
+    def fail_load_ohlc(ticker: str):
+        load_ohlc_calls.append(ticker)
+        raise AssertionError("load_ohlc should not run before source validation")
+
+    monkeypatch.setattr(runner, "load_ohlc", fail_load_ohlc)
 
     payload = runner.run_kline_backtest(
         ticker="MRNA",
@@ -630,6 +613,7 @@ def test_run_kline_backtest_rejects_yfinance_for_research_grade_mode(monkeypatch
         "Source yfinance cannot be used for research-grade backtests because "
         "it is not survivorship-bias-free."
     )
+    assert load_ohlc_calls == []
 
 
 def test_run_kline_backtest_exploratory_payload_includes_bias_warning(
@@ -704,8 +688,11 @@ def test_run_kline_backtest_exploratory_payload_includes_bias_warning(
         data_snapshot_id="snap-test",
     )
 
+    assert payload["backtest_mode"] == "exploratory"
+    assert payload["price_source"] == "yfinance"
     assert payload["bias_profile"] == "survivorship_biased"
     assert payload["data_snapshot_id"] == "snap-test"
     assert payload["bias_warnings"] == [
         "Source yfinance is survivorship-biased and is not research-grade."
     ]
+    assert runner.load_saved_run(payload["run_id"]) == payload
