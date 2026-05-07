@@ -14,6 +14,7 @@ from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_datab
 
 
 _CANONICAL_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_JSON_PRIMITIVES = (str, int, float, bool, type(None))
 
 
 class SnapshotMetadataError(ValueError):
@@ -37,7 +38,7 @@ class DataSnapshot:
         object.__setattr__(
             self, "snapshot_date", _canonical_snapshot_date(self.snapshot_date)
         )
-        object.__setattr__(self, "coverage", MappingProxyType(dict(self.coverage)))
+        object.__setattr__(self, "coverage", _deep_freeze(self.coverage))
 
 
 def _canonical_snapshot_date(snapshot_date: str | date | datetime) -> str:
@@ -57,11 +58,31 @@ def _canonical_snapshot_date(snapshot_date: str | date | datetime) -> str:
     raise ValueError("snapshot_date must be a YYYY-MM-DD string, date, or datetime")
 
 
-def _canonical_json(value: Any) -> str:
+def _deep_freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
-        value = dict(value)
+        return MappingProxyType(
+            {key: _deep_freeze(nested_value) for key, nested_value in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(nested_value) for nested_value in value)
+    if isinstance(value, _JSON_PRIMITIVES):
+        return value
+    return value
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _json_ready(nested_value) for key, nested_value in value.items()}
+    if isinstance(value, tuple):
+        return [_json_ready(nested_value) for nested_value in value]
+    if isinstance(value, list):
+        return [_json_ready(nested_value) for nested_value in value]
+    return value
+
+
+def _canonical_json(value: Any) -> str:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        _json_ready(value), sort_keys=True, separators=(",", ":"), allow_nan=False
     )
 
 

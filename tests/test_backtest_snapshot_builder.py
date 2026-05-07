@@ -213,6 +213,49 @@ def test_data_snapshot_freezes_coverage_input(tmp_path):
     assert coverage_json[0] == '{"rows":3600,"tickers":4}'
 
 
+def test_data_snapshot_deep_freezes_nested_coverage_input(tmp_path):
+    from src.backtest.research_db import initialize_research_database
+    from src.backtest.snapshot_builder import insert_data_snapshot
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+    coverage = {
+        "rows": 3600,
+        "by_ticker": {"MRNA": 900},
+        "tickers": ["MRNA"],
+    }
+    snapshot = _build_snapshot(coverage=coverage)
+
+    coverage["by_ticker"]["MRNA"] = 999
+    coverage["tickers"].append("JNJ")
+
+    with pytest.raises(TypeError):
+        snapshot.coverage["by_ticker"]["MRNA"] = 999
+    with pytest.raises(AttributeError):
+        snapshot.coverage["tickers"].append("JNJ")
+
+    insert_data_snapshot(snapshot, db_path=db_path)
+
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    coverage_json = conn.execute(
+        """
+        SELECT coverage_json
+        FROM data_snapshots
+        WHERE data_snapshot_id = ?
+        """,
+        [snapshot.data_snapshot_id],
+    ).fetchone()[0]
+    conn.close()
+
+    assert coverage_json == '{"by_ticker":{"MRNA":900},"rows":3600,"tickers":["MRNA"]}'
+    assert json.loads(coverage_json) == {
+        "by_ticker": {"MRNA": 900},
+        "rows": 3600,
+        "tickers": ["MRNA"],
+    }
+
+
 def test_insert_data_snapshot_rejects_non_finite_coverage(tmp_path):
     from src.backtest.research_db import initialize_research_database
     from src.backtest.snapshot_builder import insert_data_snapshot
