@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from src.backtest.events_db import DB_PATH
+from src.backtest import events_db
 
 MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -65,25 +65,30 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def apply_sqlite_migrations(db_path: str | Path | None = None) -> None:
-    path = Path(db_path) if db_path is not None else DB_PATH
+    path = Path(db_path) if db_path is not None else events_db.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30.0)
     try:
+        conn.execute("PRAGMA busy_timeout = 30000")
+        _ensure_base_event_table(conn)
         _ensure_schema_migrations(conn)
+        conn.commit()
         for migration_id, statements in MIGRATIONS:
-            if _migration_applied(conn, migration_id):
-                continue
-            _apply_statements(conn, statements)
-            conn.execute(
-                """
-                INSERT INTO schema_migrations (migration_id, applied_at)
-                VALUES (?, datetime('now'))
-                """,
-                (migration_id,),
-            )
-            conn.commit()
+            _apply_migration(conn, migration_id, statements)
     finally:
         conn.close()
+
+
+def _ensure_base_event_table(conn: sqlite3.Connection) -> None:
+    conn.execute(events_db.EVENT_TABLE_SQL)
+    existing_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(biotech_events)").fetchall()
+    }
+    for column_name, column_definition in events_db.EVENT_COLUMN_DEFINITIONS.items():
+        if column_name not in existing_columns:
+            conn.execute(
+                f"ALTER TABLE biotech_events ADD COLUMN {column_name} {column_definition}"
+            )
 
 
 def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
@@ -95,7 +100,30 @@ def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.commit()
+
+
+def _apply_migration(
+    conn: sqlite3.Connection,
+    migration_id: str,
+    statements: Iterable[str],
+) -> None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if _migration_applied(conn, migration_id):
+            conn.commit()
+            return
+        _apply_statements(conn, statements)
+        conn.execute(
+            """
+            INSERT INTO schema_migrations (migration_id, applied_at)
+            VALUES (?, datetime('now'))
+            """,
+            (migration_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _migration_applied(conn: sqlite3.Connection, migration_id: str) -> bool:
