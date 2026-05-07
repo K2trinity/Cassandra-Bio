@@ -194,6 +194,58 @@ def test_pre_market_event_can_align_same_day():
     assert links.iloc[0]["alignment_rule"] == "pre_market_same_trading_day"
 
 
+def test_premarket_release_session_alias_aligns_same_day():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-premarket-alias",
+                "date": "2026-04-20",
+                "event_timestamp_utc": "2026-04-20T11:00:00Z",
+                "release_session": "premarket",
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["release_session"] == "pre_market"
+    assert links.iloc[0]["aligned_signal_date"] == "2026-04-20"
+    assert links.iloc[0]["aligned_trade_date"] == "2026-04-20"
+    assert links.iloc[0]["alignment_rule"] == "pre_market_same_trading_day"
+
+
+def test_unknown_release_session_raises_value_error():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-unknown-release-session",
+                "date": "2026-04-20",
+                "event_timestamp_utc": "2026-04-20T16:00:00Z",
+                "release_session": "midday",
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="release_session"):
+        align_events_for_snapshot(
+            events,
+            _prices(),
+            data_snapshot_id="snap-test",
+            security_id="YFINANCE:MRNA",
+        )
+
+
 def test_out_of_window_event_is_quarantined():
     from src.backtest.event_alignment import align_events_for_snapshot
 
@@ -217,6 +269,37 @@ def test_out_of_window_event_is_quarantined():
     assert links.iloc[0]["aligned_signal_date"] is None
     assert links.iloc[0]["alignment_rule"] == "outside_price_window"
     assert links.iloc[0]["price_date_available"] is False
+
+
+def test_invalid_numeric_price_date_is_ignored_not_1970():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-valid-after-invalid-price",
+                "date": 20260420,
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {"date": 123},
+            {"date": 20260421},
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        prices,
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["original_event_date"] == "2026-04-20"
+    assert links.iloc[0]["aligned_signal_date"] == "2026-04-21"
+    assert links.iloc[0]["aligned_trade_date"] == "2026-04-21"
 
 
 def test_timestamp_with_unknown_session_aligns_to_next_trading_date():
@@ -565,6 +648,91 @@ def test_write_event_price_links_rejects_unavailable_row_with_aligned_dates(tmp_
         security_id="YFINANCE:MRNA",
     )
     links.loc[0, "aligned_signal_date"] = "2026-04-22"
+
+    with pytest.raises(ValueError, match="price_date_available"):
+        write_event_price_links(links, output_root=tmp_path / "event_price_links")
+
+
+def test_write_event_price_links_validates_original_event_date(tmp_path):
+    from src.backtest.event_alignment import (
+        align_events_for_snapshot,
+        write_event_price_links,
+    )
+
+    links = align_events_for_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "id": "evt-pre-market",
+                    "date": "2026-04-20",
+                    "event_timestamp_utc": "2026-04-20T11:00:00Z",
+                    "release_session": "pre_market",
+                    "ticker_scope": "MRNA",
+                }
+            ]
+        ),
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+    links["original_event_date"] = links["original_event_date"].astype(object)
+    links.loc[0, "original_event_date"] = 123
+
+    with pytest.raises(ValueError, match="original_event_date"):
+        write_event_price_links(links, output_root=tmp_path / "event_price_links")
+
+
+def test_write_event_price_links_validates_timestamp_text(tmp_path):
+    from src.backtest.event_alignment import (
+        align_events_for_snapshot,
+        write_event_price_links,
+    )
+
+    links = align_events_for_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "id": "evt-pre-market",
+                    "date": "2026-04-20",
+                    "event_timestamp_utc": "2026-04-20T11:00:00Z",
+                    "release_session": "pre_market",
+                    "ticker_scope": "MRNA",
+                }
+            ]
+        ),
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+    links.loc[0, "event_timestamp_utc"] = "2026-04-20"
+
+    with pytest.raises(ValueError, match="event_timestamp_utc"):
+        write_event_price_links(links, output_root=tmp_path / "event_price_links")
+
+
+def test_write_event_price_links_rejects_null_price_date_available(tmp_path):
+    from src.backtest.event_alignment import (
+        align_events_for_snapshot,
+        write_event_price_links,
+    )
+
+    links = align_events_for_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "id": "evt-pre-market",
+                    "date": "2026-04-20",
+                    "event_timestamp_utc": "2026-04-20T11:00:00Z",
+                    "release_session": "pre_market",
+                    "ticker_scope": "MRNA",
+                }
+            ]
+        ),
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+    links.loc[0, "price_date_available"] = pd.NA
 
     with pytest.raises(ValueError, match="price_date_available"):
         write_event_price_links(links, output_root=tmp_path / "event_price_links")

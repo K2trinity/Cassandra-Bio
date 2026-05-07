@@ -50,7 +50,7 @@ def align_events_for_snapshot(
         ticker_scope = _required_text("ticker_scope", event.get("ticker_scope"))
         event_date = _event_date(event)
         timestamp = _event_timestamp_utc(event.get("event_timestamp_utc"))
-        release_session = _optional_text(event.get("release_session"))
+        release_session = _release_session(event.get("release_session"))
         (
             aligned_date,
             alignment_rule,
@@ -97,6 +97,7 @@ def write_event_price_links(
 
     frame = links[EVENT_PRICE_LINK_COLUMNS].copy()
     _validate_required_link_columns(frame)
+    _normalize_and_validate_event_temporal_fields(frame)
     _normalize_and_validate_aligned_dates(frame)
     snapshot_ids = sorted({str(value) for value in frame["data_snapshot_id"].unique()})
     if len(snapshot_ids) != 1:
@@ -318,6 +319,18 @@ def _validate_required_link_columns(frame: pd.DataFrame) -> None:
             _required_text(column, value)
 
 
+def _normalize_and_validate_event_temporal_fields(frame: pd.DataFrame) -> None:
+    for index, row in frame.iterrows():
+        frame.at[index, "original_event_date"] = _link_date_text(
+            row["original_event_date"],
+            "original_event_date",
+        )
+        frame.at[index, "event_timestamp_utc"] = _event_timestamp_utc(
+            row["event_timestamp_utc"]
+        )
+        frame.at[index, "release_session"] = _release_session(row["release_session"])
+
+
 def _normalize_and_validate_aligned_dates(frame: pd.DataFrame) -> None:
     for index, row in frame.iterrows():
         signal_date = _link_date_text(row["aligned_signal_date"], "aligned_signal_date")
@@ -366,6 +379,8 @@ def _link_date_text(value: object, column: str) -> str | None:
 
 
 def _price_date_available_bool(value: object, *, index: int) -> bool:
+    if value is None or pd.isna(value):
+        raise ValueError(f"price_date_available must be boolean for row {index}.")
     if isinstance(value, bool):
         return value
     if type(value).__name__ == "bool_":
@@ -406,3 +421,15 @@ def _numeric_date_text(
 
 def _has_time_component(text: str) -> bool:
     return re.search(r"(?:T|\s)\d{1,2}:\d{2}", text) is not None
+
+
+def _release_session(value: object) -> str | None:
+    text = _optional_text(value)
+    if text is None:
+        return None
+    key = text.lower().replace("-", "").replace("_", "").replace(" ", "")
+    if key == "premarket":
+        return "pre_market"
+    if key == "afterclose":
+        return "after_close"
+    raise ValueError(f"release_session is not supported: {text!r}")
