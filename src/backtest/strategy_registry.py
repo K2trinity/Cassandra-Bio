@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from src.backtest.data_sources import BacktestMode
 
@@ -22,7 +24,7 @@ class StrategyPolicyError(ValueError):
     pass
 
 
-STRATEGIES: dict[str, StrategyDefinition] = {
+_STRATEGIES: dict[str, StrategyDefinition] = {
     EVENT_BASELINE: StrategyDefinition(
         strategy_id=EVENT_BASELINE,
         display_name="Event Baseline",
@@ -48,6 +50,7 @@ STRATEGIES: dict[str, StrategyDefinition] = {
         mock_only=False,
     ),
 }
+STRATEGIES: Mapping[str, StrategyDefinition] = MappingProxyType(_STRATEGIES)
 
 
 def research_strategy_ids() -> tuple[str, ...]:
@@ -63,15 +66,20 @@ def validate_strategy_for_mode(
     *,
     data_mode: BacktestMode | str,
 ) -> StrategyDefinition:
-    if strategy_id not in STRATEGIES:
+    if strategy_id not in _STRATEGIES:
         raise StrategyPolicyError(f"unknown strategy: {strategy_id}")
 
-    definition = STRATEGIES[strategy_id]
+    definition = _STRATEGIES[strategy_id]
     resolved_mode = BacktestMode(data_mode)
 
     if resolved_mode == BacktestMode.RESEARCH_GRADE and definition.mock_only:
         raise StrategyPolicyError(
             f"{strategy_id} is mock-only and cannot run in research-grade mode"
+        )
+
+    if resolved_mode == BacktestMode.RESEARCH_GRADE and not definition.research_allowed:
+        raise StrategyPolicyError(
+            f"{strategy_id} is not allowed in research-grade mode"
         )
 
     if definition.mock_only and resolved_mode != BacktestMode.MOCK:
