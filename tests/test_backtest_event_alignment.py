@@ -194,7 +194,8 @@ def test_pre_market_event_can_align_same_day():
     assert links.iloc[0]["alignment_rule"] == "pre_market_same_trading_day"
 
 
-def test_premarket_release_session_alias_aligns_same_day():
+@pytest.mark.parametrize("release_session", ["premarket", "pre-market", "pre_market"])
+def test_premarket_release_session_aliases_align_same_day(release_session):
     from src.backtest.event_alignment import align_events_for_snapshot
 
     events = pd.DataFrame(
@@ -203,7 +204,7 @@ def test_premarket_release_session_alias_aligns_same_day():
                 "id": "evt-premarket-alias",
                 "date": "2026-04-20",
                 "event_timestamp_utc": "2026-04-20T11:00:00Z",
-                "release_session": "premarket",
+                "release_session": release_session,
                 "ticker_scope": "MRNA",
             }
         ]
@@ -220,6 +221,38 @@ def test_premarket_release_session_alias_aligns_same_day():
     assert links.iloc[0]["aligned_signal_date"] == "2026-04-20"
     assert links.iloc[0]["aligned_trade_date"] == "2026-04-20"
     assert links.iloc[0]["alignment_rule"] == "pre_market_same_trading_day"
+
+
+@pytest.mark.parametrize(
+    "release_session",
+    ["afterclose", "after-close", "after_close"],
+)
+def test_after_close_release_session_aliases_align_next_day(release_session):
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-after-close-alias",
+                "date": "2026-04-20",
+                "event_timestamp_utc": "2026-04-20T22:05:00Z",
+                "release_session": release_session,
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["release_session"] == "after_close"
+    assert links.iloc[0]["aligned_signal_date"] == "2026-04-21"
+    assert links.iloc[0]["aligned_trade_date"] == "2026-04-21"
+    assert links.iloc[0]["alignment_rule"] == "after_close_next_trading_day"
 
 
 def test_unknown_release_session_raises_value_error():
