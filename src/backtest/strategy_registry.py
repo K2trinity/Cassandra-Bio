@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Final
 
 from src.backtest.data_sources import BacktestMode
-from src.backtest.mock_dataset import MOCK_DATA_MODE, MOCK_SCOPE, is_mock_backtest_ticker
+from src.backtest.mock_dataset import MOCK_DATA_MODE, MOCK_SCOPE
 
 EVENT_BASELINE: Final[str] = "event_baseline"
 MOCK_MULTIFACTOR_DEMO: Final[str] = "mock_multifactor_demo"
@@ -68,9 +68,7 @@ KNOWN_STRATEGIES: Final[frozenset[str]] = frozenset(_STRATEGIES)
 
 
 def default_strategy_for_kline(ticker: object) -> str:
-    if is_mock_backtest_ticker(ticker):
-        return MOCK_MULTIFACTOR_DEMO
-    return EVENT_BASELINE
+    return MULTIFACTOR_SCORE
 
 
 def research_strategy_ids() -> tuple[str, ...]:

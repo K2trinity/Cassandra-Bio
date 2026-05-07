@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -12,6 +13,26 @@ if PROJECT_ROOT not in sys.path:
 from app import app
 from src.kline.models import KlineWorkspacePayload
 import src.kline.routes as kline_routes
+
+
+PORTFOLIO_DISCLOSURE_KEYS = {
+    "mock_metadata",
+    "synthetic",
+    "data_mode",
+    "positive_demo_expected",
+    "universe_id",
+    "strategy",
+}
+
+
+def _assert_no_portfolio_disclosure_keys(value):
+    if isinstance(value, dict):
+        assert PORTFOLIO_DISCLOSURE_KEYS.isdisjoint(value)
+        for child in value.values():
+            _assert_no_portfolio_disclosure_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_no_portfolio_disclosure_keys(child)
 
 
 def _legacy_literal(*parts):
@@ -521,7 +542,7 @@ def test_backtest_result_api_returns_saved_payload(monkeypatch):
     assert body["run_id"] == "run-123"
 
 
-def test_backtest_api_returns_mock_metadata_without_template_mock_disclosure(
+def test_backtest_api_defaults_to_real_multifactor_without_template_mock_disclosure(
     monkeypatch, tmp_path
 ):
     from src.backtest import runner
@@ -542,6 +563,13 @@ def test_backtest_api_returns_mock_metadata_without_template_mock_disclosure(
 
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(
+        runner,
+        "build_mock_ohlc_frame",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("default API backtest must not use mock OHLC")
+        ),
+    )
     monkeypatch.setattr(runner, "init_db", lambda: None)
     monkeypatch.setattr(
         runner,
@@ -569,8 +597,11 @@ def test_backtest_api_returns_mock_metadata_without_template_mock_disclosure(
 
     assert response.status_code == 200
     body = response.get_json()
-    assert body["mock_metadata"]["data_mode"] == "mock"
-    assert body["strategy"]["id"] == "mock_multifactor_demo"
+    assert body["mock_metadata"] is None
+    assert body["strategy"]["id"] == "multifactor_score"
+    assert body["strategy"]["data_mode"] == "real"
+    assert body["strategy"]["price_basis"] == "visible_ohlc"
+    assert body["exposure_summary"]["exposure_days"] >= len(body["trades"])
 
     html = client.get("/kline/MRNA").get_data(as_text=True).lower()
     assert "mock" not in html
@@ -626,4 +657,304 @@ def test_backtest_api_rejects_mock_strategy_in_real_mode():
     assert response.status_code == 400
     assert response.get_json() == {
         "error": "mock_multifactor_demo requires data_mode='mock'"
+    }
+
+
+def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_run_real_biotech_portfolio_backtest(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "run_id": "portfolio-123",
+            "created_at": "2026-05-06T12:00:00",
+            "universe_id": "biotech_four_v1",
+            "tickers": ["MRNA", "JNJ", "LLY", "XBI"],
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "strategy": {"id": "multifactor_score"},
+            "portfolio_equity_curve": [
+                {"date": kwargs["start_date"], "equity": 1.0},
+            ],
+            "portfolio_metrics": {
+                "strategy_return": 0.04,
+                "best_ticker": "XBI",
+                "worst_ticker": "MRNA",
+                "total_trades": 8,
+                "avg_active_signal_days": 6.5,
+            },
+            "constituents": [
+                {
+                    "ticker": "MRNA",
+                    "strategy_return": 0.02,
+                    "active_signal_days": 6,
+                    "trade_count": 2,
+                    "metrics": {"sharpe": 1.1},
+                    "baseline": {"strategy_return": 0.02},
+                    "factor_attribution": {"active_factor_days": 6},
+                }
+            ],
+            "focus_ticker": {
+                "ticker": kwargs["focus_ticker"],
+                "equity_curve": [{"date": kwargs["start_date"], "equity": 1.0}],
+                "signals": [],
+                "trades": [],
+                "metrics": {},
+                "baseline": {},
+                "factor_attribution": {},
+            },
+        }
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        fake_run_real_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "lly",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "stop_loss_pct": -0.07,
+            "max_position_pct": 0.15,
+            "slippage_pct": 0.002,
+            "holding_period_days": 7,
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert captured_kwargs == {
+        "focus_ticker": "LLY",
+        "start_date": "2025-01-02",
+        "end_date": "2025-03-31",
+        "stop_loss_pct": -0.07,
+        "max_position_pct": 0.15,
+        "slippage_pct": 0.002,
+        "holding_period_days": 7,
+    }
+    assert body["run_id"] == "portfolio-123"
+    assert body["universe_id"] == "biotech_four_v1"
+    assert body["strategy"] == {"id": "multifactor_score"}
+    assert body["focus_ticker"]["ticker"] == "LLY"
+    assert body["portfolio_metrics"]["strategy_return"] == 0.04
+    assert body["constituents"][0]["strategy_return"] == 0.02
+    body_text = json.dumps(body, sort_keys=True).lower()
+    for forbidden in ["mock", "synthetic", "data_mode", "positive_demo_expected"]:
+        assert forbidden not in body_text
+
+
+def test_backtest_portfolio_demo_run_api_returns_sanitized_mock_payload(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_run_mock_biotech_portfolio_backtest(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "run_id": "demo-portfolio-123",
+            "created_at": "2026-05-06T12:00:00",
+            "universe_id": "biotech_mock_v1",
+            "tickers": ["MRNA", "JNJ", "LLY", "ABBA"],
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "strategy": {"id": "mock_multifactor_demo"},
+            "portfolio_equity_curve": [
+                {"date": kwargs["start_date"], "equity": 1.0},
+            ],
+            "portfolio_metrics": {
+                "strategy_return": 0.04,
+                "best_ticker": "ABBA",
+                "worst_ticker": "MRNA",
+                "total_trades": 8,
+                "avg_active_signal_days": 6.5,
+            },
+            "constituents": [
+                {
+                    "ticker": "MRNA",
+                    "strategy_return": 0.02,
+                    "active_signal_days": 6,
+                    "trade_count": 2,
+                    "metrics": {"sharpe": 1.1},
+                    "baseline": {"strategy_return": 0.02},
+                    "factor_attribution": {"active_factor_days": 6},
+                    "mock_metadata": {"data_mode": "mock"},
+                }
+            ],
+            "focus_ticker": {
+                "ticker": kwargs["focus_ticker"],
+                "equity_curve": [{"date": kwargs["start_date"], "equity": 1.0}],
+                "signals": [],
+                "trades": [],
+                "metrics": {},
+                "baseline": {},
+                "factor_attribution": {},
+                "data_mode": "mock",
+            },
+        }
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_mock_biotech_portfolio_backtest",
+        fake_run_mock_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/demo/run",
+        json={
+            "ticker": "lly",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "stop_loss_pct": -0.07,
+            "max_position_pct": 0.15,
+            "slippage_pct": 0.002,
+            "holding_period_days": 7,
+        },
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert captured_kwargs == {
+        "focus_ticker": "LLY",
+        "start_date": "2025-01-02",
+        "end_date": "2025-03-31",
+        "stop_loss_pct": -0.07,
+        "max_position_pct": 0.15,
+        "slippage_pct": 0.002,
+        "holding_period_days": 7,
+    }
+    assert body["run_id"] == "demo-portfolio-123"
+    assert body["focus_ticker"]["ticker"] == "LLY"
+    assert body["portfolio_metrics"]["strategy_return"] == 0.04
+    assert body["constituents"][0]["strategy_return"] == 0.02
+    _assert_no_portfolio_disclosure_keys(body)
+    body_text = json.dumps(body, sort_keys=True).lower()
+    for forbidden in ["mock", "synthetic", "data_mode", "positive_demo_expected"]:
+        assert forbidden not in body_text
+
+
+def test_backtest_run_api_rejects_invalid_holding_period():
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "holding_period_days": 0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "holding_period_days must be an integer between 1 and 60"
+    }
+
+
+def test_backtest_portfolio_run_api_reuses_single_run_validation(monkeypatch):
+    def fail_run_real_biotech_portfolio_backtest(**kwargs):
+        raise AssertionError("portfolio runner should not be called")
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        fail_run_real_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "../LLY",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+        },
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.get_json()["error"]
+        == "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
+    )
+
+
+def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
+    def fake_run_real_biotech_portfolio_backtest(**kwargs):
+        return {"error": "LLY: no real OHLC data"}
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        fake_run_real_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "LLY: no real OHLC data"}
+
+
+def test_backtest_portfolio_demo_run_api_returns_400_on_mock_runner_error(monkeypatch):
+    def fail_run_mock_biotech_portfolio_backtest(**kwargs):
+        return {"error": "LLY: no mock OHLC data"}
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_mock_biotech_portfolio_backtest",
+        fail_run_mock_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/demo/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "portfolio backtest failed"}
+
+
+def test_backtest_portfolio_run_api_rejects_non_universe_focus_ticker(monkeypatch):
+    def fail_run_real_biotech_portfolio_backtest(**kwargs):
+        raise AssertionError("portfolio runner should not be called")
+
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        fail_run_real_biotech_portfolio_backtest,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "PFE",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "portfolio backtest is only available for MRNA, JNJ, LLY, and XBI"
     }

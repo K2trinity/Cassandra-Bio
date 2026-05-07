@@ -1,8 +1,255 @@
 from __future__ import annotations
 
+import json
 import math
 
 import pandas as pd
+import pytest
+
+
+PORTFOLIO_DISCLOSURE_KEYS = {
+    "mock_metadata",
+    "synthetic",
+    "data_mode",
+    "positive_demo_expected",
+}
+
+
+def _assert_no_portfolio_disclosure_text(value):
+    payload_text = json.dumps(value, sort_keys=True)
+    for disclosure_text in PORTFOLIO_DISCLOSURE_KEYS | {"mock"}:
+        assert disclosure_text not in payload_text
+
+
+def _portfolio_runner_payload(ticker, equities, strategy_return, active_days, trades):
+    return {
+        "run_id": f"single-{ticker}",
+        "created_at": "2026-05-06T12:00:00",
+        "ticker": ticker,
+        "start_date": "2025-01-02",
+        "end_date": "2025-01-06",
+        "strategy": {
+            "id": "mock_multifactor_demo",
+            "data_mode": "mock",
+        },
+        "mock_metadata": {
+            "ticker": ticker,
+            "data_mode": "mock",
+            "synthetic": True,
+            "positive_demo_expected": True,
+        },
+        "metrics": {"sharpe": 1.1, "annualized_return": strategy_return},
+        "equity_curve": [
+            {"date": "2025-01-02", "equity": equities[0]},
+            {"date": "2025-01-03", "equity": equities[1]},
+            {"date": "2025-01-06", "equity": equities[2]},
+        ],
+        "signals": [
+            {"date": "2025-01-02", "signal": 1, "signal_strength": 0.7},
+            {"date": "2025-01-03", "signal": 0, "signal_strength": 0.0},
+        ],
+        "trades": [
+            {"entry_date": f"2025-01-0{index + 2}", "pnl_pct": 0.01}
+            for index in range(trades)
+        ],
+        "signal_summary": {"active_signal_days": active_days},
+        "baseline": {"strategy_return": strategy_return},
+        "factor_attribution": {"active_factor_days": active_days},
+        "synthetic": True,
+        "positive_demo_expected": True,
+    }
+
+
+def test_mock_biotech_portfolio_runner_aggregates_universe_and_focus_payload(
+    monkeypatch,
+):
+    from src.backtest import portfolio_runner
+
+    single_runs = {
+        "MRNA": _portfolio_runner_payload("MRNA", [2.0, 2.02, 2.04], 0.02, 2, 2),
+        "JNJ": _portfolio_runner_payload("JNJ", [1.0, 1.02, 1.03], 0.03, 3, 1),
+        "LLY": _portfolio_runner_payload("LLY", [1.0, 0.99, 1.04], 0.04, 4, 3),
+        "ABBA": _portfolio_runner_payload("ABBA", [1.0, 1.03, 1.05], 0.05, 5, 4),
+    }
+    calls = []
+
+    def fake_run_kline_backtest(**kwargs):
+        calls.append(kwargs)
+        return single_runs[kwargs["ticker"]]
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        fake_run_kline_backtest,
+    )
+
+    payload = portfolio_runner.run_mock_biotech_portfolio_backtest(
+        focus_ticker="lly",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+        stop_loss_pct=-0.07,
+        max_position_pct=0.15,
+        slippage_pct=0.002,
+    )
+
+    assert [call["ticker"] for call in calls] == ["MRNA", "JNJ", "LLY", "ABBA"]
+    assert all(
+        call["strategy_id"] == "mock_multifactor_demo"
+        and call["data_mode"] == "mock"
+        and call["start_date"] == "2025-01-02"
+        and call["end_date"] == "2025-01-06"
+        and call["stop_loss_pct"] == -0.07
+        and call["max_position_pct"] == 0.15
+        and call["slippage_pct"] == 0.002
+        for call in calls
+    )
+    assert payload["universe_id"] == "biotech_mock_v1"
+    assert payload["tickers"] == ["MRNA", "JNJ", "LLY", "ABBA"]
+    assert payload["start_date"] == "2025-01-02"
+    assert payload["end_date"] == "2025-01-06"
+    assert payload["strategy"] == {"id": "mock_multifactor_demo"}
+    assert payload["portfolio_equity_curve"] == [
+        {"date": "2025-01-02", "equity": 1.0},
+        {"date": "2025-01-03", "equity": 1.0125},
+        {"date": "2025-01-06", "equity": 1.035},
+    ]
+    assert payload["portfolio_metrics"] == {
+        "strategy_return": 0.035,
+        "best_ticker": "ABBA",
+        "worst_ticker": "MRNA",
+        "total_trades": 10,
+        "avg_active_signal_days": 3.5,
+        "avg_exposure_days": 0.0,
+    }
+    assert [row["ticker"] for row in payload["constituents"]] == [
+        "MRNA",
+        "JNJ",
+        "LLY",
+        "ABBA",
+    ]
+    assert payload["constituents"][2]["strategy_return"] == 0.04
+    assert payload["constituents"][2]["active_signal_days"] == 4
+    assert payload["constituents"][2]["trade_count"] == 3
+    assert payload["focus_ticker"]["ticker"] == "LLY"
+    assert payload["focus_ticker"]["equity_curve"] == single_runs["LLY"]["equity_curve"]
+    assert payload["focus_ticker"]["signals"] == single_runs["LLY"]["signals"]
+    assert payload["focus_ticker"]["trades"] == single_runs["LLY"]["trades"]
+    _assert_no_portfolio_disclosure_text(payload["constituents"])
+    _assert_no_portfolio_disclosure_text(payload["focus_ticker"])
+
+
+def test_real_biotech_portfolio_runner_uses_real_multifactor_strategy(
+    monkeypatch,
+):
+    from src.backtest import portfolio_runner
+
+    single_runs = {
+        "MRNA": _portfolio_runner_payload("MRNA", [1.0, 1.01, 1.03], 0.03, 3, 2),
+        "JNJ": _portfolio_runner_payload("JNJ", [1.0, 0.99, 1.01], 0.01, 2, 1),
+        "LLY": _portfolio_runner_payload("LLY", [1.0, 1.02, 1.04], 0.04, 4, 3),
+        "XBI": _portfolio_runner_payload("XBI", [1.0, 0.98, 0.99], -0.01, 1, 1),
+    }
+    calls = []
+
+    def fake_run_kline_backtest(**kwargs):
+        calls.append(kwargs)
+        payload = dict(single_runs[kwargs["ticker"]])
+        payload["strategy"] = {"id": "multifactor_score", "data_mode": "real"}
+        payload.pop("mock_metadata", None)
+        payload.pop("synthetic", None)
+        payload.pop("positive_demo_expected", None)
+        return payload
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        fake_run_kline_backtest,
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="jnj",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+        stop_loss_pct=-0.07,
+        max_position_pct=0.15,
+        slippage_pct=0.002,
+        holding_period_days=7,
+    )
+
+    assert [call["ticker"] for call in calls] == ["MRNA", "JNJ", "LLY", "XBI"]
+    assert all(
+        call["strategy_id"] == "multifactor_score"
+        and call["data_mode"] == "real"
+        and call["start_date"] == "2025-01-02"
+        and call["end_date"] == "2025-01-06"
+        and call["stop_loss_pct"] == -0.07
+        and call["max_position_pct"] == 0.15
+        and call["slippage_pct"] == 0.002
+        and call["holding_period_days"] == 7
+        for call in calls
+    )
+    assert payload["universe_id"] == "biotech_four_v1"
+    assert payload["strategy"] == {"id": "multifactor_score"}
+    assert payload["focus_ticker"]["ticker"] == "JNJ"
+    assert payload["portfolio_equity_curve"] == [
+        {"date": "2025-01-02", "equity": 1.0},
+        {"date": "2025-01-03", "equity": 1.0},
+        {"date": "2025-01-06", "equity": 1.0175},
+    ]
+    assert payload["portfolio_metrics"]["strategy_return"] == 0.0175
+    assert payload["portfolio_metrics"]["best_ticker"] == "LLY"
+    assert payload["portfolio_metrics"]["worst_ticker"] == "XBI"
+    assert payload["portfolio_metrics"]["total_trades"] == 7
+    _assert_no_portfolio_disclosure_text(payload["constituents"])
+    _assert_no_portfolio_disclosure_text(payload["focus_ticker"])
+
+
+def test_mock_biotech_portfolio_runner_falls_back_to_mrna_for_unknown_focus(
+    monkeypatch,
+):
+    from src.backtest import portfolio_runner
+
+    single_runs = {
+        ticker: _portfolio_runner_payload(ticker, [1.0, 1.01, 1.02], 0.02, 2, 1)
+        for ticker in ["MRNA", "JNJ", "LLY", "ABBA"]
+    }
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        lambda **kwargs: single_runs[kwargs["ticker"]],
+    )
+
+    payload = portfolio_runner.run_mock_biotech_portfolio_backtest(
+        focus_ticker="PFE",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+    )
+
+    assert payload["focus_ticker"]["ticker"] == "MRNA"
+
+
+def test_mock_biotech_portfolio_runner_returns_ticker_prefixed_error(monkeypatch):
+    from src.backtest import portfolio_runner
+
+    def fake_run_kline_backtest(**kwargs):
+        if kwargs["ticker"] == "LLY":
+            return {"error": "no mock OHLC data"}
+        return _portfolio_runner_payload(kwargs["ticker"], [1.0, 1.01, 1.02], 0.02, 2, 1)
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        fake_run_kline_backtest,
+    )
+
+    payload = portfolio_runner.run_mock_biotech_portfolio_backtest(
+        focus_ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+    )
+
+    assert payload == {"error": "LLY: no mock OHLC data"}
 
 
 def test_json_safe_number_rejects_non_finite_values():
@@ -54,7 +301,7 @@ def test_serialize_signals_preserves_zero_signal_days_and_attaches_event_ids():
     ]
 
 
-def test_derive_trades_serializes_daily_exposure_overlays():
+def test_derive_trades_combines_continuous_position_spans():
     from src.backtest.runner import _derive_trades
 
     price_window = pd.DataFrame(
@@ -84,21 +331,12 @@ def test_derive_trades_serializes_daily_exposure_overlays():
     assert trades == [
         {
             "entry_date": "2026-04-21",
-            "exit_date": "2026-04-21",
-            "direction": "long",
-            "size": 0.2,
-            "entry_price": 111.0,
-            "exit_price": 120.0,
-            "pnl_pct": 0.081081,
-        },
-        {
-            "entry_date": "2026-04-22",
             "exit_date": "2026-04-22",
             "direction": "long",
             "size": 0.2,
-            "entry_price": 119.0,
+            "entry_price": 111.0,
             "exit_price": 115.0,
-            "pnl_pct": -0.033613,
+            "pnl_pct": 0.036036,
         },
         {
             "entry_date": "2026-04-24",
@@ -119,6 +357,75 @@ def test_derive_trades_serializes_daily_exposure_overlays():
             "pnl_pct": -0.037037,
         },
     ]
+
+
+def test_apply_strategy_holds_latest_signal_for_configured_period():
+    from src.backtest.strategy import apply_strategy
+
+    ohlc = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "open": 100.0, "close": 101.0},
+            {"date": "2026-04-21", "open": 101.0, "close": 103.0},
+            {"date": "2026-04-22", "open": 103.0, "close": 106.0},
+            {"date": "2026-04-23", "open": 106.0, "close": 110.0},
+            {"date": "2026-04-24", "open": 110.0, "close": 111.0},
+        ]
+    )
+    signals = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "signal": 1, "signal_strength": 0.5},
+            {"date": "2026-04-21", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-22", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-23", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-24", "signal": 0, "signal_strength": 0.0},
+        ]
+    )
+
+    results = apply_strategy(
+        ohlc,
+        signals,
+        max_position_pct=0.2,
+        slippage_pct=0.0,
+        holding_period_days=3,
+    )
+
+    assert results["position"].round(6).tolist() == [0.0, 0.1, 0.1, 0.1, 0.0]
+    assert (results["daily_return"].iloc[1:4] > 0).all()
+
+
+def test_apply_strategy_marks_open_position_to_market_between_entry_and_exit():
+    from src.backtest.strategy import apply_strategy
+
+    ohlc = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "open": 100.0, "close": 100.0},
+            {"date": "2026-04-21", "open": 100.0, "close": 101.0},
+            {"date": "2026-04-22", "open": 110.0, "close": 110.0},
+            {"date": "2026-04-23", "open": 112.0, "close": 112.0},
+            {"date": "2026-04-24", "open": 90.0, "close": 90.0},
+        ]
+    )
+    signals = pd.DataFrame(
+        [
+            {"date": "2026-04-20", "signal": 1, "signal_strength": 0.5},
+            {"date": "2026-04-21", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-22", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-23", "signal": 0, "signal_strength": 0.0},
+            {"date": "2026-04-24", "signal": 0, "signal_strength": 0.0},
+        ]
+    )
+
+    results = apply_strategy(
+        ohlc,
+        signals,
+        max_position_pct=0.2,
+        slippage_pct=0.0,
+        holding_period_days=3,
+    )
+
+    assert results["position"].round(6).tolist() == [0.0, 0.1, 0.1, 0.1, 0.0]
+    assert results["daily_return"].iloc[2] == pytest.approx(0.008910891, abs=1e-9)
+    assert results["equity"].iloc[3] > results["equity"].iloc[2] > results["equity"].iloc[1]
 
 
 def test_load_saved_run_rejects_non_generated_ids(tmp_path, monkeypatch):
@@ -296,6 +603,8 @@ def test_run_kline_backtest_initializes_events_and_writes_strict_json(
         ticker="BIIB",
         start_date="2026-04-20",
         end_date="2026-04-22",
+        strategy_id="event_baseline",
+        data_mode="real",
     )
 
     assert init_calls == [True]
@@ -565,6 +874,8 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
         ticker="BIIB",
         start_date="2026-04-20",
         end_date="2026-04-22",
+        strategy_id="event_baseline",
+        data_mode="real",
     )
 
     assert payload["event_filter"] == {
@@ -948,7 +1259,7 @@ def test_multifactor_helpers_reject_negative_threshold():
         summarize_factor_attribution(factors, threshold=-0.2)
 
 
-def test_run_kline_backtest_uses_mock_multifactor_demo_for_a_tickers(
+def test_run_kline_backtest_defaults_to_real_multifactor_for_a_tickers(
     tmp_path, monkeypatch
 ):
     from src.backtest import runner
@@ -969,6 +1280,13 @@ def test_run_kline_backtest_uses_mock_multifactor_demo_for_a_tickers(
 
     monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(runner, "load_ohlc", lambda ticker: ohlc)
+    monkeypatch.setattr(
+        runner,
+        "build_mock_ohlc_frame",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("default backtest must not use mock OHLC")
+        ),
+    )
     monkeypatch.setattr(runner, "init_db", lambda: None)
     monkeypatch.setattr(
         runner,
@@ -986,14 +1304,38 @@ def test_run_kline_backtest_uses_mock_multifactor_demo_for_a_tickers(
         end_date="2025-03-31",
     )
 
-    assert payload["strategy"]["id"] == "mock_multifactor_demo"
-    assert payload["mock_metadata"]["data_mode"] == "mock"
-    assert payload["mock_metadata"]["mock_scope"] == "biotech_mock_v1"
-    assert payload["mock_metadata"]["ui_disclosure"] is False
-    assert payload["factor_attribution"]["active_factor_days"] >= 6
-    assert payload["signal_summary"]["active_signal_days"] >= 6
-    assert len(payload["trades"]) >= 5
-    assert payload["baseline"]["strategy_return"] > 0
+    assert payload["strategy"]["id"] == "multifactor_score"
+    assert payload["strategy"]["data_mode"] == "real"
+    assert payload["strategy"]["price_basis"] == "visible_ohlc"
+    assert payload["mock_metadata"] is None
+    assert "synthetic" not in str(payload).lower()
+    assert len(payload["equity_curve"]) == len(ohlc)
+    assert payload["signal_summary"]["active_signal_days"] > 0
+
+
+def test_real_multifactor_signals_do_not_depend_on_future_prices():
+    from src.backtest.multifactor_strategy import generate_real_multifactor_signals
+
+    price_window = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0 + index * 0.4,
+                "high": 101.0 + index * 0.4,
+                "low": 99.0 + index * 0.4,
+                "close": 100.0 + index * 0.4,
+                "volume": 1_000_000,
+            }
+            for index in range(90)
+        ]
+    )
+    altered_future = price_window.copy()
+    altered_future.loc[80:, "close"] = altered_future.loc[80:, "close"] * 0.1
+
+    original = generate_real_multifactor_signals(price_window, pd.DataFrame())
+    altered = generate_real_multifactor_signals(altered_future, pd.DataFrame())
+
+    pd.testing.assert_frame_equal(original.iloc[:75], altered.iloc[:75])
 
 
 def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatch):
@@ -1038,6 +1380,8 @@ def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatc
             ticker=ticker,
             start_date="2025-01-02",
             end_date="2025-03-31",
+            strategy_id="mock_multifactor_demo",
+            data_mode="mock",
         )
         assert payload["strategy"]["id"] == "mock_multifactor_demo"
         assert payload["mock_metadata"]["ticker"] == ticker
@@ -1049,6 +1393,7 @@ def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatc
 def test_mock_a_backtest_uses_deterministic_prices_without_ohlc_cache(
     tmp_path, monkeypatch
 ):
+    from src.backtest import portfolio_runner
     from src.backtest import runner
 
     def fail_load_ohlc(ticker):
@@ -1072,6 +1417,8 @@ def test_mock_a_backtest_uses_deterministic_prices_without_ohlc_cache(
             ticker=ticker,
             start_date="2025-01-02",
             end_date="2025-03-31",
+            strategy_id="mock_multifactor_demo",
+            data_mode="mock",
         )
 
         assert "error" not in payload
@@ -1079,10 +1426,60 @@ def test_mock_a_backtest_uses_deterministic_prices_without_ohlc_cache(
         assert payload["mock_metadata"]["ticker"] == ticker
         assert payload["signal_summary"]["active_signal_days"] >= 6
         assert len(payload["trades"]) >= 5
-        assert payload["baseline"]["strategy_return"] > 0
+        assert payload["baseline"]["strategy_return"] >= 0.05
+        assert payload["equity_curve"][-1]["equity"] >= 1.05
+        assert payload["strategy"]["holding_period_days"] == 5
+        assert payload["risk_parameters"] == {
+            "stop_loss_pct": -0.08,
+            "max_position_pct": 0.2,
+            "slippage_pct": 0.001,
+            "holding_period_days": 5,
+        }
+
+    portfolio_payload = portfolio_runner.run_mock_biotech_portfolio_backtest(
+        focus_ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-03-31",
+    )
+
+    assert portfolio_payload["portfolio_metrics"]["strategy_return"] >= 0.05
 
 
-def test_run_kline_backtest_does_not_use_mock_strategy_for_non_a_ticker(
+def test_mock_a_long_window_scales_signal_density_and_reports_exposure(
+    tmp_path, monkeypatch
+):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "load_ohlc", lambda ticker: pd.DataFrame())
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner, "compute_event_car", lambda price_window, event_rows: pd.DataFrame()
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2016-05-07",
+        end_date="2026-05-05",
+        holding_period_days=10,
+        strategy_id="mock_multifactor_demo",
+        data_mode="mock",
+    )
+
+    assert payload["signal_summary"]["active_signal_days"] >= 40
+    assert payload["exposure_summary"]["exposure_days"] >= 350
+    assert payload["exposure_summary"]["trade_count"] == len(payload["trades"])
+    assert payload["strategy"]["price_basis"] == "demo_ohlc"
+    assert 0.05 <= payload["baseline"]["strategy_return"] <= 2.5
+
+
+def test_run_kline_backtest_defaults_to_real_multifactor_for_non_a_ticker(
     tmp_path, monkeypatch
 ):
     from src.backtest import runner
@@ -1116,7 +1513,10 @@ def test_run_kline_backtest_does_not_use_mock_strategy_for_non_a_ticker(
         end_date="2025-01-08",
     )
 
-    assert payload == {"error": "no trusted backtest-eligible events in date range"}
+    assert "error" not in payload
+    assert payload["strategy"]["id"] == "multifactor_score"
+    assert payload["strategy"]["data_mode"] == "real"
+    assert payload["strategy"]["price_basis"] == "visible_ohlc"
 
 
 def test_run_kline_backtest_rejects_mock_strategy_when_not_mock_mode(

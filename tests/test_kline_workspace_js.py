@@ -187,6 +187,251 @@ def test_workspace_js_backtest_ignores_stale_response():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_backtest_error_clears_previous_overlays():
+    result = _run_workspace_script(r"""
+        let callCount = 0;
+        fetch = function () {
+          callCount += 1;
+          if (callCount === 1) {
+            return Promise.resolve(jsonResponse({
+              run_id: 'run-ok',
+              metrics: { sharpe: 1.1 },
+              equity_curve: [{ date: '2026-04-20', equity: 2 }],
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 1 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-20', pnl_pct: 0.04 }]
+            }));
+          }
+          return Promise.resolve(jsonResponse({ error: 'Backtest unavailable.' }, false));
+        };
+
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: []
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: false,
+            series: []
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        let latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
+          throw new Error('successful backtest did not render overlays');
+        }
+
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        const status = document.getElementById('backtest-status').textContent;
+        if (!status.includes('Backtest unavailable')) {
+          throw new Error('error status was not shown: ' + status);
+        }
+
+        latestConfig = chartConfigs[chartConfigs.length - 1];
+        if ((latestConfig.equityCurve || []).length || (latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('failed backtest left stale overlays visible');
+        }
+
+        const backtestButton = document.getElementById('layer-bar').children.find((child) => child.dataset.layerKind === 'backtest');
+        if (!backtestButton || !backtestButton.disabled) {
+          throw new Error('backtest layer button was not disabled after failed run');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_panel_renders_single_and_universe_buttons():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        const buttonText = form.children
+          .filter((child) => child.tagName === 'BUTTON')
+          .map((button) => button.textContent);
+
+        if (!buttonText.includes('Run Backtest')) {
+          throw new Error('single-ticker backtest button missing: ' + buttonText.join(','));
+        }
+        if (!buttonText.includes('Run Universe')) {
+          throw new Error('universe backtest button missing: ' + buttonText.join(','));
+        }
+        if (!buttonText.includes('Run Demo Universe')) {
+          throw new Error('demo universe backtest button missing: ' + buttonText.join(','));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_without_disclosure():
+    result = _run_workspace_script(r"""
+        let requestUrl = null;
+        let requestBody = null;
+        fetch = function (url, options) {
+          requestUrl = url;
+          requestBody = JSON.parse(options.body);
+          return Promise.resolve(jsonResponse({
+            run_id: 'portfolio-run',
+            portfolio_equity_curve: [
+              { date: '2026-04-20', equity: 1.00 },
+              { date: '2026-04-21', equity: 1.14 }
+            ],
+            portfolio_metrics: {
+              strategy_return: 14.25,
+              best_ticker: 'LLY',
+              worst_ticker: 'ABBA',
+              total_trades: 9,
+              avg_active_signal_days: 4.5,
+              universe_id: 'internal-universe',
+              data_mode: 'hidden'
+            },
+            constituents: [{
+              ticker: 'MRNA',
+              strategy_return: 12.5,
+              active_signal_days: 5,
+              trade_count: 3,
+              metrics: { sharpe: 1.3 },
+              baseline: { buy_hold_return: 2.1 },
+              factor_attribution: {
+                active_factor_days: 3,
+                mean_event_factor: 0.6,
+                mean_liquidity_factor: 0.2,
+                mean_mock_score: 0.9,
+                synthetic: true
+              }
+            }, {
+              ticker: 'ABBA',
+              strategy_return: -1.2,
+              active_signal_days: 1,
+              trade_count: 0
+            }],
+            focus_ticker: {
+              ticker: 'MRNA',
+              equity_curve: [{ date: '2026-04-20', equity: 1.05 }],
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 0.8 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-21', pnl_pct: 0.04 }],
+              metrics: { sharpe: 1.2 },
+              baseline: { strategy_return: 12.5 },
+              factor_attribution: {
+                active_factor_days: 3,
+                mean_event_factor: 0.6,
+                mean_liquidity_factor: 0.2,
+                data_mode: 'hidden',
+                positive_demo_expected: true
+              }
+            },
+            strategy: { id: 'internal-strategy' },
+            mock_metadata: {
+              mock: true,
+              synthetic: true,
+              positive_demo_expected: true
+            }
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.start_date.value = '2026-04-20';
+        form.elements.end_date.value = '2026-04-21';
+        form.elements.stop_loss_pct.value = '-0.07';
+        form.elements.max_position_pct.value = '0.25';
+        form.elements.slippage_pct.value = '0.002';
+        form.elements.holding_period_days.value = '7';
+
+        const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
+        if (!universeButton) {
+          throw new Error('universe button missing');
+        }
+        universeButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+
+        if (requestUrl !== '/api/backtest/portfolio/run') {
+          throw new Error('unexpected universe endpoint: ' + requestUrl);
+        }
+        if (requestBody.ticker !== 'MRNA' || requestBody.start_date !== '2026-04-20' || requestBody.stop_loss_pct !== -0.07 || requestBody.max_position_pct !== 0.25 || requestBody.slippage_pct !== 0.002 || requestBody.holding_period_days !== 7) {
+          throw new Error('universe request did not preserve current form values: ' + JSON.stringify(requestBody));
+        }
+
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 2 || latestConfig.equityCurve[1].equity !== 1.14) {
+          throw new Error('chart did not use portfolio equity curve');
+        }
+        if (!latestConfig.signals || latestConfig.signals.length !== 1 || latestConfig.signals[0].signal_strength !== 0.8) {
+          throw new Error('chart did not use focus ticker signals');
+        }
+        if (!latestConfig.trades || latestConfig.trades.length !== 1 || latestConfig.trades[0].pnl_pct !== 0.04) {
+          throw new Error('chart did not use focus ticker trades');
+        }
+
+        const text = document.getElementById('backtest-results').textContent;
+        ['strategy_return', '14.25', 'best_ticker', 'LLY', 'worst_ticker', 'ABBA', 'total_trades', '9', 'MRNA', '12.5', 'trade_count', 'active_factor_days', 'mean_event_factor'].forEach((expected) => {
+          if (!text.includes(expected)) {
+            throw new Error('portfolio diagnostics missing ' + expected + ': ' + text);
+          }
+        });
+
+        const lowerText = text.toLowerCase();
+        ['mock', 'synthetic', 'data_mode', 'positive_demo_expected', 'universe_id', 'internal-strategy'].forEach((forbidden) => {
+          if (lowerText.includes(forbidden.toLowerCase())) {
+            throw new Error('forbidden disclosure leaked into portfolio diagnostics: ' + forbidden + ' in ' + text);
+          }
+        });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_demo_universe_button_uses_explicit_demo_endpoint():
+    result = _run_workspace_script(r"""
+        let requestUrl = null;
+        fetch = function (url) {
+          requestUrl = url;
+          return Promise.resolve(jsonResponse({
+            run_id: 'demo-portfolio-run',
+            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
+            portfolio_metrics: { strategy_return: 1.25 },
+            constituents: [],
+            focus_ticker: {
+              ticker: 'MRNA',
+              equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
+              signals: [],
+              trades: []
+            }
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        const demoButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Demo Universe');
+        if (!demoButton) {
+          throw new Error('demo universe button missing');
+        }
+        demoButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+
+        if (requestUrl !== '/api/backtest/portfolio/demo/run') {
+          throw new Error('unexpected demo universe endpoint: ' + requestUrl);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_backtest_layer_button_toggles_overlays():
     result = _run_workspace_script(r"""
         fetch = function () {
@@ -322,6 +567,52 @@ def test_workspace_js_backtest_renders_phase2_diagnostics():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_saved_backtest_renders_exposure_risk_and_strategy_diagnostics():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: false,
+            series: [{ date: '2026-04-20', equity: 1.03 }],
+            summary: {
+              run_id: 'saved-run',
+              metrics: { sharpe: 1.1 },
+              strategy: {
+                price_basis: 'visible_ohlc',
+                holding_period_days: 5,
+                id: 'multifactor_score',
+                data_mode: 'real'
+              },
+              exposure_summary: { exposure_days: 12, trade_count: 3 },
+              risk_parameters: {
+                stop_loss_pct: -0.08,
+                max_position_pct: 0.2,
+                slippage_pct: 0.001,
+                holding_period_days: 5
+              }
+            }
+          }]
+        }));
+        runWorkspace();
+
+        const text = document.getElementById('backtest-results').textContent;
+        ['strategy', 'price_basis', 'visible_ohlc', 'exposure_summary', 'exposure_days', 'risk_parameters', 'stop_loss_pct'].forEach((expected) => {
+          if (!text.includes(expected)) {
+            throw new Error('saved backtest diagnostics missing ' + expected + ': ' + text);
+          }
+        });
+        const lowerText = text.toLowerCase();
+        ['data_mode', 'multifactor_score'].forEach((forbidden) => {
+          if (lowerText.includes(forbidden)) {
+            throw new Error('internal strategy field leaked into saved diagnostics: ' + forbidden + ' in ' + text);
+          }
+        });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_backtest_renders_event_attribution():
     result = _run_workspace_script(r"""
         fetch = function () {
@@ -377,7 +668,8 @@ def test_workspace_js_backtest_renders_factor_attribution_without_mock_disclosur
             },
             strategy: {
               id: 'mock_multifactor_demo',
-              data_mode: 'mock'
+              data_mode: 'mock',
+              price_basis: 'demo_ohlc'
             }
           }));
         };
@@ -392,6 +684,9 @@ def test_workspace_js_backtest_renders_factor_attribution_without_mock_disclosur
         const text = document.getElementById('backtest-results').textContent;
         if (!text.includes('factor_attribution') || !text.includes('active_factor_days') || !text.includes('mean_event_factor') || !text.includes('mean_liquidity_factor')) {
           throw new Error('factor attribution diagnostics were not rendered: ' + text);
+        }
+        if (!text.includes('price_basis') || !text.includes('demo_ohlc')) {
+          throw new Error('strategy price basis was not rendered: ' + text);
         }
 
         const lowerText = text.toLowerCase();

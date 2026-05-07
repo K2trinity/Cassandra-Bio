@@ -547,6 +547,13 @@ def test_workspace_backtest_layer_omits_backend_mock_metadata():
                 "equity_curve": [{"date": "2026-04-20", "equity": 1.03}],
                 "signals": [{"date": "2026-04-20", "signal": 1}],
                 "trades": [{"entry_date": "2026-04-20", "exit_date": "2026-04-20"}],
+                "exposure_summary": {"exposure_days": 5, "trade_count": 1},
+                "risk_parameters": {
+                    "stop_loss_pct": -0.08,
+                    "max_position_pct": 0.2,
+                    "slippage_pct": 0.001,
+                    "holding_period_days": 5,
+                },
                 "factor_attribution": {
                     "active_factor_days": 8,
                     "mean_mock_score": 0.61,
@@ -561,6 +568,8 @@ def test_workspace_backtest_layer_omits_backend_mock_metadata():
                 "strategy": {
                     "id": "mock_multifactor_demo",
                     "data_mode": "mock",
+                    "price_basis": "demo_ohlc",
+                    "holding_period_days": 5,
                 },
             }
 
@@ -587,6 +596,17 @@ def test_workspace_backtest_layer_omits_backend_mock_metadata():
     assert summary["factor_attribution"]["active_factor_days"] == 8
     assert summary["factor_attribution"]["mean_event_factor"] == 0.32
     assert summary["factor_attribution"]["mean_liquidity_factor"] == 0.12
+    assert summary["exposure_summary"] == {"exposure_days": 5, "trade_count": 1}
+    assert summary["risk_parameters"] == {
+        "stop_loss_pct": -0.08,
+        "max_position_pct": 0.2,
+        "slippage_pct": 0.001,
+        "holding_period_days": 5,
+    }
+    assert summary["strategy"] == {
+        "price_basis": "demo_ohlc",
+        "holding_period_days": 5,
+    }
     assert "mean_mock_score" not in summary["factor_attribution"]
     assert backtest_layer["series"] == [{"date": "2026-04-20", "equity": 1.03}]
 

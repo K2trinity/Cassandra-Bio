@@ -14,6 +14,20 @@
 
 This plan implements only A from `docs/superpowers/specs/2026-05-06-biotech-backtest-lab-design.md`.
 
+## 2026-05-06 Implementation Status Update
+
+Current worktree status after the K-line portfolio UI optimization audit:
+
+- A-path mock universe, strategy registry guardrails, multi-factor signals, factor attribution, hidden backend mock metadata, and UI non-disclosure tests are implemented.
+- The A-path execution model now uses `holding_period_days = 5` by default for `mock_multifactor_demo`, while single-run and portfolio APIs accept a validated `holding_period_days` override from `1..60`.
+- Single-run payloads now record `risk_parameters` with stop loss, max position, slippage, and holding period. Portfolio runs propagate the same holding period into every constituent run and return sanitized portfolio diagnostics.
+- The current four-ticker smoke output for `2025-01-02` through `2025-03-31` is approximately `+31.55%` per ticker and portfolio, with 36 daily exposure overlays per constituent and equity changes across January, February, and March.
+- Verification completed in this worktree:
+  - `pytest tests/test_backtest_mock_dataset.py tests/test_backtest_strategy_registry.py tests/test_kline_backtest_runner.py tests/test_kline_workspace_js.py tests/test_kline_web_integration.py tests/test_kline_static_bundle.py -q --basetemp .pytest_tmp\codex-final-active` -> `99 passed`
+  - `pytest tests/test_backtest_mock_dataset.py tests/test_backtest_strategy_registry.py tests/test_kline_workspace_service.py tests/test_kline_workspace_js.py tests/test_kline_web_integration.py tests/test_kline_backtest_runner.py tests/test_kline_backtest_trusted_inputs.py tests/test_kline_static_bundle.py tests/test_market_data_service.py tests/test_event_ingestion_service.py tests/test_event_ingestion_trust_boundary.py tests/test_kline_event_filter.py tests/test_kline_event_trust_db.py -q --basetemp .pytest_tmp\codex-final-wide-existing` -> `195 passed`
+  - `npm run build` from `src/kline` -> TypeScript and Vite build completed.
+- The larger B/C items in the project spec remain out of this A-path implementation: DuckDB/Parquet snapshot layer, Backtest Lab page, split enforcement, real multifactor B runner, ML feature matrix, and `ml_probability`.
+
 In scope:
 
 - mock universe: `MRNA`, `JNJ`, `LLY`, `ABBA`

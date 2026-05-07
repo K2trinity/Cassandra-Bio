@@ -75,19 +75,43 @@ def build_mock_ohlc_frame(
     price = MOCK_BASE_PRICES[normalized_ticker]
     for index, date in enumerate(dates):
         open_price = price
-        close_price = open_price + (2.5 if index % 5 in {1, 2, 3} else -0.4)
+        close_price = open_price * (1.025 if index % 5 in {1, 2, 3} else 0.996)
         rows.append(
             {
                 "date": date,
                 "open": open_price,
-                "high": max(open_price, close_price) + 1.0,
-                "low": min(open_price, close_price) - 1.0,
+                "high": max(open_price, close_price) * 1.012,
+                "low": min(open_price, close_price) * 0.988,
                 "close": close_price,
                 "volume": 1_000_000 + index * 15_000,
             }
         )
         price = close_price
     return pd.DataFrame(rows)
+
+
+def _spread_candidates_by_date(candidates: pd.DataFrame, count: int) -> pd.DataFrame:
+    if count <= 0 or candidates.empty:
+        return candidates.head(0)
+    if len(candidates) <= count:
+        return candidates
+
+    sorted_candidates = candidates.sort_values("date")
+    last_position = len(sorted_candidates) - 1
+    positions: list[int] = []
+    for index in range(count):
+        position = round(index * last_position / max(count - 1, 1))
+        if position not in positions:
+            positions.append(position)
+
+    if len(positions) < count:
+        for position in range(len(sorted_candidates)):
+            if position not in positions:
+                positions.append(position)
+            if len(positions) == count:
+                break
+
+    return sorted_candidates.iloc[positions[:count]]
 
 
 def build_mock_factor_frame(
@@ -118,17 +142,15 @@ def build_mock_factor_frame(
     target_signal_days = max(1, min_signal_days)
     eligible_rows = rows.iloc[:-1].copy()
     candidates = eligible_rows[eligible_rows["next_intraday_return"] > 0].copy()
-    candidates = candidates.sort_values(
-        ["next_intraday_return", "volume_ratio", "ret_3d"],
-        ascending=[False, False, False],
-    ).head(target_signal_days)
+    candidates = _spread_candidates_by_date(candidates, target_signal_days)
     if len(candidates) < target_signal_days:
+        remaining_count = target_signal_days - len(candidates)
         remaining = eligible_rows.drop(index=candidates.index)
         remaining = remaining.sort_values(
             ["next_intraday_return", "volume_ratio", "ret_3d"],
             ascending=[False, False, False],
-        ).head(target_signal_days - len(candidates))
-        candidates = pd.concat([candidates, remaining])
+        ).head(remaining_count)
+        candidates = pd.concat([candidates, _spread_candidates_by_date(remaining, remaining_count)])
 
     factors = rows[["date"]].copy()
     factors["event_factor"] = 0.0

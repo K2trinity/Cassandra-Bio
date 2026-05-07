@@ -59,7 +59,6 @@ def compute_metrics(results_df: pd.DataFrame, benchmark_df: pd.DataFrame = None)
         bench["date"] = pd.to_datetime(bench["date"])
         merged = results_df.merge(bench[["date", "close"]], on="date", how="inner", suffixes=("", "_bench"))
         if len(merged) > 1:
-            bench_ret = merged["close"].pct_change().dropna()
             bench_ann = (merged["close"].iloc[-1] / merged["close"].iloc[0]) ** (trading_days / len(merged)) - 1
             excess = ann_return - bench_ann
             metrics["layer3_strategy"]["benchmark_return"] = round(bench_ann, 4)
