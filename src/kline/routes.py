@@ -127,6 +127,26 @@ def api_backtest_run():
     data_mode = str(raw_data_mode).strip() if raw_data_mode is not None else None
     if not data_mode:
         data_mode = None
+    raw_backtest_mode = data.get("backtest_mode")
+    backtest_mode = (
+        str(raw_backtest_mode).strip()
+        if raw_backtest_mode is not None
+        else "exploratory"
+    )
+    if not backtest_mode:
+        backtest_mode = "exploratory"
+    raw_price_source = data.get("price_source")
+    price_source = str(raw_price_source).strip() if raw_price_source is not None else None
+    if not price_source:
+        price_source = None
+    raw_data_snapshot_id = data.get("data_snapshot_id")
+    data_snapshot_id = (
+        str(raw_data_snapshot_id).strip()
+        if raw_data_snapshot_id is not None
+        else None
+    )
+    if not data_snapshot_id:
+        data_snapshot_id = None
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return (
@@ -235,6 +255,9 @@ def api_backtest_run():
         slippage_pct=slippage_pct,
         strategy_id=strategy_id,
         data_mode=data_mode,
+        backtest_mode=backtest_mode,
+        price_source=price_source,
+        data_snapshot_id=data_snapshot_id,
     )
 
     if isinstance(result, dict) and result.get("error"):

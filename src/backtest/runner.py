@@ -16,6 +16,13 @@ from src.backtest.attribution import (
     summarize_events,
     summarize_signals,
 )
+from src.backtest.data_sources import (
+    BacktestMode,
+    MOCK_PROFILE,
+    SourcePolicyError,
+    YFINANCE_PROFILE,
+    validate_source_for_mode,
+)
 from src.backtest.data_loader import DATA_DIR, load_ohlc
 from src.backtest.events_db import (
     get_events,
@@ -367,6 +374,9 @@ def run_kline_backtest(
     report_confidence: float = 1.0,
     strategy_id: str | None = None,
     data_mode: str | None = None,
+    backtest_mode: str = "exploratory",
+    price_source: str | None = None,
+    data_snapshot_id: str | None = None,
 ) -> dict:
     """Run a single-ticker backtest and persist result as JSON.
 
@@ -407,6 +417,25 @@ def run_kline_backtest(
         resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
         and resolved_data_mode == MOCK_DATA_MODE
     )
+
+    mode_text = str(backtest_mode).strip() if backtest_mode else "exploratory"
+    source_profile = MOCK_PROFILE if use_mock_ohlc else YFINANCE_PROFILE
+    requested_price_source = str(price_source).strip() if price_source else None
+    if (
+        use_mock_ohlc
+        and requested_price_source == YFINANCE_PROFILE.source_id
+    ):
+        requested_price_source = None
+    resolved_price_source = requested_price_source or source_profile.source_id
+    if resolved_price_source != source_profile.source_id:
+        return {"error": f"unsupported price_source: {resolved_price_source}"}
+
+    try:
+        resolved_mode = BacktestMode.MOCK if use_mock_ohlc else BacktestMode(mode_text)
+        source_validation = validate_source_for_mode(source_profile, resolved_mode)
+    except (SourcePolicyError, ValueError) as exc:
+        return {"error": str(exc)}
+
     if use_mock_ohlc:
         ohlc = build_mock_ohlc_frame(ticker, start_date, end_date)
         cache_path = None
@@ -534,6 +563,11 @@ def run_kline_backtest(
         },
         "mock_metadata": mock_metadata,
         "factor_attribution": factor_attribution,
+        "data_snapshot_id": data_snapshot_id,
+        "backtest_mode": str(resolved_mode.value),
+        "price_source": resolved_price_source,
+        "bias_profile": str(source_validation.bias_profile.value),
+        "bias_warnings": list(source_validation.bias_warnings),
         "input_event_ids": _input_event_ids(eligible_events),
         "trust_summary": _trust_summary(eligible_events),
         "source_status_at_run": get_fetch_log_entries(ticker),
