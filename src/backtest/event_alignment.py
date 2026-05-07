@@ -42,7 +42,7 @@ def align_events_for_snapshot(
     if "date" not in prices.columns:
         raise ValueError("Price frame missing required column: date")
 
-    price_dates = _price_dates(prices)
+    price_dates = _price_dates(_prices_for_security(prices, security_id))
     created_at = _utc_now_iso()
     rows = []
     for _, event in events.iterrows():
@@ -204,6 +204,13 @@ def _price_dates(prices: pd.DataFrame) -> list[str]:
         if date_text is not None:
             dates.add(date_text)
     return sorted(dates)
+
+
+def _prices_for_security(prices: pd.DataFrame, security_id: str) -> pd.DataFrame:
+    if "security_id" not in prices.columns:
+        return prices
+    security_ids = prices["security_id"].map(_optional_text)
+    return prices.loc[security_ids == security_id]
 
 
 def _event_date(event: pd.Series) -> str | None:

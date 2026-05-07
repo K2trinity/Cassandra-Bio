@@ -88,6 +88,71 @@ def test_date_only_event_on_trading_day_aligns_to_next_trading_date():
     assert links.iloc[0]["alignment_rule"] == "date_only_next_trading_day"
 
 
+def test_date_only_event_uses_requested_security_price_dates():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-mrna-date-only",
+                "date": "2026-04-20",
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {"security_id": "YFINANCE:JNJ", "date": "2026-04-21"},
+            {"security_id": "YFINANCE:MRNA", "date": "2026-04-22"},
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        prices,
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["security_id"] == "YFINANCE:MRNA"
+    assert links.iloc[0]["aligned_signal_date"] == "2026-04-22"
+    assert links.iloc[0]["aligned_trade_date"] == "2026-04-22"
+    assert links.iloc[0]["alignment_rule"] == "date_only_next_trading_day"
+    assert links.iloc[0]["price_date_available"] is True
+
+
+def test_price_dates_for_other_security_do_not_make_requested_security_available():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-mrna-unavailable",
+                "date": "2026-04-20",
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {"security_id": "YFINANCE:JNJ", "date": "2026-04-21"},
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        prices,
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["security_id"] == "YFINANCE:MRNA"
+    assert links.iloc[0]["aligned_signal_date"] is None
+    assert links.iloc[0]["aligned_trade_date"] is None
+    assert links.iloc[0]["alignment_rule"] == "outside_price_window"
+    assert links.iloc[0]["price_date_available"] is False
+
+
 def test_numeric_yyyymmdd_event_and_price_dates_parse_as_calendar_dates():
     from src.backtest.event_alignment import align_events_for_snapshot
 
