@@ -88,6 +88,59 @@ def test_date_only_event_on_trading_day_aligns_to_next_trading_date():
     assert links.iloc[0]["alignment_rule"] == "date_only_next_trading_day"
 
 
+def test_numeric_yyyymmdd_event_and_price_dates_parse_as_calendar_dates():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-numeric-date",
+                "date": 20260420,
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+    prices = pd.DataFrame(
+        [
+            {"date": 20260420},
+            {"date": 20260421},
+        ]
+    )
+
+    links = align_events_for_snapshot(
+        events,
+        prices,
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+
+    assert links.iloc[0]["original_event_date"] == "2026-04-20"
+    assert links.iloc[0]["aligned_signal_date"] == "2026-04-21"
+    assert links.iloc[0]["aligned_trade_date"] == "2026-04-21"
+
+
+def test_invalid_numeric_event_date_raises_value_error():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-invalid-numeric-date",
+                "date": 123,
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="date"):
+        align_events_for_snapshot(
+            events,
+            _prices(),
+            data_snapshot_id="snap-test",
+            security_id="YFINANCE:MRNA",
+        )
+
+
 def test_after_close_event_aligns_to_next_trading_date():
     from src.backtest.event_alignment import align_events_for_snapshot
 
@@ -327,6 +380,29 @@ def test_invalid_event_timestamp_utc_raises_value_error():
         )
 
 
+def test_date_only_timestamp_text_raises_value_error():
+    from src.backtest.event_alignment import align_events_for_snapshot
+
+    events = pd.DataFrame(
+        [
+            {
+                "id": "evt-date-only-ts",
+                "date": "2026-04-20",
+                "event_timestamp_utc": "2026-04-20",
+                "ticker_scope": "MRNA",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="event_timestamp_utc"):
+        align_events_for_snapshot(
+            events,
+            _prices(),
+            data_snapshot_id="snap-test",
+            security_id="YFINANCE:MRNA",
+        )
+
+
 def test_write_event_price_links_persists_snapshot_parquet(tmp_path):
     from src.backtest.event_alignment import (
         EVENT_PRICE_LINK_COLUMNS,
@@ -438,3 +514,57 @@ def test_write_event_price_links_rejects_existing_lock_without_removing_it(tmp_p
 
     assert lock_path.read_text(encoding="utf-8") == "other-writer"
     assert not list(partition.glob("*.tmp"))
+
+
+def test_write_event_price_links_rejects_mismatched_aligned_dates(tmp_path):
+    from src.backtest.event_alignment import (
+        align_events_for_snapshot,
+        write_event_price_links,
+    )
+
+    links = align_events_for_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "id": "evt-pre-market",
+                    "date": "2026-04-20",
+                    "event_timestamp_utc": "2026-04-20T11:00:00Z",
+                    "release_session": "pre_market",
+                    "ticker_scope": "MRNA",
+                }
+            ]
+        ),
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+    links.loc[0, "aligned_trade_date"] = "2026-04-21"
+
+    with pytest.raises(ValueError, match="aligned_trade_date"):
+        write_event_price_links(links, output_root=tmp_path / "event_price_links")
+
+
+def test_write_event_price_links_rejects_unavailable_row_with_aligned_dates(tmp_path):
+    from src.backtest.event_alignment import (
+        align_events_for_snapshot,
+        write_event_price_links,
+    )
+
+    links = align_events_for_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "id": "evt-too-late",
+                    "date": "2026-05-01",
+                    "ticker_scope": "MRNA",
+                }
+            ]
+        ),
+        _prices(),
+        data_snapshot_id="snap-test",
+        security_id="YFINANCE:MRNA",
+    )
+    links.loc[0, "aligned_signal_date"] = "2026-04-22"
+
+    with pytest.raises(ValueError, match="price_date_available"):
+        write_event_price_links(links, output_root=tmp_path / "event_price_links")

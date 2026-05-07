@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
+from numbers import Real
 from pathlib import Path
 from uuid import uuid4
 
@@ -95,6 +97,7 @@ def write_event_price_links(
 
     frame = links[EVENT_PRICE_LINK_COLUMNS].copy()
     _validate_required_link_columns(frame)
+    _normalize_and_validate_aligned_dates(frame)
     snapshot_ids = sorted({str(value) for value in frame["data_snapshot_id"].unique()})
     if len(snapshot_ids) != 1:
         raise ValueError("Event-price links must contain exactly one data_snapshot_id")
@@ -190,30 +193,53 @@ def _next_price_date(
 
 
 def _price_dates(prices: pd.DataFrame) -> list[str]:
-    parsed = pd.to_datetime(prices["date"], errors="coerce")
-    return sorted(
-        {
-            value.date().isoformat()
-            for value in parsed.dropna()
-        }
-    )
+    dates = set()
+    for value in prices["date"]:
+        date_text = _date_text(
+            value,
+            field_name="price date",
+            raise_invalid_numeric=False,
+        )
+        if date_text is not None:
+            dates.add(date_text)
+    return sorted(dates)
 
 
 def _event_date(event: pd.Series) -> str | None:
     for column in ("effective_event_date", "date"):
         value = event.get(column)
-        date_text = _date_text(value)
+        date_text = _date_text(
+            value,
+            field_name=column,
+            raise_invalid_numeric=True,
+        )
         if date_text is not None:
             return date_text
     timestamp = _event_timestamp_utc(event.get("event_timestamp_utc"))
     if timestamp is not None:
-        return _date_text(timestamp)
+        return _date_text(timestamp, field_name="event_timestamp_utc")
     return None
 
 
-def _date_text(value: object) -> str | None:
+def _date_text(
+    value: object,
+    *,
+    field_name: str = "date",
+    raise_invalid_numeric: bool = False,
+) -> str | None:
     if value is None or pd.isna(value):
         return None
+    if _is_numeric_date_value(value):
+        return _numeric_date_text(
+            value,
+            field_name=field_name,
+            raise_invalid=raise_invalid_numeric,
+        )
+    if isinstance(value, str) and re.fullmatch(r"\d{8}", value.strip()):
+        try:
+            return datetime.strptime(value.strip(), "%Y%m%d").date().isoformat()
+        except ValueError:
+            return None
     parsed = pd.to_datetime(value, errors="coerce", utc=True)
     if pd.isna(parsed):
         return None
@@ -231,6 +257,10 @@ def _event_timestamp_utc(value: object) -> str | None:
     text = str(value).strip()
     if not text:
         return None
+    if not _has_time_component(text):
+        raise ValueError(
+            f"event_timestamp_utc must include a time component: {text!r}"
+        )
     parsed = pd.to_datetime(text, errors="coerce", utc=True)
     if pd.isna(parsed):
         raise ValueError(f"event_timestamp_utc must be a valid timestamp: {text!r}")
@@ -286,3 +316,93 @@ def _validate_required_link_columns(frame: pd.DataFrame) -> None:
     for column in ("event_id", "security_id", "ticker_scope", "data_snapshot_id"):
         for value in frame[column]:
             _required_text(column, value)
+
+
+def _normalize_and_validate_aligned_dates(frame: pd.DataFrame) -> None:
+    for index, row in frame.iterrows():
+        signal_date = _link_date_text(row["aligned_signal_date"], "aligned_signal_date")
+        trade_date = _link_date_text(row["aligned_trade_date"], "aligned_trade_date")
+        frame.at[index, "aligned_signal_date"] = signal_date
+        frame.at[index, "aligned_trade_date"] = trade_date
+        price_date_available = _price_date_available_bool(
+            row["price_date_available"],
+            index=index,
+        )
+        frame.at[index, "price_date_available"] = price_date_available
+
+        if price_date_available:
+            if signal_date is None:
+                raise ValueError(
+                    "aligned_signal_date must be present when "
+                    "price_date_available is True."
+                )
+            if trade_date is None:
+                raise ValueError(
+                    "aligned_trade_date must be present when "
+                    "price_date_available is True."
+                )
+            if signal_date != trade_date:
+                raise ValueError(
+                    "aligned_trade_date must equal aligned_signal_date when "
+                    "price_date_available is True."
+                )
+            continue
+
+        if signal_date is not None or trade_date is not None:
+            raise ValueError(
+                "price_date_available False rows must not contain aligned dates."
+            )
+
+
+def _link_date_text(value: object, column: str) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    date_text = _date_text(value, field_name=column, raise_invalid_numeric=True)
+    if date_text is None:
+        raise ValueError(f"{column} must be a valid date.")
+    return date_text
+
+
+def _price_date_available_bool(value: object, *, index: int) -> bool:
+    if isinstance(value, bool):
+        return value
+    if type(value).__name__ == "bool_":
+        return bool(value)
+    if value in (0, 1):
+        return bool(value)
+    text = _optional_text(value)
+    if text is not None:
+        if text.lower() == "true":
+            return True
+        if text.lower() == "false":
+            return False
+    raise ValueError(f"price_date_available must be boolean for row {index}.")
+
+
+def _is_numeric_date_value(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
+
+
+def _numeric_date_text(
+    value: object,
+    *,
+    field_name: str,
+    raise_invalid: bool,
+) -> str | None:
+    number = float(value)  # type: ignore[arg-type]
+    if math.isfinite(number) and number.is_integer():
+        text = str(int(number))
+        if re.fullmatch(r"\d{8}", text):
+            try:
+                return datetime.strptime(text, "%Y%m%d").date().isoformat()
+            except ValueError:
+                pass
+    if raise_invalid:
+        raise ValueError(f"{field_name} numeric values must use YYYYMMDD format.")
+    return None
+
+
+def _has_time_component(text: str) -> bool:
+    return re.search(r"(?:T|\s)\d{1,2}:\d{2}", text) is not None
