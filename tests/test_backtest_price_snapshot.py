@@ -190,6 +190,63 @@ def test_import_ohlc_cache_rejects_same_snapshot_overwrite(tmp_path):
         )
 
 
+def test_import_ohlc_cache_preflights_existing_snapshot_before_writing(tmp_path):
+    from src.backtest.price_snapshot import import_ohlc_cache_to_prices_daily
+
+    ohlc_dir = tmp_path / "ohlc"
+    output_root = tmp_path / "prices_daily"
+    ohlc_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "date": "2026-05-01",
+                "open": 100.0,
+                "high": 103.0,
+                "low": 99.0,
+                "close": 102.0,
+                "volume": 12345,
+            }
+        ]
+    ).to_parquet(ohlc_dir / "MRNA.parquet", index=False)
+
+    import_ohlc_cache_to_prices_daily(
+        ohlc_dir=ohlc_dir,
+        output_root=output_root,
+        data_snapshot_id="snap-test",
+        source="yfinance",
+    )
+
+    pd.DataFrame(
+        [
+            {
+                "date": "2026-05-01",
+                "open": 10.0,
+                "high": 13.0,
+                "low": 9.0,
+                "close": 12.0,
+                "volume": 23456,
+            }
+        ]
+    ).to_parquet(ohlc_dir / "ABBA.parquet", index=False)
+
+    with pytest.raises(FileExistsError, match="Price snapshot already exists"):
+        import_ohlc_cache_to_prices_daily(
+            ohlc_dir=ohlc_dir,
+            output_root=output_root,
+            data_snapshot_id="snap-test",
+            source="yfinance",
+        )
+
+    abba_path = (
+        output_root
+        / "data_snapshot_id=snap-test"
+        / "source=yfinance"
+        / "year=2026"
+        / "ABBA.parquet"
+    )
+    assert not abba_path.exists()
+
+
 def test_import_ohlc_cache_drops_invalid_numeric_rows_and_writes_numeric_dtypes(
     tmp_path,
 ):
@@ -316,6 +373,14 @@ def test_import_ohlc_cache_drops_non_finite_and_invalid_price_rows(tmp_path):
                 "low": 101.0,
                 "close": 100.0,
                 "volume": 12345,
+            },
+            {
+                "date": "2026-05-09",
+                "open": -10.0,
+                "high": 1.0,
+                "low": -20.0,
+                "close": -5.0,
+                "volume": 100,
             },
         ]
     ).to_parquet(ohlc_dir / "MRNA.parquet", index=False)

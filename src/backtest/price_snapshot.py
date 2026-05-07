@@ -33,6 +33,7 @@ PRICE_COLUMNS = [
 ]
 
 REQUIRED_COLUMNS = {"date", "open", "high", "low", "close", "volume"}
+OHLC_COLUMNS = ["open", "high", "low", "close"]
 REQUIRED_NUMERIC_COLUMNS = ["open", "high", "low", "close", "volume"]
 FLOAT_COLUMNS = [
     "open",
@@ -62,6 +63,7 @@ def import_ohlc_cache_to_prices_daily(
     root = Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
     tickers = 0
     rows = 0
+    pending_writes = []
 
     for path in sorted(input_dir.glob("*.parquet")):
         ticker = path.stem.upper()
@@ -76,14 +78,19 @@ def import_ohlc_cache_to_prices_daily(
         )
         if normalized.empty:
             continue
-        _write_partition(
-            normalized,
-            root,
-            source=source,
-            data_snapshot_id=data_snapshot_id,
+        pending_writes.extend(
+            _plan_partition_writes(
+                normalized,
+                root,
+                source=source,
+                data_snapshot_id=data_snapshot_id,
+            )
         )
         tickers += 1
         rows += len(normalized)
+
+    _preflight_partition_writes(pending_writes)
+    _write_planned_partitions(pending_writes)
 
     return {"tickers": tickers, "rows": rows}
 
@@ -109,7 +116,8 @@ def normalize_ohlc_frame(
     finite_values = np.isfinite(df[REQUIRED_NUMERIC_COLUMNS]).all(axis=1)
     df = df[finite_values]
     valid_price_rows = (
-        (df["volume"] >= 0)
+        (df[OHLC_COLUMNS] > 0).all(axis=1)
+        & (df["volume"] >= 0)
         & (df["high"] >= df["low"])
         & (df["high"] >= df["open"])
         & (df["high"] >= df["close"])
@@ -160,6 +168,23 @@ def _write_partition(
     source: str,
     data_snapshot_id: str,
 ) -> None:
+    pending_writes = _plan_partition_writes(
+        frame,
+        root,
+        source=source,
+        data_snapshot_id=data_snapshot_id,
+    )
+    _preflight_partition_writes(pending_writes)
+    _write_planned_partitions(pending_writes)
+
+
+def _plan_partition_writes(
+    frame: pd.DataFrame,
+    root: Path,
+    *,
+    source: str,
+    data_snapshot_id: str,
+) -> list[tuple[pd.DataFrame, Path, Path]]:
     pending_writes = []
     for year, group in frame.groupby(pd.to_datetime(frame["date"]).dt.year):
         partition = (
@@ -171,11 +196,20 @@ def _write_partition(
         tickers = "_".join(sorted(group["ticker"].unique()))
         path = partition / f"{tickers}.parquet"
         pending_writes.append((group, partition, path))
+    return pending_writes
 
+
+def _preflight_partition_writes(
+    pending_writes: list[tuple[pd.DataFrame, Path, Path]],
+) -> None:
     for _, _, path in pending_writes:
         if path.exists():
             raise FileExistsError(f"Price snapshot already exists: {path}")
 
+
+def _write_planned_partitions(
+    pending_writes: list[tuple[pd.DataFrame, Path, Path]],
+) -> None:
     for group, partition, path in pending_writes:
         partition.mkdir(parents=True, exist_ok=True)
         group.to_parquet(path, index=False)
