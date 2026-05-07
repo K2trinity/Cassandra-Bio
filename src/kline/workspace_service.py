@@ -31,13 +31,16 @@ _PUBLIC_BACKTEST_SUMMARY_KEYS = (
     "metrics",
     "event_filter",
     "signal_summary",
+    "exposure_summary",
     "baseline",
+    "risk_parameters",
     "event_attribution",
     "factor_attribution",
     "signals",
     "trades",
     "event_car",
 )
+_PUBLIC_STRATEGY_KEYS = ("price_basis", "holding_period_days")
 _PUBLIC_FACTOR_ATTRIBUTION_DENYLIST = {
     "data_mode",
     "mean_mock_score",
@@ -258,7 +261,20 @@ def _public_backtest_summary(last_backtest: dict[str, Any] | None) -> dict[str, 
             for key, value in factor_attribution.items()
             if key not in _PUBLIC_FACTOR_ATTRIBUTION_DENYLIST
         }
+    strategy = _public_strategy_summary(last_backtest.get("strategy"))
+    if strategy:
+        summary["strategy"] = strategy
     return summary
+
+
+def _public_strategy_summary(strategy: object) -> dict[str, Any]:
+    if not isinstance(strategy, dict):
+        return {}
+    return {
+        key: strategy[key]
+        for key in _PUBLIC_STRATEGY_KEYS
+        if key in strategy
+    }
 
 
 def _backtest_series(last_backtest: dict[str, Any] | None) -> list[Any]:

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import * as d3 from 'd3';
 import { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, SignalMarker, TradeMarker } from './types';
 
@@ -26,6 +26,14 @@ interface Props {
   signals?: SignalMarker[];
   trades?: TradeMarker[];
 }
+
+type KlineTimeframe = 'day' | 'week' | 'month';
+
+const KLINE_TIMEFRAME_OPTIONS: Array<{ id: KlineTimeframe; label: string }> = [
+  { id: 'day', label: 'Day' },
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+];
 
 // Event category/type -> color mapping
 const EVENT_CATEGORY_COLOR: Record<string, string> = {
@@ -67,6 +75,170 @@ function normalizeUnitScore(value: number, useMagnitude = false): number {
 
 function getNumberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function parseChartDate(value: string): Date | null {
+  const parts = value.split('-').map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
+    return null;
+  }
+  const [year, month, day] = parts;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function formatChartDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function timeframeBucketDate(dateStr: string, timeframe: KlineTimeframe): string | null {
+  if (timeframe === 'day') {
+    return dateStr;
+  }
+
+  const date = parseChartDate(dateStr);
+  if (!date) {
+    return null;
+  }
+
+  if (timeframe === 'month') {
+    return formatChartDate(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)));
+  }
+
+  const day = date.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const weekStart = new Date(date);
+  weekStart.setUTCDate(date.getUTCDate() + mondayOffset);
+  return formatChartDate(weekStart);
+}
+
+function aggregateOhlcForTimeframe(rows: OHLCRow[], timeframe: KlineTimeframe): OHLCRow[] {
+  if (timeframe === 'day') {
+    return rows.slice();
+  }
+
+  const sorted = rows
+    .slice()
+    .sort((a, b) => (parseChartDate(a.date)?.getTime() || 0) - (parseChartDate(b.date)?.getTime() || 0));
+  const buckets = new Map<string, OHLCRow>();
+
+  for (const row of sorted) {
+    const bucketDate = timeframeBucketDate(row.date, timeframe);
+    if (!bucketDate) {
+      continue;
+    }
+
+    const open = Number(row.open);
+    const high = Number(row.high);
+    const low = Number(row.low);
+    const close = Number(row.close);
+    const volume = Number(row.volume);
+    const existing = buckets.get(bucketDate);
+
+    if (!existing) {
+      buckets.set(bucketDate, {
+        date: bucketDate,
+        open,
+        high,
+        low,
+        close,
+        volume: Number.isFinite(volume) ? volume : 0,
+      });
+      continue;
+    }
+
+    existing.high = Math.max(existing.high, high);
+    existing.low = Math.min(existing.low, low);
+    existing.close = close;
+    existing.volume += Number.isFinite(volume) ? volume : 0;
+  }
+
+  return Array.from(buckets.values());
+}
+
+function buildTimeframeDateMap(rows: OHLCRow[], timeframe: KlineTimeframe): Map<string, string> {
+  const dateMap = new Map<string, string>();
+  for (const row of rows) {
+    const bucketDate = timeframeBucketDate(row.date, timeframe);
+    if (bucketDate) {
+      dateMap.set(row.date, bucketDate);
+    }
+  }
+  return dateMap;
+}
+
+function mapOverlayDateToTimeframe<T>(
+  date: string,
+  dateToOhlc: Map<string, T>,
+  timeframeDateByDate: Map<string, string>,
+  timeframe: KlineTimeframe,
+): string | undefined {
+  const mappedDate = timeframeDateByDate.get(date) ?? timeframeBucketDate(date, timeframe);
+  if (mappedDate && dateToOhlc.has(mappedDate)) {
+    return mappedDate;
+  }
+  return undefined;
+}
+
+function aggregateEquityCurveForTimeframe<T>(
+  points: Array<{ date: string; equity: number }>,
+  dateToOhlc: Map<string, T>,
+  timeframeDateByDate: Map<string, string>,
+  timeframe: KlineTimeframe,
+): Array<{ date: string; equity: number }> {
+  const byBucket = new Map<string, { date: string; equity: number; sourceIndex: number }>();
+
+  points.forEach((point, sourceIndex) => {
+    if (!Number.isFinite(point.equity)) {
+      return;
+    }
+    const mappedDate = mapOverlayDateToTimeframe(
+      point.date,
+      dateToOhlc,
+      timeframeDateByDate,
+      timeframe,
+    );
+    if (!mappedDate) {
+      return;
+    }
+    byBucket.set(mappedDate, {
+      date: mappedDate,
+      equity: point.equity,
+      sourceIndex,
+    });
+  });
+
+  return Array.from(byBucket.values())
+    .sort((a, b) => a.sourceIndex - b.sourceIndex)
+    .map(({ date, equity }) => ({ date, equity }));
+}
+
+function formatEquityReturnTick(equity: number, baseEquity: number): string {
+  if (!Number.isFinite(equity) || !Number.isFinite(baseEquity) || baseEquity === 0) {
+    return '+0.0%';
+  }
+  const returnPct = (equity / baseEquity - 1) * 100;
+  const sign = returnPct >= 0 ? '+' : '';
+  return `${sign}${returnPct.toFixed(1)}%`;
+}
+
+function equityReturnDomain(equities: number[], baseEquity: number): [number, number] {
+  const returns = equities
+    .filter((equity) => Number.isFinite(equity) && Number.isFinite(baseEquity) && baseEquity !== 0)
+    .map((equity) => equity / baseEquity - 1);
+
+  if (returns.length === 0) {
+    return [-0.005, 0.005];
+  }
+
+  const minReturn = Math.min(...returns);
+  const maxReturn = Math.max(...returns);
+  if (minReturn === maxReturn) {
+    const flatPadding = Math.max(Math.abs(minReturn) * 0.12, 0.005);
+    return [minReturn - flatPadding, maxReturn + flatPadding];
+  }
+
+  const padding = Math.max((maxReturn - minReturn) * 0.12, 0.002);
+  return [minReturn - padding, maxReturn + padding];
 }
 
 function getEventColor(event: BiotechEvent): string {
@@ -170,6 +342,15 @@ export default function CandlestickChart({
   const quadtreeRef = useRef<d3.Quadtree<PlacedEvent> | null>(null);
   const hoveredEventRef = useRef<PlacedEvent | null>(null);
   const marginRef = useRef({ top: 16, right: 40, bottom: 24, left: 48 });
+  const [activeTimeframe, setActiveTimeframe] = useState<KlineTimeframe>('day');
+  const displayOhlcData = useMemo(
+    () => aggregateOhlcForTimeframe(ohlcData || [], activeTimeframe),
+    [ohlcData, activeTimeframe],
+  );
+  const timeframeDateByDate = useMemo(
+    () => buildTimeframeDateMap(ohlcData || [], activeTimeframe),
+    [ohlcData, activeTimeframe],
+  );
 
   const drawEvents = useCallback((highlight: PlacedEvent | null = null) => {
     const canvas = canvasRef.current;
@@ -237,11 +418,16 @@ export default function CandlestickChart({
   }, [highlightedEventId]);
 
   useEffect(() => {
-    if (!ohlcData || ohlcData.length === 0) return;
-    drawChart(ohlcData, events || []);
-  }, [ohlcData, events, highlightedEventId, equityCurve, signals, trades]);
+    if (!displayOhlcData || displayOhlcData.length === 0) return;
+    drawChart(displayOhlcData, events || [], timeframeDateByDate, activeTimeframe);
+  }, [displayOhlcData, events, highlightedEventId, equityCurve, signals, trades, timeframeDateByDate, activeTimeframe]);
 
-  function drawChart(rawData: OHLCRow[], eventList: BiotechEvent[]) {
+  function drawChart(
+    rawData: OHLCRow[],
+    eventList: BiotechEvent[],
+    overlayDateMap: Map<string, string>,
+    timeframe: KlineTimeframe,
+  ) {
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
 
@@ -312,43 +498,46 @@ export default function CandlestickChart({
       .style('fill', '#555');
 
     // Right Y-axis and equity curve (only if equityCurve has data)
-    const mappedEquityCurve = (equityCurve || [])
-      .filter((point) => dateToOhlc.has(point.date) && Number.isFinite(point.equity));
+    const mappedEquityCurve = aggregateEquityCurveForTimeframe(
+      equityCurve || [],
+      dateToOhlc,
+      overlayDateMap,
+      timeframe,
+    );
 
     if (mappedEquityCurve.length > 0) {
-      const equityDomain = d3.extent(mappedEquityCurve, (d) => d.equity) as [number, number];
-      const equityMin = equityDomain[0];
-      const equityMax = equityDomain[1];
-      const equityPadding = equityMin === equityMax ? Math.max(Math.abs(equityMin) * 0.05, 1) : 0;
-      const yEquity = d3.scaleLinear()
-        .domain([
-          equityMin === equityMax ? equityMin - equityPadding : equityMin * 0.95,
-          equityMin === equityMax ? equityMax + equityPadding : equityMax * 1.05,
-        ])
-        .range([height, 0]);
+      const baseEquity = mappedEquityCurve[0].equity;
+      if (Number.isFinite(baseEquity) && baseEquity !== 0) {
+        const yEquityReturn = d3.scaleLinear()
+          .domain(equityReturnDomain(mappedEquityCurve.map((point) => point.equity), baseEquity))
+          .range([height, 0]);
 
-      // Right Y-axis
-      g.append('g')
-        .attr('transform', `translate(${width},0)`)
-        .call(d3.axisRight(yEquity).ticks(6).tickFormat((d) => `$${Number(d).toFixed(0)}`))
-        .selectAll('text')
-        .style('font-size', '12px')
-        .style('fill', '#ff9800');
+        // Right Y-axis
+        g.append('g')
+          .attr('transform', `translate(${width},0)`)
+          .call(d3.axisRight(yEquityReturn).ticks(6).tickFormat((d) => {
+            const returnValue = Number(d);
+            return formatEquityReturnTick(baseEquity * (1 + returnValue), baseEquity);
+          }))
+          .selectAll('text')
+          .style('font-size', '12px')
+          .style('fill', '#ff9800');
 
-      // Equity curve line
-      const equityLine = d3.line<typeof mappedEquityCurve[0]>()
-        .x((d) => {
-          return x(dateToOhlc.get(d.date)!.date);
-        })
-        .y((d) => yEquity(d.equity));
+        // Equity curve line
+        const equityLine = d3.line<typeof mappedEquityCurve[0]>()
+          .x((d) => {
+            return x(dateToOhlc.get(d.date)!.date);
+          })
+          .y((d) => yEquityReturn(d.equity / baseEquity - 1));
 
-      g.append('path')
-        .datum(mappedEquityCurve)
-        .attr('fill', 'none')
-        .attr('stroke', '#ff9800')
-        .attr('stroke-width', 2)
-        .attr('opacity', 0.6)
-        .attr('d', equityLine);
+        g.append('path')
+          .datum(mappedEquityCurve)
+          .attr('fill', 'none')
+          .attr('stroke', '#ff9800')
+          .attr('stroke-width', 2)
+          .attr('opacity', 0.6)
+          .attr('d', equityLine);
+      }
     }
 
     g.selectAll('.domain').style('stroke', '#1a2030');
@@ -377,8 +566,12 @@ export default function CandlestickChart({
     if (trades && trades.length > 0) {
       const tradeLayer = g.insert('g', '.candle').attr('class', 'trade-layer');
       trades.forEach((trade) => {
-        const entry = dateToOhlc.get(trade.entry_date);
-        const exit = dateToOhlc.get(trade.exit_date);
+        const entryDate = mapOverlayDateToTimeframe(trade.entry_date, dateToOhlc, overlayDateMap, timeframe);
+        const exitDate = mapOverlayDateToTimeframe(trade.exit_date, dateToOhlc, overlayDateMap, timeframe);
+        if (!entryDate || !exitDate) return;
+
+        const entry = dateToOhlc.get(entryDate);
+        const exit = dateToOhlc.get(exitDate);
         if (!entry || !exit) return;
 
         const x0 = x(entry.date);
@@ -401,7 +594,10 @@ export default function CandlestickChart({
       const signalLayer = g.append('g').attr('class', 'signal-layer');
       signals.forEach((signalItem) => {
         if (signalItem.signal === 0) return;
-        const ohlc = dateToOhlc.get(signalItem.date);
+        const signalDate = mapOverlayDateToTimeframe(signalItem.date, dateToOhlc, overlayDateMap, timeframe);
+        if (!signalDate) return;
+
+        const ohlc = dateToOhlc.get(signalDate);
         if (!ohlc) return;
 
         const cx = x(ohlc.date);
@@ -425,9 +621,12 @@ export default function CandlestickChart({
     // Place events overlaid on K-line
     const eventsByDate = new Map<string, BiotechEvent[]>();
     for (const evt of eventList) {
-      const arr = eventsByDate.get(evt.date) || [];
+      const eventDate = mapOverlayDateToTimeframe(evt.date, dateToOhlc, overlayDateMap, timeframe);
+      if (!eventDate) continue;
+
+      const arr = eventsByDate.get(eventDate) || [];
       arr.push(evt);
-      eventsByDate.set(evt.date, arr);
+      eventsByDate.set(eventDate, arr);
     }
 
     const placed: PlacedEvent[] = [];
@@ -778,6 +977,20 @@ export default function CandlestickChart({
 
   return (
     <div ref={containerRef} className="chart-container">
+      <div className="kline-timeframe-control" role="group" aria-label="K-line timeframe">
+        {KLINE_TIMEFRAME_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className={`kline-timeframe-button${activeTimeframe === option.id ? ' is-active' : ''}`}
+            aria-pressed={activeTimeframe === option.id}
+            title={`${option.label} K-line`}
+            onClick={() => setActiveTimeframe(option.id)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
       <svg ref={svgRef}></svg>
       <canvas
         ref={canvasRef}

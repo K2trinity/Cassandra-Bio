@@ -435,36 +435,137 @@
     node.appendChild(list);
   }
 
+  function isDisclosureKey(key) {
+    var normalized = String(key || "").toLowerCase();
+    return normalized.indexOf("mock") !== -1 ||
+      normalized === "data_mode" ||
+      normalized === "positive_demo_expected" ||
+      normalized === "synthetic" ||
+      normalized === "universe_id" ||
+      normalized === "strategy" ||
+      normalized === "strategy_id";
+  }
+
+  function isDisclosureValue(value) {
+    if (typeof value !== "string") {
+      return false;
+    }
+    return value.toLowerCase().indexOf("mock") !== -1;
+  }
+
+  function publicValue(value) {
+    return isDisclosureValue(value) ? "-" : value;
+  }
+
+  function publicMetrics(metrics) {
+    var filtered = {};
+    Object.keys(metrics || {}).forEach(function (key) {
+      if (isDisclosureKey(key) || isDisclosureValue(metrics[key])) {
+        return;
+      }
+      filtered[key] = metrics[key];
+    });
+    return filtered;
+  }
+
+  function publicStrategyDiagnostics(strategy) {
+    if (!strategy) {
+      return {};
+    }
+    return publicMetrics({
+      price_basis: strategy.price_basis,
+      holding_period_days: strategy.holding_period_days
+    });
+  }
+
   function renderBacktestDiagnostics(node, body) {
-    ["event_filter", "signal_summary", "baseline", "factor_attribution"].forEach(function (key) {
+    var strategyMetrics = publicStrategyDiagnostics(body && body.strategy);
+    if (Object.keys(strategyMetrics).length) {
+      var strategySection = makeElement("section", { className: "backtest-diagnostics" });
+      strategySection.appendChild(makeElement("h3", { className: "panel-heading", text: "strategy" }));
+      appendMetrics(strategySection, strategyMetrics);
+      node.appendChild(strategySection);
+    }
+
+    ["event_filter", "signal_summary", "exposure_summary", "risk_parameters", "baseline", "factor_attribution"].forEach(function (key) {
       if (!body || !body[key]) {
         return;
       }
       var section = makeElement("section", { className: "backtest-diagnostics" });
       section.appendChild(makeElement("h3", { className: "panel-heading", text: key }));
-      appendMetrics(section, key === "factor_attribution" ? publicFactorAttribution(body[key]) : body[key]);
+      appendMetrics(section, key === "factor_attribution" ? publicFactorAttribution(body[key]) : publicMetrics(body[key]));
       node.appendChild(section);
     });
     renderEventAttribution(node, body && body.event_attribution);
   }
 
   function publicFactorAttribution(metrics) {
-    var disclosureKeys = {
-      data_mode: true,
-      mean_mock_score: true,
-      mock: true,
-      mock_metadata: true,
-      positive_demo_expected: true,
-      synthetic: true
-    };
     var filtered = {};
     Object.keys(metrics || {}).forEach(function (key) {
-      if (disclosureKeys[key]) {
+      if (isDisclosureKey(key) || isDisclosureValue(metrics[key])) {
         return;
       }
       filtered[key] = metrics[key];
     });
     return filtered;
+  }
+
+  function appendPortfolioCard(grid, label, value) {
+    var card = makeElement("div", { className: "portfolio-metric" });
+    card.appendChild(makeElement("dt", { text: label }));
+    card.appendChild(makeElement("dd", { text: value == null || value === "" ? "-" : String(value) }));
+    grid.appendChild(card);
+  }
+
+  function renderPortfolioDiagnostics(node, body) {
+    var metrics = publicMetrics(body && body.portfolio_metrics);
+    if (Object.keys(metrics).length) {
+      var summary = makeElement("section", { className: "portfolio-summary" });
+      summary.appendChild(makeElement("h3", { className: "panel-heading", text: "Portfolio" }));
+      var grid = makeElement("dl", { className: "portfolio-metrics" });
+      ["strategy_return", "best_ticker", "worst_ticker", "total_trades", "avg_active_signal_days", "avg_exposure_days"].forEach(function (key) {
+        appendPortfolioCard(grid, key, metrics[key]);
+      });
+      summary.appendChild(grid);
+      node.appendChild(summary);
+    }
+
+    var constituents = (body && body.constituents) || [];
+    if (constituents.length) {
+      var leaderboard = makeElement("section", { className: "portfolio-leaderboard" });
+      leaderboard.appendChild(makeElement("h3", { className: "panel-heading", text: "Constituents" }));
+      constituents.forEach(function (constituent) {
+        var row = makeElement("div", { className: "portfolio-row" });
+        row.appendChild(makeElement("strong", { text: publicValue(constituent.ticker) || "-" }));
+        var details = makeElement("dl", { className: "portfolio-row-metrics" });
+        ["strategy_return", "active_signal_days", "trade_count"].forEach(function (key) {
+          appendDefinition(details, key, publicValue(constituent[key]));
+        });
+        if (constituent.exposure_summary) {
+          appendDefinition(details, "exposure_days", publicValue(constituent.exposure_summary.exposure_days));
+        }
+        row.appendChild(details);
+        leaderboard.appendChild(row);
+      });
+      node.appendChild(leaderboard);
+    }
+
+    var focus = body && body.focus_ticker;
+    if (focus && focus.factor_attribution) {
+      var section = makeElement("section", { className: "backtest-diagnostics" });
+      section.appendChild(makeElement("h3", { className: "panel-heading", text: "focus_factor_attribution" }));
+      appendMetrics(section, publicFactorAttribution(focus.factor_attribution));
+      node.appendChild(section);
+    }
+  }
+
+  function clearBacktestOverlays(workspace, state) {
+    state.equityCurve = [];
+    state.signals = [];
+    state.trades = [];
+    state.showBacktest = false;
+    renderLayerBar(workspace, state);
+    renderChart(workspace, state);
   }
 
   function renderEventAttribution(node, attribution) {
@@ -510,7 +611,20 @@
     addInput(form, "Stop Loss Fraction", "stop_loss_pct", "number", "-0.08", "0.001");
     addInput(form, "Max Position Fraction", "max_position_pct", "number", "0.2", "0.001");
     addInput(form, "Slippage Fraction", "slippage_pct", "number", "0.001", "0.0001");
+    addInput(form, "Hold Days", "holding_period_days", "number", "5", "1");
     form.appendChild(makeElement("button", { type: "submit", text: "Run Backtest" }));
+    var universeButton = makeElement("button", {
+      type: "button",
+      className: "backtest-universe-button",
+      text: "Run Universe"
+    });
+    var demoUniverseButton = makeElement("button", {
+      type: "button",
+      className: "backtest-universe-button",
+      text: "Run Demo Universe"
+    });
+    form.appendChild(universeButton);
+    form.appendChild(demoUniverseButton);
     panel.appendChild(form);
 
     var status = makeElement("div", { className: "backtest-status", text: "No run yet." });
@@ -521,30 +635,36 @@
     panel.appendChild(results);
 
     var savedSummary = (backtestLayer(workspace).summary || {});
-    if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.baseline || savedSummary.factor_attribution || savedSummary.event_attribution) {
+    if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.exposure_summary || savedSummary.risk_parameters || savedSummary.baseline || savedSummary.factor_attribution || savedSummary.event_attribution) {
       status.textContent = "Run " + (savedSummary.run_id || "complete") + " complete.";
       renderMetrics(results, savedSummary.metrics || {});
       renderBacktestDiagnostics(results, savedSummary);
     }
 
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
+    function requestPayload() {
+      return {
+        ticker: workspace.ticker,
+        start_date: form.elements.start_date.value,
+        end_date: form.elements.end_date.value,
+        stop_loss_pct: Number(form.elements.stop_loss_pct.value),
+        max_position_pct: Number(form.elements.max_position_pct.value),
+        slippage_pct: Number(form.elements.slippage_pct.value),
+        holding_period_days: Number(form.elements.holding_period_days.value)
+      };
+    }
+
+    function runBacktest(endpoint, options) {
+      options = options || {};
       state.backtestRequestId = (state.backtestRequestId || 0) + 1;
       var requestId = state.backtestRequestId;
-      status.textContent = "Running backtest.";
+      status.textContent = options.runningText || "Running backtest.";
       results.replaceChildren();
+      clearBacktestOverlays(workspace, state);
 
-      fetch("/api/backtest/run", {
+      fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: workspace.ticker,
-          start_date: form.elements.start_date.value,
-          end_date: form.elements.end_date.value,
-          stop_loss_pct: Number(form.elements.stop_loss_pct.value),
-          max_position_pct: Number(form.elements.max_position_pct.value),
-          slippage_pct: Number(form.elements.slippage_pct.value)
-        })
+        body: JSON.stringify(requestPayload())
       }).then(function (response) {
         return response.json().then(function (body) {
           return { ok: response.ok, body: body };
@@ -556,15 +676,26 @@
         var body = result.body || {};
         if (!result.ok) {
           status.textContent = body.error || "Backtest failed.";
+          clearBacktestOverlays(workspace, state);
           return;
         }
-        state.equityCurve = body.equity_curve || [];
-        state.signals = body.signals || [];
-        state.trades = body.trades || [];
+        if (options.portfolio) {
+          state.equityCurve = body.portfolio_equity_curve || [];
+          state.signals = (body.focus_ticker && body.focus_ticker.signals) || [];
+          state.trades = (body.focus_ticker && body.focus_ticker.trades) || [];
+        } else {
+          state.equityCurve = body.equity_curve || [];
+          state.signals = body.signals || [];
+          state.trades = body.trades || [];
+        }
         state.showBacktest = true;
         status.textContent = "Run " + (body.run_id || "complete") + " complete.";
-        renderMetrics(results, body.metrics || {});
-        renderBacktestDiagnostics(results, body);
+        if (options.portfolio) {
+          renderPortfolioDiagnostics(results, body);
+        } else {
+          renderMetrics(results, body.metrics || {});
+          renderBacktestDiagnostics(results, body);
+        }
         renderLayerBar(workspace, state);
         renderChart(workspace, state);
       }).catch(function () {
@@ -572,6 +703,28 @@
           return;
         }
         status.textContent = "Backtest failed.";
+        clearBacktestOverlays(workspace, state);
+      });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      runBacktest("/api/backtest/run", { runningText: "Running backtest." });
+    });
+
+    universeButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      runBacktest("/api/backtest/portfolio/run", {
+        portfolio: true,
+        runningText: "Running universe backtest."
+      });
+    });
+
+    demoUniverseButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      runBacktest("/api/backtest/portfolio/demo/run", {
+        portfolio: true,
+        runningText: "Running demo universe backtest."
       });
     });
   }

@@ -3,14 +3,14 @@ from __future__ import annotations
 import pytest
 
 
-def test_default_strategy_uses_mock_demo_only_for_a_universe():
+def test_default_strategy_uses_real_multifactor_for_kline_backtests():
     from src.backtest.strategy_registry import default_strategy_for_kline
 
-    assert default_strategy_for_kline("MRNA") == "mock_multifactor_demo"
-    assert default_strategy_for_kline("JNJ") == "mock_multifactor_demo"
-    assert default_strategy_for_kline("LLY") == "mock_multifactor_demo"
-    assert default_strategy_for_kline("ABBA") == "mock_multifactor_demo"
-    assert default_strategy_for_kline("PFE") == "event_baseline"
+    assert default_strategy_for_kline("MRNA") == "multifactor_score"
+    assert default_strategy_for_kline("JNJ") == "multifactor_score"
+    assert default_strategy_for_kline("LLY") == "multifactor_score"
+    assert default_strategy_for_kline("ABBA") == "multifactor_score"
+    assert default_strategy_for_kline("PFE") == "multifactor_score"
 
 
 def test_mock_strategy_requires_mock_data_mode_and_scope():

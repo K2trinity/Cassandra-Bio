@@ -95,6 +95,18 @@ def test_build_mock_factor_frame_creates_multiple_high_score_rows():
     assert factors["volatility_penalty"].max() <= 0.0
 
 
+def test_build_mock_factor_frame_spreads_demo_signals_across_visible_window():
+    from src.backtest.mock_dataset import build_mock_factor_frame, build_mock_ohlc_frame
+
+    price_window = build_mock_ohlc_frame("MRNA", "2025-01-02", "2025-03-31")
+
+    factors = build_mock_factor_frame("MRNA", price_window, min_signal_days=8)
+
+    active_dates = pd.to_datetime(factors.loc[factors["mock_score"] > 0.15, "date"])
+    assert len(active_dates) >= 8
+    assert (active_dates.max() - active_dates.min()).days >= 45
+
+
 def test_build_mock_factor_frame_returns_empty_frame_for_unsupported_ticker():
     from src.backtest.mock_dataset import build_mock_factor_frame
 

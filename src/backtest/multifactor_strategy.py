@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.backtest.signals import align_events_to_trading_dates, generate_signals
+
 FACTOR_COLUMNS = [
     "event_factor",
     "momentum_factor",
@@ -40,6 +42,68 @@ def generate_mock_multifactor_signals(
     return signals[["date", "signal", "signal_strength"]]
 
 
+def generate_real_multifactor_signals(
+    price_window: pd.DataFrame,
+    events_df: pd.DataFrame,
+    report_confidence: float = 1.0,
+) -> pd.DataFrame:
+    """Generate non-hindsight signals from visible OHLC history and optional events.
+
+    All price-derived features are shifted one trading day, so a signal emitted
+    for date T only uses data available before T. The strategy executor then
+    enters on T+1, preserving the no-lookahead boundary.
+    """
+    if price_window.empty or "date" not in price_window.columns:
+        return pd.DataFrame(columns=["date", "signal", "signal_strength"])
+
+    required_columns = {"date", "close"}
+    if not required_columns.issubset(price_window.columns):
+        return pd.DataFrame(columns=["date", "signal", "signal_strength"])
+
+    rows = price_window.copy()
+    rows["date"] = _normalize_dates(rows["date"])
+    rows["close"] = _coerce_numeric_series(rows["close"])
+    if "volume" not in rows.columns:
+        rows["volume"] = 0.0
+    rows["volume"] = _coerce_numeric_series(rows["volume"])
+    rows = rows.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    if rows.empty:
+        return pd.DataFrame(columns=["date", "signal", "signal_strength"])
+
+    close = rows["close"].clip(lower=0.01)
+    returns = close.pct_change()
+    fast_ma = close.rolling(12, min_periods=6).mean()
+    slow_ma = close.rolling(36, min_periods=12).mean()
+    trend = ((fast_ma / slow_ma) - 1).clip(-0.08, 0.08) / 0.08
+    momentum = close.pct_change(20).clip(-0.25, 0.25) / 0.25
+    volatility = returns.rolling(20, min_periods=8).std().fillna(0.0)
+    volatility_penalty = (volatility / 0.08).clip(0.0, 1.0)
+    volume_ratio = (
+        rows["volume"] / rows["volume"].rolling(20, min_periods=5).mean().clip(lower=1.0)
+    ).replace([math.inf, -math.inf], 1.0).fillna(1.0)
+    liquidity = ((volume_ratio - 1.0).clip(-0.5, 0.5) / 0.5) * 0.15
+
+    price_score = (
+        0.45 * trend.fillna(0.0)
+        + 0.35 * momentum.fillna(0.0)
+        + liquidity.fillna(0.0)
+        - 0.15 * volatility_penalty.fillna(0.0)
+    ).shift(1).fillna(0.0)
+
+    event_component = _event_component(rows, events_df, report_confidence)
+    score = (price_score + event_component).clip(-1.0, 1.0)
+
+    signals = rows[["date"]].copy()
+    signals["signal"] = 0
+    signals.loc[score > 0.18, "signal"] = 1
+    signals.loc[score < -0.18, "signal"] = -1
+    signals["signal_strength"] = score.abs().where(signals["signal"] != 0, 0.0).clip(
+        lower=0.0,
+        upper=1.0,
+    )
+    return signals[["date", "signal", "signal_strength"]]
+
+
 def summarize_factor_attribution(
     factors: pd.DataFrame,
     threshold: float = DEFAULT_MOCK_SIGNAL_THRESHOLD,
@@ -63,6 +127,34 @@ def summarize_factor_attribution(
     for column in FACTOR_COLUMNS:
         summary[f"mean_{column}"] = _round_float(active[column].mean())
     return summary
+
+
+def _event_component(
+    price_window: pd.DataFrame,
+    events_df: pd.DataFrame,
+    report_confidence: float,
+) -> pd.Series:
+    component = pd.Series(0.0, index=price_window.index)
+    if events_df.empty:
+        return component
+
+    try:
+        aligned_events = align_events_to_trading_dates(events_df, price_window)
+        event_signals = generate_signals(
+            price_window,
+            aligned_events,
+            report_confidence=report_confidence,
+        )
+    except (KeyError, TypeError, ValueError):
+        return component
+    if event_signals.empty:
+        return component
+
+    event_rows = event_signals[["date", "signal", "signal_strength"]].copy()
+    event_rows["date"] = _normalize_dates(event_rows["date"])
+    merged = price_window[["date"]].merge(event_rows, on="date", how="left")
+    event_direction = merged["signal"].fillna(0.0) * merged["signal_strength"].fillna(0.0)
+    return (event_direction * 0.25).shift(1).fillna(0.0)
 
 
 def _factor_scores(factors: pd.DataFrame) -> pd.DataFrame:

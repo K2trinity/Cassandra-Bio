@@ -4,7 +4,6 @@
 import math
 
 import pandas as pd
-import numpy as np
 
 from src.kline.event_filter import decode_metadata
 

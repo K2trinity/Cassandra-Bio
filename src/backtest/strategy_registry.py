@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from src.backtest.mock_dataset import MOCK_DATA_MODE, MOCK_SCOPE, is_mock_backtest_ticker
+from src.backtest.mock_dataset import MOCK_DATA_MODE, MOCK_SCOPE
 
 EVENT_BASELINE: Final[str] = "event_baseline"
 MOCK_MULTIFACTOR_DEMO: Final[str] = "mock_multifactor_demo"
@@ -30,9 +30,7 @@ class StrategyContext:
 
 
 def default_strategy_for_kline(ticker: object) -> str:
-    if is_mock_backtest_ticker(ticker):
-        return MOCK_MULTIFACTOR_DEMO
-    return EVENT_BASELINE
+    return MULTIFACTOR_SCORE
 
 
 def validate_strategy_access(

@@ -34,13 +34,16 @@ from src.backtest.mock_dataset import (
 )
 from src.backtest.multifactor_strategy import (
     generate_mock_multifactor_signals,
+    generate_real_multifactor_signals,
     summarize_factor_attribution,
 )
 from src.backtest.result_store import RESULTS_DIR, load_run_payload
 from src.backtest.signals import align_events_to_trading_dates, generate_signals
 from src.backtest.strategy import apply_strategy
 from src.backtest.strategy_registry import (
+    EVENT_BASELINE,
     MOCK_MULTIFACTOR_DEMO,
+    MULTIFACTOR_SCORE,
     StrategyAccessError,
     default_strategy_for_kline,
     validate_strategy_access,
@@ -247,12 +250,7 @@ def _trade_pnl_pct(direction: str, entry_price: float, exit_price: float) -> flo
 
 
 def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[dict]:
-    """Serialize per-exposure trade overlays from strategy result rows.
-
-    `apply_strategy()` models each non-zero result row as exposure from that
-    day's open to that day's close, so the chart overlay should not combine
-    consecutive same-direction rows into a synthetic multi-day PnL span.
-    """
+    """Serialize continuous position spans as chart trade overlays."""
     if price_window.empty or results.empty:
         return []
     required_price_columns = {"date", "open", "close"}
@@ -278,39 +276,121 @@ def _derive_trades(price_window: pd.DataFrame, results: pd.DataFrame) -> list[di
         return []
 
     trades: list[dict] = []
-    for _, row in rows.iterrows():
-        position = _json_safe_number(row["position"])
-        if position is None or position == 0:
-            continue
+    open_trade: dict | None = None
 
-        entry_price = _json_safe_number(row["open"])
-        exit_price = _json_safe_number(row["close"])
-        if entry_price is None or exit_price is None:
-            continue
+    def close_trade(exit_row: pd.Series) -> None:
+        nonlocal open_trade
+        if open_trade is None:
+            return
 
-        direction = "long" if position > 0 else "short"
-        daily_return = (
-            _json_safe_number(row.get("daily_return"))
-            if "daily_return" in rows.columns
-            else None
-        )
-        if daily_return is not None:
-            pnl_pct = daily_return / abs(position)
-        else:
+        entry_price = float(open_trade["entry_price"])
+        exit_price = _json_safe_number(exit_row["close"])
+        if exit_price is None:
+            open_trade = None
+            return
+
+        direction = str(open_trade["direction"])
+        pnl_pct = None
+        if "daily_return" in rows.columns:
+            span = rows.iloc[int(open_trade["_start_index"]) : int(exit_row.name) + 1]
+            weighted_returns = []
+            for span_row in span.itertuples(index=False):
+                position = _json_safe_number(getattr(span_row, "position", 0.0))
+                daily_return = _json_safe_number(getattr(span_row, "daily_return", 0.0))
+                if position is None or position == 0 or daily_return is None:
+                    continue
+                weighted_returns.append(daily_return / abs(position))
+            if weighted_returns:
+                compounded = 1.0
+                for value in weighted_returns:
+                    compounded *= 1 + value
+                pnl_pct = compounded - 1
+
+        if pnl_pct is None:
             pnl_pct = _trade_pnl_pct(direction, entry_price, exit_price)
+
         trades.append(
             {
-                "entry_date": _to_iso_date(row["date"]),
-                "exit_date": _to_iso_date(row["date"]),
+                "entry_date": open_trade["entry_date"],
+                "exit_date": _to_iso_date(exit_row["date"]),
                 "direction": direction,
-                "size": abs(position),
+                "size": open_trade["size"],
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "pnl_pct": round(pnl_pct, 6),
             }
         )
+        open_trade = None
+
+    for index, row in rows.iterrows():
+        position = _json_safe_number(row["position"])
+        if position is None:
+            continue
+
+        current_direction = "long" if position > 0 else "short" if position < 0 else None
+        if current_direction is None:
+            if open_trade is not None:
+                previous_row = rows.iloc[max(index - 1, int(open_trade["_start_index"]))]
+                close_trade(previous_row)
+            continue
+
+        if (
+            open_trade is not None
+            and (
+                open_trade["direction"] != current_direction
+                or not math.isclose(float(open_trade["size"]), abs(position), rel_tol=1e-9, abs_tol=1e-12)
+            )
+        ):
+            previous_row = rows.iloc[max(index - 1, int(open_trade["_start_index"]))]
+            close_trade(previous_row)
+
+        if open_trade is not None:
+            continue
+
+        entry_price = _json_safe_number(row["open"])
+        if entry_price is None:
+            continue
+        direction = "long" if position > 0 else "short"
+        open_trade = {
+            "_start_index": index,
+            "entry_date": _to_iso_date(row["date"]),
+            "direction": direction,
+            "size": abs(position),
+            "entry_price": entry_price,
+        }
+
+    if open_trade is not None:
+        close_trade(rows.iloc[-1])
 
     return trades
+
+
+def _exposure_summary(results: pd.DataFrame, trades: list[dict]) -> dict:
+    if results.empty or "position" not in results.columns:
+        return {
+            "exposure_days": 0,
+            "exposure_ratio": 0.0,
+            "trade_count": len(trades),
+            "avg_abs_position": 0.0,
+        }
+
+    positions = pd.to_numeric(results["position"], errors="coerce").fillna(0.0)
+    exposed = positions.abs() > 0
+    exposure_days = int(exposed.sum())
+    total_days = int(len(positions))
+    avg_abs_position = float(positions[exposed].abs().mean()) if exposure_days else 0.0
+    return {
+        "exposure_days": exposure_days,
+        "exposure_ratio": round(exposure_days / total_days, 6) if total_days else 0.0,
+        "trade_count": len(trades),
+        "avg_abs_position": round(avg_abs_position, 6),
+    }
+
+
+def _mock_signal_days_for_window(price_window: pd.DataFrame) -> int:
+    if price_window.empty:
+        return 8
+    return min(60, max(8, math.ceil(len(price_window) / 50)))
 
 
 def _load_results_index() -> dict:
@@ -367,6 +447,7 @@ def run_kline_backtest(
     report_confidence: float = 1.0,
     strategy_id: str | None = None,
     data_mode: str | None = None,
+    holding_period_days: int | None = None,
 ) -> dict:
     """Run a single-ticker backtest and persist result as JSON.
 
@@ -453,20 +534,33 @@ def run_kline_backtest(
     )
     eligible_events, event_filter = filter_backtest_events(events)
 
-    if (
-        resolved_strategy_id != MOCK_MULTIFACTOR_DEMO
-        and eligible_events.empty
-    ):
+    if resolved_strategy_id == EVENT_BASELINE and eligible_events.empty:
         return {"error": "no trusted backtest-eligible events in date range"}
 
     mock_metadata = None
     factor_attribution = {}
+    effective_holding_period_days = (
+        holding_period_days
+        if holding_period_days is not None
+        else 5 if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO else 1
+    )
     if resolved_strategy_id == MOCK_MULTIFACTOR_DEMO:
-        factors = build_mock_factor_frame(ticker, price_window)
+        factors = build_mock_factor_frame(
+            ticker,
+            price_window,
+            min_signal_days=_mock_signal_days_for_window(price_window),
+        )
         signals = generate_mock_multifactor_signals(price_window, factors)
         signal_events = align_events_to_trading_dates(eligible_events, price_window)
         factor_attribution = summarize_factor_attribution(factors)
         mock_metadata = mock_run_metadata(ticker)
+    elif resolved_strategy_id == MULTIFACTOR_SCORE:
+        signal_events = align_events_to_trading_dates(eligible_events, price_window)
+        signals = generate_real_multifactor_signals(
+            price_window,
+            signal_events,
+            report_confidence=report_confidence,
+        )
     else:
         signal_events = align_events_to_trading_dates(eligible_events, price_window)
         signals = generate_signals(
@@ -478,6 +572,7 @@ def run_kline_backtest(
         max_position_pct=max_position_pct,
         stop_loss_pct=stop_loss_pct,
         slippage_pct=slippage_pct,
+        holding_period_days=effective_holding_period_days,
     )
 
     raw_metrics = compute_metrics(results)
@@ -522,6 +617,7 @@ def run_kline_backtest(
 
     created_at = datetime.now()
     run_id = created_at.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    trades = _derive_trades(price_window, results)
     payload = {
         "run_id": run_id,
         "created_at": created_at.isoformat(timespec="seconds"),
@@ -531,6 +627,14 @@ def run_kline_backtest(
         "strategy": {
             "id": resolved_strategy_id,
             "data_mode": resolved_data_mode,
+            "holding_period_days": effective_holding_period_days,
+            "price_basis": "demo_ohlc" if use_mock_ohlc else "visible_ohlc",
+        },
+        "risk_parameters": {
+            "stop_loss_pct": stop_loss_pct,
+            "max_position_pct": max_position_pct,
+            "slippage_pct": slippage_pct,
+            "holding_period_days": effective_holding_period_days,
         },
         "mock_metadata": mock_metadata,
         "factor_attribution": factor_attribution,
@@ -541,7 +645,8 @@ def run_kline_backtest(
         "equity_curve": equity_curve,
         "event_car": event_car,
         "signals": _serialize_signals(signals, signal_events),
-        "trades": _derive_trades(price_window, results),
+        "trades": trades,
+        "exposure_summary": _exposure_summary(results, trades),
         "event_filter": event_filter,
         "event_attribution": summarize_events(eligible_events),
         "signal_summary": summarize_signals(signals),

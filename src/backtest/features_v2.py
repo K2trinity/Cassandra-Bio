@@ -5,7 +5,6 @@ Adapted from PokieTicker — accepts DataFrames instead of SQLite queries.
 """
 
 import pandas as pd
-import numpy as np
 
 from src.backtest.features import build_features, FEATURE_COLS
 
@@ -55,9 +54,9 @@ def add_candle_patterns(df: pd.DataFrame) -> pd.DataFrame:
 
     All features shifted by 1 to prevent look-ahead leakage.
     """
-    o, h, l, c = df["open"], df["high"], df["low"], df["close"]
+    o, h, low, c = df["open"], df["high"], df["low"], df["close"]
     body = (c - o).abs()
-    rng = (h - l).clip(lower=1e-10)
+    rng = (h - low).clip(lower=1e-10)
 
     df["candle_body_ratio"] = body / rng
     df["candle_bullish"] = (c > o).astype(int)
@@ -65,7 +64,7 @@ def add_candle_patterns(df: pd.DataFrame) -> pd.DataFrame:
     upper_shadow = h - pd.concat([o, c], axis=1).max(axis=1)
     df["candle_upper_shadow"] = upper_shadow / rng
 
-    lower_shadow = pd.concat([o, c], axis=1).min(axis=1) - l
+    lower_shadow = pd.concat([o, c], axis=1).min(axis=1) - low
     df["candle_lower_shadow"] = lower_shadow / rng
 
     df["candle_doji"] = (df["candle_body_ratio"] < 0.1).astype(int)
