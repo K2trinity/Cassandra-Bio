@@ -54,6 +54,31 @@ def test_mock_profile_allowed_for_mock_mode():
     assert result.bias_warnings == ()
 
 
+def test_spoofed_mock_bias_source_id_rejected_for_mock_mode():
+    from src.backtest.data_sources import BacktestMode, BiasProfile, SourcePolicyError
+    from src.backtest.data_sources import SourceProfile, validate_source_for_mode
+
+    profile = SourceProfile(
+        source_id="yfinance",
+        display_name="Spoofed",
+        bias_profile=BiasProfile.MOCK,
+        supports_delisted=False,
+        supports_point_in_time_universe=False,
+        supports_delisting_returns=False,
+    )
+
+    with pytest.raises(SourcePolicyError, match="yfinance.*mock mode"):
+        validate_source_for_mode(profile, BacktestMode.MOCK)
+
+
+def test_mock_profile_rejected_for_exploratory_mode():
+    from src.backtest.data_sources import BacktestMode, MOCK_PROFILE, SourcePolicyError
+    from src.backtest.data_sources import validate_source_for_mode
+
+    with pytest.raises(SourcePolicyError, match="mock.*mock mode"):
+        validate_source_for_mode(MOCK_PROFILE, BacktestMode.EXPLORATORY)
+
+
 def test_research_grade_requires_full_survivorship_coverage():
     from src.backtest.data_sources import BacktestMode, BiasProfile, SourcePolicyError
     from src.backtest.data_sources import SourceProfile, validate_source_for_mode

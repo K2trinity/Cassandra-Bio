@@ -38,6 +38,8 @@ class SourcePolicyError(ValueError):
     pass
 
 
+MOCK_SOURCE_ID = "mock"
+
 YFINANCE_PROFILE = SourceProfile(
     source_id="yfinance",
     display_name="Yahoo Finance via yfinance",
@@ -48,7 +50,7 @@ YFINANCE_PROFILE = SourceProfile(
 )
 
 MOCK_PROFILE = SourceProfile(
-    source_id="mock",
+    source_id=MOCK_SOURCE_ID,
     display_name="Controlled mock dataset",
     bias_profile=BiasProfile.MOCK,
     supports_delisted=False,
@@ -65,7 +67,10 @@ def validate_source_for_mode(
     warnings = _warnings_for(profile)
 
     if resolved_mode == BacktestMode.MOCK:
-        if profile.bias_profile != BiasProfile.MOCK:
+        if (
+            profile.bias_profile != BiasProfile.MOCK
+            or profile.source_id != MOCK_SOURCE_ID
+        ):
             raise SourcePolicyError(
                 f"Source {profile.source_id} cannot be used in mock mode "
                 "because it is not a mock source."
@@ -74,6 +79,11 @@ def validate_source_for_mode(
             allowed=True,
             bias_profile=BiasProfile.MOCK,
             bias_warnings=(),
+        )
+
+    if profile.bias_profile == BiasProfile.MOCK:
+        raise SourcePolicyError(
+            f"Source {profile.source_id} is a mock source and requires mock mode."
         )
 
     if (
