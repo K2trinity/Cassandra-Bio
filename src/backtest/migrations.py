@@ -70,25 +70,57 @@ def apply_sqlite_migrations(db_path: str | Path | None = None) -> None:
     conn = sqlite3.connect(path, timeout=30.0)
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
-        _ensure_base_event_table(conn)
-        _ensure_schema_migrations(conn)
-        conn.commit()
+        _setup_database(conn)
         for migration_id, statements in MIGRATIONS:
             _apply_migration(conn, migration_id, statements)
     finally:
         conn.close()
 
 
+def _setup_database(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_base_event_table(conn)
+        _ensure_base_event_index(conn)
+        _ensure_schema_migrations(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def _ensure_base_event_table(conn: sqlite3.Connection) -> None:
     conn.execute(events_db.EVENT_TABLE_SQL)
-    existing_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(biotech_events)").fetchall()
-    }
     for column_name, column_definition in events_db.EVENT_COLUMN_DEFINITIONS.items():
-        if column_name not in existing_columns:
-            conn.execute(
-                f"ALTER TABLE biotech_events ADD COLUMN {column_name} {column_definition}"
-            )
+        if not _column_exists(conn, "biotech_events", column_name):
+            try:
+                conn.execute(
+                    f"ALTER TABLE biotech_events ADD COLUMN {column_name} {column_definition}"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" in str(exc).lower():
+                    continue
+                raise
+
+
+def _ensure_base_event_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_events_ticker_date
+        ON biotech_events(ticker, date)
+        """
+    )
+
+
+def _column_exists(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    return any(
+        row[1] == column_name
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    )
 
 
 def _ensure_schema_migrations(conn: sqlite3.Connection) -> None:
