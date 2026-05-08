@@ -14,6 +14,12 @@ if str(ROOT_DIR) not in sys.path:
 from src.backtest.research_db import RESEARCH_DIR
 from src.backtest.universe_builder import UniverseSourceRow
 from src.data_ingestion.download_executor import DownloadRequest, run_download
+from src.data_ingestion.nasdaq_trader import (
+    fetch_symbol_directory_texts,
+    parse_symbol_directories,
+)
+from src.data_ingestion.provider_log import record_provider_fetch
+from src.data_ingestion.rate_limit import FixedWindowRateLimit
 
 SUPPORTED_PROVIDERS = {"nasdaq", "nasdaq_trader", "sec", "tiingo", "fmp"}
 REQUIRED_EXCHANGE_LISTING_COLUMNS = {
@@ -44,13 +50,11 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     try:
-        if not args.exchange_listings_csv:
-            raise ValueError(
-                "--exchange-listings-csv is required until live Nasdaq universe "
-                "loading is implemented."
-            )
         providers = _parse_providers(args.providers)
-        rows = _read_exchange_listing_fixture(args.exchange_listings_csv)
+        rows = _load_universe_rows(
+            args.exchange_listings_csv,
+            db_path=Path(args.research_dir) / "cassandra_research.duckdb",
+        )
         request = DownloadRequest(
             snapshot_date=args.snapshot_date,
             start_date=args.start_date,
@@ -81,6 +85,65 @@ def _parse_providers(value: str) -> tuple[str, ...]:
     if unsupported:
         raise ValueError(f"unsupported provider: {', '.join(unsupported)}")
     return providers
+
+
+def _load_universe_rows(
+    exchange_listings_csv: str | None,
+    *,
+    db_path: str | Path | None = None,
+    nasdaq_fetcher=None,
+) -> list[UniverseSourceRow] | None:
+    if exchange_listings_csv:
+        return _read_exchange_listing_fixture(exchange_listings_csv)
+
+    if nasdaq_fetcher is None:
+        nasdaq_fetcher = lambda: fetch_symbol_directory_texts(
+            rate_limiter=FixedWindowRateLimit(max_requests=1, window_seconds=1.0)
+        )
+    results = tuple(nasdaq_fetcher())
+    if db_path is not None:
+        _record_nasdaq_fetch_results(results, db_path=db_path)
+    failed = [
+        result
+        for result in results
+        if result.status != "success" or not result.payload
+    ]
+    if failed:
+        details = "; ".join(
+            f"{result.endpoint}: {result.status}"
+            + (f" ({result.message})" if result.message else "")
+            for result in failed
+        )
+        raise RuntimeError(f"Nasdaq Trader universe fetch incomplete: {details}")
+
+    texts = {result.endpoint: result.payload for result in results}
+    missing = sorted({"nasdaqlisted", "otherlisted"} - set(texts))
+    if missing:
+        raise RuntimeError(
+            "Nasdaq Trader universe fetch incomplete: missing "
+            f"{', '.join(missing)}"
+        )
+
+    return parse_symbol_directories(
+        nasdaqlisted_text=texts["nasdaqlisted"] or "",
+        otherlisted_text=texts["otherlisted"] or "",
+    )
+
+
+def _record_nasdaq_fetch_results(results, *, db_path: str | Path) -> None:
+    for result in results:
+        metadata = {"endpoint": result.endpoint}
+        if result.retry_after_seconds is not None:
+            metadata["retry_after_seconds"] = result.retry_after_seconds
+        record_provider_fetch(
+            provider=result.provider,
+            endpoint=result.endpoint,
+            request_hash=result.request_hash,
+            status=result.status,
+            message=result.message,
+            metadata=metadata,
+            db_path=db_path,
+        )
 
 
 def _read_exchange_listing_fixture(path: str | None) -> list[UniverseSourceRow] | None:

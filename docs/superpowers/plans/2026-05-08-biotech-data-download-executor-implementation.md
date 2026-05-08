@@ -1931,7 +1931,7 @@ not print secrets.
 Run:
 
 ```powershell
-rg -n "REAL_TIINGO_TOKEN_FRAGMENT|REAL_FMP_KEY_FRAGMENT|REAL_SEC_CONTACT_FRAGMENT|TIINGO_API_KEY\s*=|FMP_API_KEY\s*=|SEC_USER_AGENT\s*=" docs src scripts tests
+rg -n "TIINGO_API_KEY\s*=|FMP_API_KEY\s*=|SEC_USER_AGENT\s*=" docs src scripts tests --glob "!docs/superpowers/plans/2026-05-08-biotech-data-download-executor-implementation.md"
 ```
 
 Expected: no matches.

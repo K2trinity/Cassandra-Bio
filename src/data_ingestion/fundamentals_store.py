@@ -76,6 +76,80 @@ def write_fundamentals_rows(
     return len(payloads)
 
 
+def write_sec_companyfacts_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    cik: str,
+    ticker: str,
+    db_path: str | Path | None = None,
+) -> int:
+    normalized_cik = _normalize_cik(cik)
+    normalized_ticker = _normalize_ticker(ticker)
+    payloads = _canonicalize_sec_companyfacts_rows(rows)
+    if not payloads:
+        return 0
+
+    path = initialize_research_database(db_path or RESEARCH_DB_PATH)
+
+    import duckdb
+
+    conn = duckdb.connect(str(path))
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            """
+            DELETE FROM sec_companyfacts_normalized
+            WHERE cik = ? AND ticker = ?
+            """,
+            [normalized_cik, normalized_ticker],
+        )
+        for row in payloads:
+            conn.execute(
+                """
+                INSERT INTO sec_companyfacts_normalized (
+                    security_id,
+                    ticker,
+                    cik,
+                    taxonomy,
+                    concept,
+                    unit,
+                    fiscal_year,
+                    fiscal_period,
+                    form,
+                    filed,
+                    period_end,
+                    value,
+                    source,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [
+                    row["security_id"],
+                    normalized_ticker,
+                    normalized_cik,
+                    row["taxonomy"],
+                    row["concept"],
+                    row["unit"],
+                    row["fiscal_year"],
+                    row["fiscal_period"],
+                    row["form"],
+                    row["filed"],
+                    row["period_end"],
+                    row["value"],
+                    row["source"],
+                ],
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+    return len(payloads)
+
+
 def _canonicalize_fundamentals_rows(
     rows: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -99,6 +173,56 @@ def _canonicalize_fundamentals_rows(
                     row_index=row_index,
                     field=field,
                 )
+        payloads.append(payload)
+    return payloads
+
+
+def _canonicalize_sec_companyfacts_rows(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    payloads = []
+    for row_index, row in enumerate(rows):
+        payload = {
+            str(key): _canonical_json_value(value, row_index=row_index, field=str(key))
+            for key, value in dict(row).items()
+        }
+        for field in (
+            "security_id",
+            "taxonomy",
+            "concept",
+            "unit",
+            "fiscal_period",
+            "form",
+            "source",
+        ):
+            value = payload.get(field)
+            if not isinstance(value, str):
+                raise ValueError(f"SEC companyfacts row {row_index} missing {field}.")
+            payload[field] = value.strip()
+        fiscal_year = payload.get("fiscal_year")
+        try:
+            payload["fiscal_year"] = int(fiscal_year)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"SEC companyfacts row {row_index} field fiscal_year must be an integer."
+            ) from exc
+        try:
+            payload["value"] = float(payload.get("value"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"SEC companyfacts row {row_index} field value must be numeric."
+            ) from exc
+        if not math.isfinite(payload["value"]):
+            raise ValueError(
+                f"SEC companyfacts row {row_index} field value must be finite."
+            )
+        for field in ("filed", "period_end"):
+            value = payload.get(field)
+            payload[field] = (
+                _canonical_date_value(value, row_index=row_index, field=field)
+                if value
+                else None
+            )
         payloads.append(payload)
     return payloads
 
@@ -249,3 +373,12 @@ def _normalize_ticker(ticker: str) -> str:
     if not normalized:
         raise ValueError("ticker must be a non-empty string.")
     return normalized
+
+
+def _normalize_cik(cik: str) -> str:
+    digits = "".join(char for char in str(cik).strip() if char.isdigit())
+    if not digits:
+        raise ValueError("cik must contain digits.")
+    if len(digits) > 10:
+        raise ValueError("cik must be at most 10 digits.")
+    return digits.zfill(10)

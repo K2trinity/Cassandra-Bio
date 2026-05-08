@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterable
+from dataclasses import dataclass
 from io import StringIO
 import re
+import time
+from typing import Any
 
 from src.backtest.universe_builder import UniverseSourceRow
+from src.data_ingestion.http_client import (
+    ProviderHttpError,
+    RequestsHttpClient,
+    build_request_hash,
+    classify_http_status,
+    retry_after_seconds,
+)
+from src.data_ingestion.provider_result import ProviderResult
+
+MAX_DIRECTORY_LIMIT_SLEEP_SECONDS = 2.0
 
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
 OTHERLISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+NASDAQ_TRADER_PROVIDER = "nasdaq_trader"
 
 _OTHER_EXCHANGES = {
     "A": "NYSEAMERICAN",
@@ -49,6 +63,39 @@ _NAME_EXCLUSION_PATTERNS = (
     re.compile(r"\bFUNDS?\b"),
     re.compile(r"\bTRUST\s+PREFERRED\b"),
 )
+
+
+@dataclass(frozen=True)
+class NasdaqTraderDirectoryResult:
+    provider: str
+    endpoint: str
+    request_hash: str
+    status: str
+    payload: str | None = None
+    message: str | None = None
+    retry_after_seconds: float | None = None
+
+
+def fetch_symbol_directory_texts(
+    *,
+    http_client: Any | None = None,
+    rate_limiter: Any | None = None,
+) -> tuple[NasdaqTraderDirectoryResult, NasdaqTraderDirectoryResult]:
+    client = http_client or RequestsHttpClient()
+    return (
+        _fetch_symbol_directory(
+            http_client=client,
+            rate_limiter=rate_limiter,
+            endpoint="nasdaqlisted",
+            url=NASDAQ_LISTED_URL,
+        ),
+        _fetch_symbol_directory(
+            http_client=client,
+            rate_limiter=rate_limiter,
+            endpoint="otherlisted",
+            url=OTHERLISTED_URL,
+        ),
+    )
 
 
 def parse_nasdaq_listed(text: str) -> list[UniverseSourceRow]:
@@ -118,6 +165,75 @@ def parse_symbol_directories(
         *parse_nasdaq_listed(nasdaqlisted_text),
         *parse_otherlisted(otherlisted_text),
     ]
+
+
+def _fetch_symbol_directory(
+    *,
+    http_client: Any,
+    rate_limiter: Any | None,
+    endpoint: str,
+    url: str,
+) -> NasdaqTraderDirectoryResult:
+    request_hash = build_request_hash(method="GET", url=url)
+    decision = _allow_directory_request(rate_limiter)
+    if not decision.status == "success":
+        return NasdaqTraderDirectoryResult(
+            provider=NASDAQ_TRADER_PROVIDER,
+            endpoint=endpoint,
+            request_hash=request_hash,
+            status=decision.status,
+            message=decision.message,
+            retry_after_seconds=decision.retry_after_seconds,
+        )
+    try:
+        response = http_client.get(url, params=None, headers=None)
+    except ProviderHttpError as exc:
+        return NasdaqTraderDirectoryResult(
+            provider=NASDAQ_TRADER_PROVIDER,
+            endpoint=endpoint,
+            request_hash=request_hash,
+            status="fatal_error",
+            message=str(exc),
+        )
+
+    status = classify_http_status(response.status_code)
+    if status == "success":
+        return NasdaqTraderDirectoryResult(
+            provider=NASDAQ_TRADER_PROVIDER,
+            endpoint=endpoint,
+            request_hash=request_hash,
+            status=status,
+            payload=response.text,
+        )
+    return NasdaqTraderDirectoryResult(
+        provider=NASDAQ_TRADER_PROVIDER,
+        endpoint=endpoint,
+        request_hash=request_hash,
+        status=status,
+        message=f"HTTP {response.status_code}",
+        retry_after_seconds=retry_after_seconds(response.headers),
+    )
+
+
+def _allow_directory_request(rate_limiter: Any | None) -> ProviderResult:
+    if rate_limiter is None:
+        return ProviderResult(status="success", request_hash="req_local")
+    decision = rate_limiter.allow(NASDAQ_TRADER_PROVIDER)
+    if decision.allowed:
+        return ProviderResult(status="success", request_hash="req_local")
+    retry_after = float(decision.retry_after_seconds or 0.0)
+    if 0.0 < retry_after <= MAX_DIRECTORY_LIMIT_SLEEP_SECONDS:
+        time.sleep(retry_after)
+        decision = rate_limiter.allow(NASDAQ_TRADER_PROVIDER)
+        if decision.allowed:
+            return ProviderResult(status="success", request_hash="req_local")
+        retry_after = float(decision.retry_after_seconds or 0.0)
+    return ProviderResult(
+        status="rate_limited",
+        request_hash="req_local",
+        message="runtime rate limit exhausted",
+        retry_after_seconds=retry_after,
+    )
 
 
 def _dict_rows(

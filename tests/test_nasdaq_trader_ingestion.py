@@ -1,6 +1,106 @@
 from __future__ import annotations
 
 
+class FakeDirectoryHttp:
+    def __init__(self, responses):
+        self.responses = dict(responses)
+        self.calls = []
+
+    def get(self, url, *, params=None, headers=None):
+        from src.data_ingestion.http_client import HttpResponse
+
+        self.calls.append((url, params, headers))
+        status_code, text, response_headers = self.responses[url]
+        return HttpResponse(
+            status_code=status_code,
+            text=text,
+            headers=response_headers,
+        )
+
+
+def test_fetch_symbol_directory_texts_fetches_both_official_endpoints():
+    from src.data_ingestion.nasdaq_trader import (
+        NASDAQ_LISTED_URL,
+        OTHERLISTED_URL,
+        fetch_symbol_directory_texts,
+    )
+
+    nasdaq_text = "Symbol|Security Name|Test Issue|ETF\nMRNA|Moderna|N|N"
+    other_text = "ACT Symbol|Security Name|Exchange|ETF|Test Issue\nDNA|Ginkgo|N|N|N"
+    fake = FakeDirectoryHttp(
+        {
+            NASDAQ_LISTED_URL: (200, nasdaq_text, {}),
+            OTHERLISTED_URL: (200, other_text, {}),
+        }
+    )
+
+    results = fetch_symbol_directory_texts(http_client=fake)
+
+    assert [result.endpoint for result in results] == ["nasdaqlisted", "otherlisted"]
+    assert [call[0] for call in fake.calls] == [NASDAQ_LISTED_URL, OTHERLISTED_URL]
+    assert all(call[1] is None and call[2] is None for call in fake.calls)
+    assert all(result.provider == "nasdaq_trader" for result in results)
+    assert all(result.status == "success" for result in results)
+    assert all(result.request_hash.startswith("req_") for result in results)
+    assert [result.payload for result in results] == [nasdaq_text, other_text]
+    assert all(result.message is None for result in results)
+    assert all(result.retry_after_seconds is None for result in results)
+
+
+def test_fetch_symbol_directory_texts_preserves_partial_rate_limit_metadata():
+    from src.data_ingestion.nasdaq_trader import (
+        NASDAQ_LISTED_URL,
+        OTHERLISTED_URL,
+        fetch_symbol_directory_texts,
+    )
+
+    fake = FakeDirectoryHttp(
+        {
+            NASDAQ_LISTED_URL: (429, "slow down", {"Retry-After": "45"}),
+            OTHERLISTED_URL: (200, "ok", {}),
+        }
+    )
+
+    results = fetch_symbol_directory_texts(http_client=fake)
+
+    rate_limited, successful = results
+    assert rate_limited.endpoint == "nasdaqlisted"
+    assert rate_limited.provider == "nasdaq_trader"
+    assert rate_limited.status == "rate_limited"
+    assert rate_limited.payload is None
+    assert rate_limited.message == "HTTP 429"
+    assert rate_limited.retry_after_seconds == 45.0
+    assert successful.endpoint == "otherlisted"
+    assert successful.status == "success"
+    assert successful.payload == "ok"
+
+
+def test_fetch_symbol_directory_texts_preserves_partial_failure_metadata():
+    from src.data_ingestion.nasdaq_trader import (
+        NASDAQ_LISTED_URL,
+        OTHERLISTED_URL,
+        fetch_symbol_directory_texts,
+    )
+
+    fake = FakeDirectoryHttp(
+        {
+            NASDAQ_LISTED_URL: (200, "ok", {}),
+            OTHERLISTED_URL: (503, "maintenance", {}),
+        }
+    )
+
+    results = fetch_symbol_directory_texts(http_client=fake)
+
+    successful, failed = results
+    assert successful.status == "success"
+    assert successful.payload == "ok"
+    assert failed.endpoint == "otherlisted"
+    assert failed.provider == "nasdaq_trader"
+    assert failed.status == "retryable_error"
+    assert failed.payload is None
+    assert failed.message == "HTTP 503"
+
+
 def test_parse_nasdaq_listed_filters_etfs_test_issues_and_keeps_common_like_rows():
     from src.data_ingestion.nasdaq_trader import parse_nasdaq_listed
 

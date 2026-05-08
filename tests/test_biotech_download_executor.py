@@ -41,6 +41,134 @@ class FakeTiingoClient:
         )
 
 
+class FakeSecClient:
+    def __init__(
+        self,
+        *,
+        submissions: ProviderResult | None = None,
+        companyfacts: ProviderResult | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.submissions = submissions or ProviderResult(
+            status="success",
+            request_hash="req_sec_submissions",
+            payload={"cik": "0000001", "entityType": "operating"},
+        )
+        self.companyfacts = companyfacts or ProviderResult(
+            status="success",
+            request_hash="req_sec_companyfacts",
+            payload={
+                "facts": {
+                    "us-gaap": {
+                        "ResearchAndDevelopmentExpense": {
+                            "units": {
+                                "USD": [
+                                    {
+                                        "fy": "2025",
+                                        "fp": "FY",
+                                        "form": "10-K",
+                                        "filed": "2026-02-20",
+                                        "end": "2025-12-31",
+                                        "val": "42.5",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+
+    def fetch_submissions(self, cik: str):
+        self.calls.append(("submissions", str(cik)))
+        return self.submissions
+
+    def fetch_companyfacts(self, cik: str):
+        self.calls.append(("companyfacts", str(cik)))
+        return self.companyfacts
+
+
+class FakeFmpClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def fetch_profile(self, ticker: str):
+        self.calls.append(("profile", ticker))
+        return ProviderResult(
+            status="success",
+            request_hash="req_fmp_profile",
+            payload=[{"symbol": ticker, "companyName": "ABBA Therapeutics"}],
+        )
+
+    def fetch_income_statement(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("income", ticker))
+        return ProviderResult(
+            status="success",
+            request_hash="req_fmp_income",
+            payload=[
+                {
+                    "calendarYear": "2025",
+                    "period": "FY",
+                    "date": "2025-12-31",
+                    "fillingDate": "2026-02-20",
+                    "reportedCurrency": "USD",
+                    "researchAndDevelopmentExpenses": "14.0",
+                    "sellingGeneralAndAdministrativeExpenses": "5.0",
+                    "revenue": "1.0",
+                    "netIncome": "-20.0",
+                }
+            ],
+        )
+
+    def fetch_balance_sheet(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("balance", ticker))
+        return ProviderResult(
+            status="success",
+            request_hash="req_fmp_balance",
+            payload=[
+                {
+                    "calendarYear": "2025",
+                    "period": "FY",
+                    "date": "2025-12-31",
+                    "cashAndCashEquivalents": "30.0",
+                    "shortTermInvestments": "10.0",
+                    "totalDebt": "2.0",
+                }
+            ],
+        )
+
+    def fetch_cash_flow(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("cash_flow", ticker))
+        return ProviderResult(
+            status="success",
+            request_hash="req_fmp_cash_flow",
+            payload=[
+                {
+                    "calendarYear": "2025",
+                    "period": "FY",
+                    "date": "2025-12-31",
+                    "operatingCashFlow": "-8.0",
+                }
+            ],
+        )
+
+
+class FakeLimiter:
+    def __init__(self, allowed_requests: int | None = None) -> None:
+        self.allowed_requests = allowed_requests
+        self.calls: list[str] = []
+
+    def allow(self, provider: str):
+        from src.data_ingestion.rate_limit import RateLimitDecision
+
+        self.calls.append(provider)
+        if self.allowed_requests is None:
+            return RateLimitDecision(allowed=True, retry_after_seconds=0.0)
+        if len(self.calls) <= self.allowed_requests:
+            return RateLimitDecision(allowed=True, retry_after_seconds=0.0)
+        return RateLimitDecision(allowed=False, retry_after_seconds=86400.0)
+
+
 def _universe_rows() -> list[UniverseSourceRow]:
     return [
         UniverseSourceRow(
@@ -508,7 +636,7 @@ def test_missing_sec_user_agent_fails_when_sec_is_only_requested(
     assert "SEC_USER_AGENT" not in message
 
 
-def test_missing_fmp_key_fails_when_only_stubbed_provider_can_run(
+def test_missing_fmp_key_skips_fmp_when_sec_can_run(
     tmp_path,
     monkeypatch,
 ):
@@ -517,23 +645,27 @@ def test_missing_fmp_key_fails_when_only_stubbed_provider_can_run(
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
-    with pytest.raises(RuntimeError) as exc_info:
-        run_download(
-            DownloadRequest(
-                snapshot_date="2026-05-08",
-                start_date="2026-05-01",
-                end_date="2026-05-08",
-                providers=("sec", "fmp"),
-                dry_run=False,
-                limit_tickers=1,
-                research_dir=tmp_path,
-            ),
-            universe_rows=_universe_rows(),
-        )
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("sec", "fmp"),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        sec_client=FakeSecClient(),
+        rate_limiters={"sec": FakeLimiter()},
+    )
 
-    message = str(exc_info.value)
-    assert "no executable provider" in message.lower()
-    assert "FMP_API_KEY" not in message
+    assert summary.completed_units == 1
+    assert summary.skipped_units == 1
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
+    assert reasons == {"fmp": "missing_client"}
 
 
 def test_missing_fmp_key_fails_when_fmp_is_only_requested(
@@ -581,16 +713,224 @@ def test_injected_provider_clients_do_not_require_credentials(tmp_path, monkeypa
         ),
         universe_rows=_universe_rows(),
         tiingo_client=FakeTiingoClient(),
-        sec_client=object(),
-        fmp_client=object(),
+        sec_client=FakeSecClient(),
+        fmp_client=FakeFmpClient(),
+        rate_limiters={
+            "tiingo": FakeLimiter(),
+            "sec": FakeLimiter(),
+            "fmp": FakeLimiter(),
+        },
+    )
+
+    assert summary.completed_units == 3
+    assert summary.skipped_units == 0
+
+
+def test_executor_downloads_sec_submissions_and_companyfacts_then_writes_logs(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+
+    from src.data_ingestion.checkpoints import get_checkpoint
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    sec_client = FakeSecClient()
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("sec",),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        sec_client=sec_client,
+        rate_limiters={"sec": FakeLimiter()},
     )
 
     assert summary.completed_units == 1
-    assert summary.skipped_units == 2
-    with open(summary.manifest_path, encoding="utf-8") as file:
-        manifest = json.load(file)
-    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
-    assert reasons == {"sec": "stub_not_implemented", "fmp": "stub_not_implemented"}
+    assert summary.failed_units == 0
+    assert sec_client.calls == [("submissions", "0000001"), ("companyfacts", "0000001")]
+
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "cassandra_research.duckdb"))
+    try:
+        logs = conn.execute(
+            """
+            SELECT endpoint, request_hash, status
+            FROM provider_fetch_log
+            WHERE provider = 'sec'
+            ORDER BY endpoint
+            """
+        ).fetchall()
+        facts = conn.execute(
+            """
+            SELECT ticker, cik, concept, fiscal_year, fiscal_period, value, source
+            FROM sec_companyfacts_normalized
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert logs == [
+        ("/sec/companyfacts/0000001", "req_sec_companyfacts", "success"),
+        ("/sec/submissions/0000001", "req_sec_submissions", "success"),
+    ]
+    assert facts == [
+        (
+            "ABBA",
+            "0000000001",
+            "ResearchAndDevelopmentExpense",
+            2025,
+            "FY",
+            42.5,
+            "sec_companyfacts",
+        )
+    ]
+    checkpoint = get_checkpoint(
+        db_path=tmp_path / "cassandra_research.duckdb",
+        run_id=summary.run_id,
+        provider="sec",
+        phase="companyfacts",
+        ticker="ABBA",
+        endpoint="/sec/companyfacts/0000001",
+    )
+    assert checkpoint is not None
+    assert checkpoint.status == "success"
+
+
+def test_executor_downloads_fmp_profile_and_statements_then_writes_logs(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    fmp_client = FakeFmpClient()
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("fmp",),
+            dry_run=False,
+            limit_tickers=1,
+            daily_fmp_budget=10,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        fmp_client=fmp_client,
+        rate_limiters={"fmp": FakeLimiter()},
+    )
+
+    assert summary.completed_units == 1
+    assert summary.failed_units == 0
+    assert fmp_client.calls == [
+        ("profile", "ABBA"),
+        ("income", "ABBA"),
+        ("balance", "ABBA"),
+        ("cash_flow", "ABBA"),
+    ]
+
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "cassandra_research.duckdb"))
+    try:
+        logs = conn.execute(
+            """
+            SELECT endpoint, request_hash, status
+            FROM provider_fetch_log
+            WHERE provider = 'fmp'
+            ORDER BY endpoint
+            """
+        ).fetchall()
+        row = conn.execute(
+            """
+            SELECT ticker, fiscal_period, source, payload_json
+            FROM fundamentals_normalized
+            WHERE source = 'fmp'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert logs == [
+        ("/fmp/balance-sheet-statement/ABBA", "req_fmp_balance", "success"),
+        ("/fmp/cash-flow-statement/ABBA", "req_fmp_cash_flow", "success"),
+        ("/fmp/income-statement/ABBA", "req_fmp_income", "success"),
+        ("/fmp/profile/ABBA", "req_fmp_profile", "success"),
+    ]
+    assert row[:3] == ("ABBA", "2025-FY", "fmp")
+    payload = json.loads(row[3])
+    assert payload["cash_and_short_term_investments"] == 40.0
+    assert payload["operating_cash_flow"] == -8.0
+    assert payload["cash_runway_quarters"] == 5.0
+
+
+def test_executor_marks_provider_runtime_budget_exhaustion_rate_limited(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+
+    from src.data_ingestion.checkpoints import get_checkpoint
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    fmp_client = FakeFmpClient()
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("fmp",),
+            dry_run=False,
+            limit_tickers=1,
+            daily_fmp_budget=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        fmp_client=fmp_client,
+        rate_limiters={"fmp": FakeLimiter(allowed_requests=0)},
+    )
+
+    assert summary.completed_units == 0
+    assert summary.rate_limited_units == 1
+    assert fmp_client.calls == []
+
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "cassandra_research.duckdb"))
+    try:
+        logs = conn.execute(
+            """
+            SELECT endpoint, status, message
+            FROM provider_fetch_log
+            WHERE provider = 'fmp'
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert logs == [
+        ("/fmp/profile/ABBA", "rate_limited", "runtime rate limit exhausted")
+    ]
+    checkpoint = get_checkpoint(
+        db_path=tmp_path / "cassandra_research.duckdb",
+        run_id=summary.run_id,
+        provider="fmp",
+        phase="profile",
+        ticker="ABBA",
+        endpoint="/fmp/profile/ABBA",
+        period_start="2026-05-01",
+        period_end="2026-05-08",
+    )
+    assert checkpoint is not None
+    assert checkpoint.status == "rate_limited"
 
 
 def test_tiingo_rate_limited_and_failed_statuses_update_counts(tmp_path):

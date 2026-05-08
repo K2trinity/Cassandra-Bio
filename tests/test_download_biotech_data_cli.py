@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 def _base_command(tmp_path: Path) -> list[str]:
     return [
@@ -48,42 +50,132 @@ def test_download_biotech_data_help_does_not_require_credentials():
     assert "--limit-tickers" in result.stdout
 
 
-def test_download_biotech_data_dry_run_requires_exchange_listing_fixture(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
+def test_download_biotech_data_loads_nasdaq_trader_when_fixture_missing():
+    from scripts.download_biotech_data import _load_universe_rows
+    from src.data_ingestion.nasdaq_trader import NasdaqTraderDirectoryResult
 
-    result = subprocess.run(
-        [*_base_command(tmp_path), "--dry-run"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=_clean_provider_env(),
+    def fake_fetch():
+        return (
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="nasdaqlisted",
+                request_hash="req_nasdaq",
+                status="success",
+                payload="\n".join(
+                    [
+                        "Symbol|Security Name|Market Category|Test Issue|"
+                        "Financial Status|Round Lot Size|ETF|NextShares",
+                        "MRNA|Moderna, Inc. Common Stock|Q|N|N|100|N|N",
+                    ]
+                ),
+            ),
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="otherlisted",
+                request_hash="req_other",
+                status="success",
+                payload="\n".join(
+                    [
+                        "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|"
+                        "Round Lot Size|Test Issue|NASDAQ Symbol",
+                        "DNA|Ginkgo Bioworks Holdings Inc Class A Common Stock|"
+                        "N|DNA|N|100|N|DNA",
+                    ]
+                ),
+            ),
+        )
+
+    rows = _load_universe_rows(None, nasdaq_fetcher=fake_fetch)
+
+    assert [row.ticker for row in rows] == ["MRNA", "DNA"]
+
+
+def test_download_biotech_data_logs_nasdaq_trader_fetch_results(tmp_path):
+    from scripts.download_biotech_data import _load_universe_rows
+    from src.data_ingestion.nasdaq_trader import NasdaqTraderDirectoryResult
+
+    def fake_fetch():
+        return (
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="nasdaqlisted",
+                request_hash="req_nasdaq",
+                status="success",
+                payload="\n".join(
+                    [
+                        "Symbol|Security Name|Market Category|Test Issue|"
+                        "Financial Status|Round Lot Size|ETF|NextShares",
+                        "MRNA|Moderna, Inc. Common Stock|Q|N|N|100|N|N",
+                    ]
+                ),
+            ),
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="otherlisted",
+                request_hash="req_other",
+                status="success",
+                payload="\n".join(
+                    [
+                        "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|"
+                        "Round Lot Size|Test Issue|NASDAQ Symbol",
+                        "DNA|Ginkgo Bioworks Holdings Inc Class A Common Stock|"
+                        "N|DNA|N|100|N|DNA",
+                    ]
+                ),
+            ),
+        )
+
+    _load_universe_rows(
+        None,
+        db_path=tmp_path / "research.duckdb",
+        nasdaq_fetcher=fake_fetch,
     )
 
-    assert result.returncode != 0
-    assert "exchange-listings-csv" in result.stderr
-    assert "required" in result.stderr.lower()
-    assert "Traceback" not in result.stderr
-    assert result.stdout == ""
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "research.duckdb"))
+    try:
+        logs = conn.execute(
+            """
+            SELECT provider, endpoint, request_hash, status
+            FROM provider_fetch_log
+            ORDER BY endpoint
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert logs == [
+        ("nasdaq_trader", "nasdaqlisted", "req_nasdaq", "success"),
+        ("nasdaq_trader", "otherlisted", "req_other", "success"),
+    ]
 
 
-def test_download_biotech_data_non_dry_run_requires_exchange_listing_fixture(tmp_path):
-    repo_root = Path(__file__).resolve().parents[1]
+def test_download_biotech_data_rejects_incomplete_nasdaq_trader_fetch():
+    from scripts.download_biotech_data import _load_universe_rows
+    from src.data_ingestion.nasdaq_trader import NasdaqTraderDirectoryResult
 
-    result = subprocess.run(
-        _base_command(tmp_path),
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=_clean_provider_env(),
-    )
+    def fake_fetch():
+        return (
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="nasdaqlisted",
+                request_hash="req_nasdaq",
+                status="rate_limited",
+                message="HTTP 429",
+                retry_after_seconds=60,
+            ),
+            NasdaqTraderDirectoryResult(
+                provider="nasdaq_trader",
+                endpoint="otherlisted",
+                request_hash="req_other",
+                status="success",
+                payload="ACT Symbol|Security Name|Exchange|ETF|Test Issue",
+            ),
+        )
 
-    assert result.returncode != 0
-    assert "exchange-listings-csv" in result.stderr
-    assert "required" in result.stderr.lower()
-    assert "Traceback" not in result.stderr
-    assert result.stdout == ""
+    with pytest.raises(RuntimeError, match="Nasdaq Trader universe fetch incomplete"):
+        _load_universe_rows(None, nasdaq_fetcher=fake_fetch)
 
 
 def test_download_biotech_data_dry_run_uses_fixture_universe(tmp_path):
