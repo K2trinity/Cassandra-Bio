@@ -60,8 +60,9 @@ CATALOG_SQL: tuple[str, ...] = (
         as_of_date DATE,
         bias_status TEXT,
         survivorship_bias_warning BOOLEAN,
-        benchmark_json TEXT,
-        source_json TEXT,
+        member_count INTEGER,
+        benchmark_tickers_json TEXT,
+        source_payload_json TEXT,
         coverage_json TEXT,
         created_at TIMESTAMP
     )

@@ -8,7 +8,8 @@ import re
 from typing import Any
 
 
-BIOTECH_UNIVERSE_ID = "biotech_us_v1"
+BIOTECH_US_UNIVERSE_ID = "biotech_us_v1"
+BIOTECH_UNIVERSE_ID = BIOTECH_US_UNIVERSE_ID
 BIOTECH_BIAS_STATUS = "current_constituents_only"
 
 _CANONICAL_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -69,19 +70,21 @@ class UniverseSnapshot:
     survivorship_bias_warning: bool = True
 
     def to_catalog_payload(self) -> dict[str, Any]:
+        source_payload = [{"source": source} for source in self.sources]
         return {
             "universe_snapshot_id": self.universe_snapshot_id,
             "universe_id": self.universe_id,
             "as_of_date": self.as_of_date,
             "bias_status": self.bias_status,
             "survivorship_bias_warning": self.survivorship_bias_warning,
-            "benchmark_json": _canonical_json(list(self.benchmark_tickers)),
-            "source_json": _canonical_json(list(self.sources)),
+            "member_count": len(self.members),
+            "benchmark_tickers_json": _canonical_json(list(self.benchmark_tickers)),
+            "source_payload_json": _canonical_json(source_payload),
             "coverage_json": _canonical_json(
                 {
-                    "benchmark_tickers": len(self.benchmark_tickers),
-                    "members": len(self.members),
-                    "sources": len(self.sources),
+                    "benchmark_tickers": list(self.benchmark_tickers),
+                    "member_count": len(self.members),
+                    "sources": list(self.sources),
                 }
             ),
         }
@@ -193,7 +196,7 @@ def _build_universe_snapshot_id(
         ],
         "sources": sources,
         "survivorship_bias_warning": True,
-        "universe_id": BIOTECH_UNIVERSE_ID,
+        "universe_id": BIOTECH_US_UNIVERSE_ID,
     }
     digest = sha256(_canonical_json(payload).encode("utf-8")).hexdigest()[:12]
     return f"univ_{as_of_date.replace('-', '')}_{digest}"

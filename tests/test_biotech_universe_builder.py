@@ -5,9 +5,12 @@ import json
 
 def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
     from src.backtest.universe_builder import (
+        BIOTECH_US_UNIVERSE_ID,
         UniverseSourceRow,
         build_universe_snapshot,
     )
+
+    assert BIOTECH_US_UNIVERSE_ID == "biotech_us_v1"
 
     snapshot = build_universe_snapshot(
         [
@@ -57,7 +60,7 @@ def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
         as_of_date="2026-05-08",
     )
 
-    assert snapshot.universe_id == "biotech_us_v1"
+    assert snapshot.universe_id == BIOTECH_US_UNIVERSE_ID
     assert snapshot.as_of_date == "2026-05-08"
     assert snapshot.bias_status == "current_constituents_only"
     assert snapshot.survivorship_bias_warning is True
@@ -140,6 +143,7 @@ def test_universe_snapshot_id_is_deterministic_and_content_addressed():
 
 def test_universe_snapshot_catalog_payload_uses_json_strings():
     from src.backtest.universe_builder import (
+        BIOTECH_US_UNIVERSE_ID,
         UniverseSourceRow,
         build_universe_snapshot,
     )
@@ -167,16 +171,17 @@ def test_universe_snapshot_catalog_payload_uses_json_strings():
     payload = snapshot.to_catalog_payload()
 
     assert payload["universe_snapshot_id"] == snapshot.universe_snapshot_id
-    assert payload["universe_id"] == "biotech_us_v1"
+    assert payload["universe_id"] == BIOTECH_US_UNIVERSE_ID
     assert payload["as_of_date"] == "2026-05-08"
     assert payload["bias_status"] == "current_constituents_only"
     assert payload["survivorship_bias_warning"] is True
-    assert json.loads(payload["benchmark_json"]) == ["XBI"]
-    assert json.loads(payload["source_json"]) == ["xbi"]
+    assert payload["member_count"] == 1
+    assert json.loads(payload["benchmark_tickers_json"]) == ["XBI"]
+    assert json.loads(payload["source_payload_json"]) == [{"source": "xbi"}]
     assert json.loads(payload["coverage_json"]) == {
-        "benchmark_tickers": 1,
-        "members": 1,
-        "sources": 1,
+        "benchmark_tickers": ["XBI"],
+        "member_count": 1,
+        "sources": ["xbi"],
     }
 
 
@@ -206,8 +211,11 @@ def test_research_database_creates_universe_snapshots_catalog_table(tmp_path):
         "as_of_date",
         "bias_status",
         "survivorship_bias_warning",
-        "benchmark_json",
-        "source_json",
+        "member_count",
+        "benchmark_tickers_json",
+        "source_payload_json",
         "coverage_json",
         "created_at",
     }.issubset(columns)
+    assert "benchmark_json" not in columns
+    assert "source_json" not in columns
