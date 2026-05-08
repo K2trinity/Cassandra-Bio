@@ -43,6 +43,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daily-fmp-budget", type=int, default=240)
     parser.add_argument("--research-dir", default=str(RESEARCH_DIR))
     parser.add_argument("--exchange-listings-csv")
+    parser.add_argument("--allow-unclassified-nasdaq-universe", action="store_true")
     return parser
 
 
@@ -51,6 +52,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         providers = _parse_providers(args.providers)
+        _guard_unclassified_live_universe(args)
         rows = _load_universe_rows(
             args.exchange_listings_csv,
             db_path=Path(args.research_dir) / "cassandra_research.duckdb",
@@ -85,6 +87,21 @@ def _parse_providers(value: str) -> tuple[str, ...]:
     if unsupported:
         raise ValueError(f"unsupported provider: {', '.join(unsupported)}")
     return providers
+
+
+def _guard_unclassified_live_universe(args: argparse.Namespace) -> None:
+    if (
+        args.dry_run
+        or args.exchange_listings_csv
+        or args.allow_unclassified_nasdaq_universe
+    ):
+        return
+    raise RuntimeError(
+        "Live Nasdaq Trader rows are active-listed common-stock candidates, "
+        "not a biotech-classified universe. Provide --exchange-listings-csv "
+        "from a classified universe build, run --dry-run, or pass "
+        "--allow-unclassified-nasdaq-universe explicitly."
+    )
 
 
 def _load_universe_rows(

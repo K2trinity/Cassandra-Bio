@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
 from pathlib import Path
 import subprocess
 import sys
@@ -149,6 +150,31 @@ def test_download_biotech_data_logs_nasdaq_trader_fetch_results(tmp_path):
         ("nasdaq_trader", "nasdaqlisted", "req_nasdaq", "success"),
         ("nasdaq_trader", "otherlisted", "req_other", "success"),
     ]
+
+
+def test_download_biotech_data_guards_non_dry_run_unclassified_live_universe():
+    from scripts.download_biotech_data import _guard_unclassified_live_universe
+
+    with pytest.raises(RuntimeError, match="not a biotech-classified universe"):
+        _guard_unclassified_live_universe(
+            argparse.Namespace(
+                dry_run=False,
+                exchange_listings_csv=None,
+                allow_unclassified_nasdaq_universe=False,
+            )
+        )
+
+
+def test_download_biotech_data_allows_explicit_unclassified_live_universe():
+    from scripts.download_biotech_data import _guard_unclassified_live_universe
+
+    _guard_unclassified_live_universe(
+        argparse.Namespace(
+            dry_run=False,
+            exchange_listings_csv=None,
+            allow_unclassified_nasdaq_universe=True,
+        )
+    )
 
 
 def test_download_biotech_data_rejects_incomplete_nasdaq_trader_fetch():
