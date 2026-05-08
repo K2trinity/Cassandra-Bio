@@ -14,12 +14,12 @@ def _to_float(value: Any) -> float:
     return float(value)
 
 
-def _fiscal_period(statement: Mapping[str, Any]) -> str | None:
+def _fiscal_period(statement: Mapping[str, Any]) -> str:
     calendar_year = statement.get("calendarYear")
     period = statement.get("period")
     if calendar_year and period:
         return f"{calendar_year}-{period}"
-    return str(period or calendar_year) if period or calendar_year else None
+    return ""
 
 
 def normalize_fmp_financial_statements(
@@ -29,9 +29,9 @@ def normalize_fmp_financial_statements(
     rows: list[dict[str, Any]] = []
 
     for statement in statements:
-        cash_and_investments = _to_float(
-            statement.get("cashAndCashEquivalents")
-        ) + _to_float(statement.get("shortTermInvestments"))
+        cash_and_equivalents = _to_float(statement.get("cashAndCashEquivalents"))
+        short_term_investments = _to_float(statement.get("shortTermInvestments"))
+        cash_and_investments = cash_and_equivalents + short_term_investments
         operating_cash_flow = _to_float(statement.get("operatingCashFlow"))
         cash_runway_quarters = (
             round(cash_and_investments / abs(operating_cash_flow), 6)
@@ -44,21 +44,24 @@ def normalize_fmp_financial_statements(
                 "security_id": f"FMP:{normalized_ticker}",
                 "ticker": normalized_ticker,
                 "fiscal_period": _fiscal_period(statement),
+                "period_end": statement.get("date"),
                 "filing_date": statement.get("fillingDate")
                 or statement.get("filingDate"),
-                "source": source,
+                "accepted_date": statement.get("acceptedDate"),
+                "currency": statement.get("reportedCurrency"),
+                "cash_and_equivalents": cash_and_equivalents,
+                "short_term_investments": short_term_investments,
                 "cash_and_short_term_investments": cash_and_investments,
+                "total_debt": _to_float(statement.get("totalDebt")),
                 "operating_cash_flow": operating_cash_flow,
-                "research_and_development": _to_float(
-                    statement.get("researchAndDevelopmentExpenses")
-                ),
-                "selling_general_and_administrative": _to_float(
+                "rd_expense": _to_float(statement.get("researchAndDevelopmentExpenses")),
+                "sga_expense": _to_float(
                     statement.get("sellingGeneralAndAdministrativeExpenses")
                 ),
                 "revenue": _to_float(statement.get("revenue")),
                 "net_income": _to_float(statement.get("netIncome")),
-                "total_debt": _to_float(statement.get("totalDebt")),
                 "cash_runway_quarters": cash_runway_quarters,
+                "source": source,
             }
         )
 
@@ -91,7 +94,7 @@ def normalize_sec_company_facts(
                             "form": value.get("form"),
                             "filed": value.get("filed"),
                             "period_end": value.get("end"),
-                            "value": float(value.get("val")),
+                            "value": _to_float(value.get("val")),
                             "source": "sec_companyfacts",
                         }
                     )
