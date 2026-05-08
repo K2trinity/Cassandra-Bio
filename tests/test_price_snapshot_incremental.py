@@ -128,6 +128,44 @@ def test_append_prices_daily_frame_rejects_batched_overlap_without_combined_file
     assert not (partition / "ABBA.parquet").exists()
 
 
+def test_append_prices_daily_frame_rejects_overlap_in_combined_existing_file(
+    tmp_path,
+):
+    from src.backtest.price_snapshot import (
+        append_prices_daily_frame,
+        write_prices_daily_frame,
+    )
+    from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+
+    output_root = tmp_path / "prices_daily"
+    abba = normalize_tiingo_eod_prices(
+        [_tiingo_row(close=104.0, adjClose=52.0)],
+        ticker="ABBA",
+        data_snapshot_id="snap-tiingo",
+    )
+    mrna = normalize_tiingo_eod_prices(
+        [_tiingo_row(close=105.0, adjClose=52.5)],
+        ticker="MRNA",
+        data_snapshot_id="snap-tiingo",
+    )
+    write_prices_daily_frame(pd.concat([abba, mrna]), output_root=output_root)
+
+    partition = (
+        output_root
+        / "data_snapshot_id=snap-tiingo"
+        / "source=tiingo"
+        / "year=2026"
+    )
+    combined_path = partition / "ABBA_MRNA.parquet"
+    assert combined_path.exists()
+
+    with pytest.raises(FileExistsError, match="overlap existing price rows"):
+        append_prices_daily_frame(mrna, output_root=output_root)
+
+    assert combined_path.exists()
+    assert not (partition / "MRNA.parquet").exists()
+
+
 def test_append_prices_daily_frame_batched_new_tickers_writes_per_ticker_files(
     tmp_path,
 ):
