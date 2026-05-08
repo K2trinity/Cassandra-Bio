@@ -14,12 +14,45 @@ def _to_float(value: Any) -> float:
     return float(value)
 
 
+def _missing_fields(payload: Mapping[str, Any], fields: tuple[str, ...]) -> list[str]:
+    return [field for field in fields if payload.get(field) is None]
+
+
 def _fiscal_period(statement: Mapping[str, Any]) -> str:
     calendar_year = statement.get("calendarYear")
     period = statement.get("period")
     if calendar_year and period:
         return f"{calendar_year}-{period}"
     return ""
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _string_or_empty(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+FMP_NUMERIC_FIELDS: tuple[str, ...] = (
+    "cashAndCashEquivalents",
+    "shortTermInvestments",
+    "operatingCashFlow",
+    "researchAndDevelopmentExpenses",
+    "sellingGeneralAndAdministrativeExpenses",
+    "revenue",
+    "netIncome",
+    "totalDebt",
+)
+
+FMP_RUNWAY_INPUT_FIELDS: tuple[str, ...] = (
+    "cashAndCashEquivalents",
+    "shortTermInvestments",
+    "operatingCashFlow",
+)
 
 
 def normalize_fmp_financial_statements(
@@ -33,9 +66,13 @@ def normalize_fmp_financial_statements(
         short_term_investments = _to_float(statement.get("shortTermInvestments"))
         cash_and_investments = cash_and_equivalents + short_term_investments
         operating_cash_flow = _to_float(statement.get("operatingCashFlow"))
+        missing_numeric_fields = _missing_fields(statement, FMP_NUMERIC_FIELDS)
+        missing_runway_input = any(
+            field in missing_numeric_fields for field in FMP_RUNWAY_INPUT_FIELDS
+        )
         cash_runway_quarters = (
             round(cash_and_investments / abs(operating_cash_flow), 6)
-            if operating_cash_flow < 0
+            if operating_cash_flow < 0 and not missing_runway_input
             else None
         )
 
@@ -61,6 +98,8 @@ def normalize_fmp_financial_statements(
                 "revenue": _to_float(statement.get("revenue")),
                 "net_income": _to_float(statement.get("netIncome")),
                 "cash_runway_quarters": cash_runway_quarters,
+                "missing_numeric_fields": missing_numeric_fields,
+                "has_missing_numeric_fields": bool(missing_numeric_fields),
                 "source": source,
             }
         )
@@ -76,11 +115,28 @@ def normalize_sec_company_facts(
     rows: list[dict[str, Any]] = []
 
     facts = companyfacts.get("facts") or {}
+    if not isinstance(facts, Mapping):
+        return rows
+
     for taxonomy, concepts in facts.items():
+        if not isinstance(concepts, Mapping):
+            continue
         for concept, concept_payload in concepts.items():
+            if not isinstance(concept_payload, Mapping):
+                continue
             units = concept_payload.get("units") or {}
+            if not isinstance(units, Mapping):
+                continue
             for unit, values in units.items():
+                if not isinstance(values, list):
+                    continue
                 for value in values:
+                    if not isinstance(value, Mapping):
+                        continue
+                    fiscal_year = _to_int_or_none(value.get("fy"))
+                    if fiscal_year is None:
+                        continue
+                    missing_numeric_fields = _missing_fields(value, ("val",))
                     rows.append(
                         {
                             "security_id": f"SEC:{cik10}",
@@ -89,12 +145,14 @@ def normalize_sec_company_facts(
                             "taxonomy": taxonomy,
                             "concept": concept,
                             "unit": unit,
-                            "fiscal_year": int(value.get("fy")),
-                            "fiscal_period": str(value.get("fp")),
-                            "form": value.get("form"),
-                            "filed": value.get("filed"),
-                            "period_end": value.get("end"),
+                            "fiscal_year": fiscal_year,
+                            "fiscal_period": _string_or_empty(value.get("fp")),
+                            "form": _string_or_empty(value.get("form")),
+                            "filed": _string_or_empty(value.get("filed")),
+                            "period_end": _string_or_empty(value.get("end")),
                             "value": _to_float(value.get("val")),
+                            "missing_numeric_fields": missing_numeric_fields,
+                            "has_missing_numeric_fields": bool(missing_numeric_fields),
                             "source": "sec_companyfacts",
                         }
                     )

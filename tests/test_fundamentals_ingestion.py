@@ -46,6 +46,8 @@ def test_normalize_fmp_financial_statements_extracts_biotech_burn_fields():
             "revenue": 1000.0,
             "net_income": -22.0,
             "cash_runway_quarters": 3.0,
+            "missing_numeric_fields": [],
+            "has_missing_numeric_fields": False,
             "source": "fmp_income_balance_cashflow",
         }
     ]
@@ -77,7 +79,41 @@ def test_normalize_fmp_financial_statements_handles_positive_ocf_and_missing_val
     assert rows[0]["revenue"] == 0.0
     assert rows[0]["net_income"] == 0.0
     assert rows[0]["total_debt"] == 0.0
+    assert rows[0]["missing_numeric_fields"] == [
+        "cashAndCashEquivalents",
+        "shortTermInvestments",
+        "researchAndDevelopmentExpenses",
+        "sellingGeneralAndAdministrativeExpenses",
+        "revenue",
+        "netIncome",
+        "totalDebt",
+    ]
+    assert rows[0]["has_missing_numeric_fields"] is True
     assert rows[0]["cash_runway_quarters"] is None
+
+
+def test_normalize_fmp_financial_statements_suppresses_runway_when_cash_is_missing():
+    from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
+
+    rows = normalize_fmp_financial_statements(
+        ticker="MRNA",
+        source="fmp",
+        statements=[
+            {
+                "calendarYear": "2025",
+                "period": "Q4",
+                "shortTermInvestments": "50",
+                "operatingCashFlow": "-25",
+            }
+        ],
+    )
+
+    assert rows[0]["cash_and_equivalents"] == 0.0
+    assert rows[0]["cash_and_short_term_investments"] == 50.0
+    assert rows[0]["operating_cash_flow"] == -25.0
+    assert rows[0]["cash_runway_quarters"] is None
+    assert "cashAndCashEquivalents" in rows[0]["missing_numeric_fields"]
+    assert rows[0]["has_missing_numeric_fields"] is True
 
 
 def test_normalize_fmp_financial_statements_uses_empty_fiscal_period_fallback():
@@ -138,6 +174,8 @@ def test_normalize_sec_company_facts_keeps_cik_and_concept_source():
             "filed": "2025-08-04",
             "period_end": "2025-06-30",
             "value": 125.5,
+            "missing_numeric_fields": [],
+            "has_missing_numeric_fields": False,
             "source": "sec_companyfacts",
         }
     ]
@@ -170,7 +208,92 @@ def test_normalize_sec_company_facts_converts_missing_value_to_zero():
         },
     )
 
+    assert rows[0]["fiscal_period"] == "FY"
     assert rows[0]["value"] == 0.0
+    assert rows[0]["missing_numeric_fields"] == ["val"]
+    assert rows[0]["has_missing_numeric_fields"] is True
+
+
+def test_normalize_sec_company_facts_skips_missing_or_invalid_fiscal_year():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    rows = normalize_sec_company_facts(
+        cik="42",
+        ticker="ABBA",
+        companyfacts={
+            "facts": {
+                "us-gaap": {
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                        "units": {
+                            "USD": [
+                                {"fp": "FY", "val": "1.0"},
+                                {"fy": "not-a-year", "fp": "FY", "val": "2.0"},
+                                {"fy": "2025", "fp": "FY", "val": "3.0"},
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert [row["fiscal_year"] for row in rows] == [2025]
+    assert [row["value"] for row in rows] == [3.0]
+
+
+def test_normalize_sec_company_facts_uses_empty_strings_for_missing_strings():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    rows = normalize_sec_company_facts(
+        cik="42",
+        ticker="ABBA",
+        companyfacts={
+            "facts": {
+                "us-gaap": {
+                    "NetIncomeLoss": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "fy": "2025",
+                                    "val": "12.5",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert rows[0]["fiscal_period"] == ""
+    assert rows[0]["form"] == ""
+    assert rows[0]["filed"] == ""
+    assert rows[0]["period_end"] == ""
+
+
+def test_normalize_sec_company_facts_ignores_malformed_fact_shapes():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    assert (
+        normalize_sec_company_facts(
+            cik="42", ticker="ABBA", companyfacts={"facts": ["not", "a", "mapping"]}
+        )
+        == []
+    )
+    assert (
+        normalize_sec_company_facts(
+            cik="42",
+            ticker="ABBA",
+            companyfacts={
+                "facts": {
+                    "us-gaap": {
+                        "NetIncomeLoss": {"units": {"USD": {"not": "a list"}}}
+                    }
+                }
+            },
+        )
+        == []
+    )
 
 
 def test_normalize_sec_company_facts_returns_empty_list_for_empty_facts():
