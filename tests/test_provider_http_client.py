@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import requests
 
 
 def test_build_request_hash_is_deterministic_and_ignores_secret_params():
@@ -21,6 +22,40 @@ def test_build_request_hash_is_deterministic_and_ignores_secret_params():
     assert first.startswith("req_")
 
 
+def test_build_request_hash_includes_non_secret_url_query_params():
+    from src.data_ingestion.http_client import build_request_hash
+
+    mrna = build_request_hash(
+        method="GET",
+        url="https://example.test/prices?symbol=MRNA",
+        params={"startDate": "2020-01-01"},
+    )
+    jnj = build_request_hash(
+        method="GET",
+        url="https://example.test/prices?symbol=JNJ",
+        params={"startDate": "2020-01-01"},
+    )
+
+    assert mrna != jnj
+
+
+def test_build_request_hash_ignores_secret_url_query_values():
+    from src.data_ingestion.http_client import build_request_hash
+
+    first = build_request_hash(
+        method="GET",
+        url="https://example.test/prices?symbol=MRNA&token=secret",
+        params={"apikey": "first"},
+    )
+    second = build_request_hash(
+        method="GET",
+        url="https://example.test/prices?token=other&symbol=MRNA",
+        params={"apikey": "second"},
+    )
+
+    assert first == second
+
+
 def test_redact_url_removes_token_and_apikey_query_values():
     from src.data_ingestion.http_client import redact_url
 
@@ -31,6 +66,40 @@ def test_redact_url_removes_token_and_apikey_query_values():
     assert "token=<redacted>" in redacted
     assert "apikey=<redacted>" in redacted
     assert "symbol=MRNA" in redacted
+
+
+def test_redact_url_redacts_malformed_url_best_effort():
+    from src.data_ingestion.http_client import redact_url
+
+    redacted = redact_url("http://[bad?token=secret&symbol=MRNA")
+
+    assert "secret" not in redacted
+    assert "token=<redacted>" in redacted
+    assert "symbol=MRNA" in redacted
+
+
+def test_requests_http_client_redacts_request_exception_context(monkeypatch):
+    from src.data_ingestion.http_client import ProviderHttpError, RequestsHttpClient
+
+    class FakeSession:
+        def get(self, url, *, params, headers, timeout):
+            raise requests.RequestException(
+                f"failed url={url}?token=secret params={params}"
+            )
+
+    client = RequestsHttpClient()
+    monkeypatch.setattr(client, "_session", FakeSession())
+
+    with pytest.raises(ProviderHttpError) as exc_info:
+        client.get(
+            "https://example.test/prices",
+            params={"token": "secret", "symbol": "MRNA"},
+        )
+
+    message = str(exc_info.value)
+    assert "secret" not in message
+    assert "token=<redacted>" in message
+    assert "symbol=MRNA" in message
 
 
 def test_response_helpers_classify_common_http_statuses():
