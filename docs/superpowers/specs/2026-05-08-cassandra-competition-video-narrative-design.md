@@ -45,11 +45,14 @@ The core line is:
 The report creates the hypothesis. The event layer tests it.
 ```
 
-Chinese version:
+Primary subtitle and voiceover line:
 
 ```text
 报告负责形成假设，事件层负责验证假设。
 ```
+
+English may appear as a short visual accent, but Chinese is the production
+language for subtitles, on-screen explanatory text, and voiceover scripts.
 
 ## Non-Negotiable Product Boundaries
 
@@ -177,8 +180,7 @@ Show:
 Required voiceover idea:
 
 ```text
-The disease report creates the research hypothesis. It does not pretend to be a
-trading signal.
+disease report 负责形成研究假设，但它不会被伪装成交易信号。
 ```
 
 Judge takeaway:
@@ -227,14 +229,17 @@ Show:
 Candidate closing line:
 
 ```text
-Cassandra turns scattered biomedical evidence into traceable hypotheses, then
-tests ticker-level events without confusing research summaries with trading
-signals.
+Cassandra 把分散的生物医药证据转化为可追溯的研究假设，再用 ticker 级可信事件做验证，而不是把疾病综述混同为交易信号。
 ```
 
 ## Recommended Voiceover Tone
 
-Use precise product language, not hype-heavy AI language.
+Use precise Chinese product language, not hype-heavy AI language. Subtitles,
+screen annotations, section labels, and narration drafts should be Chinese by
+default. English terms such as `Evidence`, `Hypothesis`, `Validation`,
+`K-line`, and `ticker-level trusted events` may appear when they are product or
+technical terms, but each must be understandable from the surrounding Chinese
+caption.
 
 Prefer:
 
@@ -306,5 +311,6 @@ The script and capture plan should still decide:
 - exact disease query used in the video
 - exact ticker used for the K-line transition
 - whether the K-line curve is real event validation, mock demo, or both
-- final voiceover language: Chinese, English, or bilingual subtitles
+- whether to keep any short English anchor words as visual accents alongside
+  Chinese subtitles
 - whether to include a short architecture diagram or only UI footage
