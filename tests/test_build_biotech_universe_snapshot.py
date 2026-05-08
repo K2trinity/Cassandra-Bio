@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 
 def test_build_biotech_universe_snapshot_script_help_runs_from_repo_root():
     repo_root = Path(__file__).resolve().parents[1]
@@ -151,6 +153,47 @@ def test_build_snapshot_from_csvs_writes_universe_catalog_tables(tmp_path):
             "2026-05-08",
         ),
     ]
+
+
+def test_read_rows_rejects_sources_outside_approved_snapshot_inputs(tmp_path):
+    from scripts.build_biotech_universe_snapshot import _read_rows
+
+    csv_path = tmp_path / "source.csv"
+    _write_csv(
+        csv_path,
+        [
+            {
+                "ticker": "MRNA",
+                "company_name": "Moderna, Inc.",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Unsupported universe source: bad_source"):
+        _read_rows(csv_path, source="bad_source")
+
+
+def test_read_rows_normalizes_approved_source_name(tmp_path):
+    from scripts.build_biotech_universe_snapshot import _read_rows
+
+    csv_path = tmp_path / "source.csv"
+    _write_csv(
+        csv_path,
+        [
+            {
+                "ticker": "XBI",
+                "company_name": "SPDR S&P Biotech ETF",
+                "exchange": "NYSEARCA",
+                "asset_type": "ETF",
+            }
+        ],
+    )
+
+    rows = _read_rows(csv_path, source=" XBI ")
+
+    assert [row.source for row in rows] == ["xbi"]
 
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:

@@ -17,6 +17,8 @@ from src.backtest.universe_builder import (
     build_universe_snapshot,
 )
 
+ALLOWED_UNIVERSE_SNAPSHOT_SOURCES = frozenset({"xbi", "ibb", "exchange_listings"})
+
 
 def build_snapshot_from_csvs(
     *,
@@ -44,6 +46,7 @@ def build_snapshot_from_csvs(
 
 
 def _read_rows(path: str | Path, *, source: str) -> list[UniverseSourceRow]:
+    normalized_source = _normalize_source(source)
     with Path(path).open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         return [
@@ -52,7 +55,7 @@ def _read_rows(path: str | Path, *, source: str) -> list[UniverseSourceRow]:
                 company_name=_required_field(row, "company_name"),
                 exchange=_required_field(row, "exchange"),
                 asset_type=_required_field(row, "asset_type"),
-                source=source,
+                source=normalized_source,
                 source_weight=_optional_float(row.get("source_weight")),
                 industry=_optional_text(row.get("industry")),
                 cik=_optional_text(row.get("cik")),
@@ -61,6 +64,13 @@ def _read_rows(path: str | Path, *, source: str) -> list[UniverseSourceRow]:
             )
             for row in reader
         ]
+
+
+def _normalize_source(source: str) -> str:
+    normalized = source.strip().lower()
+    if normalized not in ALLOWED_UNIVERSE_SNAPSHOT_SOURCES:
+        raise ValueError(f"Unsupported universe source: {normalized}")
+    return normalized
 
 
 def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
