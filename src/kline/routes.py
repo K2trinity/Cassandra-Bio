@@ -9,7 +9,6 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 
 from src.backtest.portfolio_runner import (
     BIOTECH_REAL_TICKERS,
-    DISCLOSURE_KEYS,
     run_real_biotech_portfolio_backtest,
 )
 from src.backtest.runner import (
@@ -23,11 +22,6 @@ from src.kline.workspace_service import KlineWorkspaceService
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
 resolver = TickerResolver()
-PORTFOLIO_RESPONSE_DISCLOSURE_KEYS = set(DISCLOSURE_KEYS) | {
-    "strategy",
-    "strategy_id",
-    "universe_id",
-}
 
 __all__ = ["kline_bp"]
 
@@ -293,28 +287,6 @@ def _parse_backtest_run_request():
         "price_source": price_source,
         "data_snapshot_id": data_snapshot_id,
     }, None
-
-
-def _without_disclosure_keys(value):
-    if isinstance(value, dict):
-        return {
-            key: _without_disclosure_keys(child)
-            for key, child in value.items()
-            if not _is_portfolio_disclosure_key(key)
-        }
-    if isinstance(value, list):
-        return [_without_disclosure_keys(child) for child in value]
-    if isinstance(value, str) and any(
-        disclosure in value.lower()
-        for disclosure in PORTFOLIO_RESPONSE_DISCLOSURE_KEYS
-    ):
-        return None
-    return value
-
-
-def _is_portfolio_disclosure_key(key: object) -> bool:
-    normalized = str(key).lower()
-    return "mock" in normalized or normalized in PORTFOLIO_RESPONSE_DISCLOSURE_KEYS
 
 
 @kline_bp.post("/api/backtest/run")

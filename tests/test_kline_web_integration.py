@@ -21,26 +21,6 @@ def client():
     return app.test_client()
 
 
-PORTFOLIO_DISCLOSURE_KEYS = {
-    "mock_metadata",
-    "synthetic",
-    "data_mode",
-    "positive_demo_expected",
-    "universe_id",
-    "strategy",
-}
-
-
-def _assert_no_portfolio_disclosure_keys(value):
-    if isinstance(value, dict):
-        assert PORTFOLIO_DISCLOSURE_KEYS.isdisjoint(value)
-        for child in value.values():
-            _assert_no_portfolio_disclosure_keys(child)
-    elif isinstance(value, list):
-        for child in value:
-            _assert_no_portfolio_disclosure_keys(child)
-
-
 def _legacy_literal(*parts):
     return "".join(parts)
 
