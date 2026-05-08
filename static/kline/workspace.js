@@ -618,13 +618,7 @@
       className: "backtest-universe-button",
       text: "Run Universe"
     });
-    var demoUniverseButton = makeElement("button", {
-      type: "button",
-      className: "backtest-universe-button",
-      text: "Run Demo Universe"
-    });
     form.appendChild(universeButton);
-    form.appendChild(demoUniverseButton);
     panel.appendChild(form);
 
     var status = makeElement("div", { className: "backtest-status", text: "No run yet." });
@@ -720,13 +714,6 @@
       });
     });
 
-    demoUniverseButton.addEventListener("click", function (event) {
-      event.preventDefault();
-      runBacktest("/api/backtest/portfolio/demo/run", {
-        portfolio: true,
-        runningText: "Running demo universe backtest."
-      });
-    });
   }
 
   function loadRangeContext(ticker, startDate, endDate) {

@@ -250,7 +250,7 @@ def test_workspace_js_backtest_error_clears_previous_overlays():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_workspace_js_backtest_panel_renders_single_and_universe_buttons():
+def test_workspace_js_backtest_panel_renders_single_and_universe_buttons_without_demo():
     result = _run_workspace_script(r"""
         installWorkspace(makeWorkspace());
         runWorkspace();
@@ -266,8 +266,8 @@ def test_workspace_js_backtest_panel_renders_single_and_universe_buttons():
         if (!buttonText.includes('Run Universe')) {
           throw new Error('universe backtest button missing: ' + buttonText.join(','));
         }
-        if (!buttonText.includes('Run Demo Universe')) {
-          throw new Error('demo universe backtest button missing: ' + buttonText.join(','));
+        if (buttonText.includes('Run Demo Universe')) {
+          throw new Error('demo universe backtest button should not render: ' + buttonText.join(','));
         }
         """)
 
@@ -389,44 +389,6 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
             throw new Error('forbidden disclosure leaked into portfolio diagnostics: ' + forbidden + ' in ' + text);
           }
         });
-        """)
-
-    assert result.returncode == 0, result.stderr + result.stdout
-
-
-def test_workspace_js_demo_universe_button_uses_explicit_demo_endpoint():
-    result = _run_workspace_script(r"""
-        let requestUrl = null;
-        fetch = function (url) {
-          requestUrl = url;
-          return Promise.resolve(jsonResponse({
-            run_id: 'demo-portfolio-run',
-            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
-            portfolio_metrics: { strategy_return: 1.25 },
-            constituents: [],
-            focus_ticker: {
-              ticker: 'MRNA',
-              equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
-              signals: [],
-              trades: []
-            }
-          }));
-        };
-
-        installWorkspace(makeWorkspace());
-        runWorkspace();
-
-        const form = document.getElementById('backtest-form');
-        const demoButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Demo Universe');
-        if (!demoButton) {
-          throw new Error('demo universe button missing');
-        }
-        demoButton.dispatchEvent({ type: 'click', preventDefault() {} });
-        await settle();
-
-        if (requestUrl !== '/api/backtest/portfolio/demo/run') {
-          throw new Error('unexpected demo universe endpoint: ' + requestUrl);
-        }
         """)
 
     assert result.returncode == 0, result.stderr + result.stdout

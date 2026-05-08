@@ -8,10 +8,8 @@ from datetime import datetime
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
 from src.backtest.portfolio_runner import (
-    BIOTECH_MOCK_TICKERS,
     BIOTECH_REAL_TICKERS,
     DISCLOSURE_KEYS,
-    run_mock_biotech_portfolio_backtest,
     run_real_biotech_portfolio_backtest,
 )
 from src.backtest.runner import (
@@ -381,41 +379,6 @@ def api_backtest_portfolio_run():
         return jsonify({"error": str(result.get("error"))}), 400
 
     return jsonify(result)
-
-
-@kline_bp.post("/api/backtest/portfolio/demo/run")
-def api_backtest_portfolio_demo_run():
-    """Run the explicit demo biotech universe backtest for the K-line workflow."""
-    parsed, error_response = _parse_backtest_run_request()
-    if error_response is not None:
-        return error_response
-
-    assert parsed is not None
-    if parsed["ticker"] not in BIOTECH_MOCK_TICKERS:
-        return (
-            jsonify(
-                {
-                    "error": "demo portfolio backtest is only available for MRNA, JNJ, LLY, and ABBA",
-                }
-            ),
-            400,
-        )
-
-    result = run_mock_biotech_portfolio_backtest(
-        focus_ticker=parsed["ticker"],
-        start_date=parsed["start_date"],
-        end_date=parsed["end_date"],
-        stop_loss_pct=parsed["stop_loss_pct"],
-        max_position_pct=parsed["max_position_pct"],
-        slippage_pct=parsed["slippage_pct"],
-        holding_period_days=parsed["holding_period_days"],
-    )
-
-    if isinstance(result, dict) and result.get("error"):
-        public_error = _without_disclosure_keys(str(result.get("error")))
-        return jsonify({"error": public_error or "portfolio backtest failed"}), 400
-
-    return jsonify(_without_disclosure_keys(result))
 
 
 @kline_bp.get("/api/backtest/results/<run_id>")
