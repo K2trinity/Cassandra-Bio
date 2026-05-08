@@ -709,6 +709,8 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
             "max_position_pct": 0.15,
             "slippage_pct": 0.002,
             "holding_period_days": 7,
+            "universe_id": "biotech_custom_v2",
+            "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
     body = response.get_json()
@@ -722,11 +724,12 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         "max_position_pct": 0.15,
         "slippage_pct": 0.002,
         "holding_period_days": 7,
-        "universe_id": "biotech_us_v1",
+        "universe_id": "biotech_custom_v2",
         "as_of_date": "2025-03-31",
+        "data_snapshot_id": "snap_20260507_tiingo",
     }
     assert body["run_id"] == "portfolio-123"
-    assert body["universe_id"] == "biotech_us_v1"
+    assert body["universe_id"] == "biotech_custom_v2"
     assert body["strategy"] == {"id": "multifactor_score"}
     assert body["focus_ticker"]["ticker"] == "LLY"
     assert body["portfolio_metrics"]["strategy_return"] == 0.04
@@ -861,6 +864,7 @@ def test_backtest_portfolio_run_api_returns_400_for_unsupported_universe():
     assert response.get_json() == {
         "error": "Unsupported production universe: biotech_mock_v1",
         "universe_id": "biotech_mock_v1",
+        "data_snapshot_id": None,
         "as_of_date": "2025-03-31",
         "start_date": "2025-01-02",
         "end_date": "2025-03-31",

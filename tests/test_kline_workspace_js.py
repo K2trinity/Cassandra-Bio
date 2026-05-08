@@ -461,12 +461,19 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         runWorkspace();
 
         const form = document.getElementById('backtest-form');
+        if (!form.elements.universe_id || form.elements.universe_id.value !== 'biotech_us_v1') {
+          throw new Error('universe_id control missing or wrong default');
+        }
+        if (!form.elements.data_snapshot_id || form.elements.data_snapshot_id.value !== '') {
+          throw new Error('data_snapshot_id control missing or should default blank');
+        }
         form.elements.start_date.value = '2026-04-20';
         form.elements.end_date.value = '2026-04-21';
         form.elements.stop_loss_pct.value = '-0.07';
         form.elements.max_position_pct.value = '0.25';
         form.elements.slippage_pct.value = '0.002';
         form.elements.holding_period_days.value = '7';
+        form.elements.data_snapshot_id.value = 'snap_20260507_tiingo';
 
         const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
         if (!universeButton) {
@@ -480,6 +487,9 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         }
         if (requestBody.ticker !== 'MRNA' || requestBody.start_date !== '2026-04-20' || requestBody.stop_loss_pct !== -0.07 || requestBody.max_position_pct !== 0.25 || requestBody.slippage_pct !== 0.002 || requestBody.holding_period_days !== 7) {
           throw new Error('universe request did not preserve current form values: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.universe_id !== 'biotech_us_v1' || requestBody.data_snapshot_id !== 'snap_20260507_tiingo') {
+          throw new Error('universe request did not preserve snapshot fields: ' + JSON.stringify(requestBody));
         }
 
         const latestConfig = chartConfigs[chartConfigs.length - 1];
@@ -506,6 +516,42 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
             throw new Error('forbidden disclosure leaked into portfolio diagnostics: ' + forbidden + ' in ' + text);
           }
         });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_single_backtest_preserves_snapshot_fields_when_populated():
+    result = _run_workspace_script(r"""
+        let requestUrl = null;
+        let requestBody = null;
+        fetch = function (url, options) {
+          requestUrl = url;
+          requestBody = JSON.parse(options.body);
+          return Promise.resolve(jsonResponse({
+            run_id: 'single-run',
+            metrics: {},
+            equity_curve: [],
+            signals: [],
+            trades: []
+          }));
+        };
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.universe_id.value = 'biotech_custom_v2';
+        form.elements.data_snapshot_id.value = 'snap_custom_123';
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
+        await settle();
+
+        if (requestUrl !== '/api/backtest/run') {
+          throw new Error('unexpected single endpoint: ' + requestUrl);
+        }
+        if (requestBody.universe_id !== 'biotech_custom_v2' || requestBody.data_snapshot_id !== 'snap_custom_123') {
+          throw new Error('single request did not preserve snapshot fields: ' + JSON.stringify(requestBody));
+        }
         """)
 
     assert result.returncode == 0, result.stderr + result.stdout

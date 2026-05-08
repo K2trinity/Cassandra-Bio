@@ -640,6 +640,8 @@
     addInput(form, "Max Position Fraction", "max_position_pct", "number", "0.2", "0.001");
     addInput(form, "Slippage Fraction", "slippage_pct", "number", "0.001", "0.0001");
     addInput(form, "Hold Days", "holding_period_days", "number", "5", "1");
+    addInput(form, "Universe ID", "universe_id", "text", "biotech_us_v1");
+    addInput(form, "Data Snapshot ID", "data_snapshot_id", "text", "");
     var chartModeSelect = addSelect(
       form,
       "Chart Display Mode",
@@ -676,7 +678,7 @@
     });
 
     function requestPayload() {
-      return {
+      var payload = {
         ticker: workspace.ticker,
         start_date: form.elements.start_date.value,
         end_date: form.elements.end_date.value,
@@ -685,6 +687,15 @@
         slippage_pct: Number(form.elements.slippage_pct.value),
         holding_period_days: Number(form.elements.holding_period_days.value)
       };
+      var universeId = String(form.elements.universe_id.value || "").trim();
+      var dataSnapshotId = String(form.elements.data_snapshot_id.value || "").trim();
+      if (universeId) {
+        payload.universe_id = universeId;
+      }
+      if (dataSnapshotId) {
+        payload.data_snapshot_id = dataSnapshotId;
+      }
+      return payload;
     }
 
     function runBacktest(endpoint, options) {

@@ -146,6 +146,12 @@ def _parse_backtest_run_request():
     )
     if not data_snapshot_id:
         data_snapshot_id = None
+    raw_universe_id = data.get("universe_id")
+    universe_id = (
+        str(raw_universe_id).strip() if raw_universe_id is not None else "biotech_us_v1"
+    )
+    if not universe_id:
+        universe_id = "biotech_us_v1"
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return None, (
@@ -283,6 +289,7 @@ def _parse_backtest_run_request():
         "backtest_mode": backtest_mode,
         "price_source": price_source,
         "data_snapshot_id": data_snapshot_id,
+        "universe_id": universe_id,
     }, None
 
 
@@ -332,8 +339,9 @@ def api_backtest_portfolio_run():
         max_position_pct=parsed["max_position_pct"],
         slippage_pct=parsed["slippage_pct"],
         holding_period_days=parsed["holding_period_days"],
-        universe_id=(parsed["data"].get("universe_id") or "biotech_us_v1"),
+        universe_id=parsed["universe_id"],
         as_of_date=parsed["end_date"],
+        data_snapshot_id=parsed["data_snapshot_id"],
     )
 
     if isinstance(result, dict) and result.get("error"):

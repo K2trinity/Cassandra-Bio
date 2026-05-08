@@ -202,6 +202,7 @@ def test_real_portfolio_backtest_uses_duckdb_universe(tmp_path, monkeypatch):
         holding_period_days=7,
         db_path=db_path,
         as_of_date="2026-05-08",
+        data_snapshot_id="snap_20260507_tiingo",
     )
 
     assert [call["ticker"] for call in calls] == ["BIIB", "MRNA", "VRTX"]
@@ -217,6 +218,7 @@ def test_real_portfolio_backtest_uses_duckdb_universe(tmp_path, monkeypatch):
         for call in calls
     )
     assert payload["universe_id"] == "biotech_us_v1"
+    assert payload["data_snapshot_id"] == "snap_20260507_tiingo"
     assert payload["tickers"] == ["BIIB", "MRNA", "VRTX"]
     assert payload["strategy"] == {"id": "multifactor_score"}
     assert payload["focus_ticker"]["ticker"] == "MRNA"
@@ -276,11 +278,13 @@ def test_real_portfolio_backtest_returns_credibility_for_empty_universe(tmp_path
         end_date="2025-01-06",
         db_path=db_path,
         as_of_date="2026-05-08",
+        data_snapshot_id="snap_empty",
     )
 
     assert payload == {
         "error": "no active tickers found for universe biotech_us_v1 as of 2026-05-08",
         "universe_id": "biotech_us_v1",
+        "data_snapshot_id": "snap_empty",
         "as_of_date": "2026-05-08",
         "start_date": "2025-01-02",
         "end_date": "2025-01-06",
@@ -309,11 +313,13 @@ def test_real_portfolio_backtest_returns_structured_error_for_unsupported_univer
         db_path=db_path,
         universe_id="biotech_mock_v1",
         as_of_date="2026-05-08",
+        data_snapshot_id="snap_unsupported",
     )
 
     assert payload == {
         "error": "Unsupported production universe: biotech_mock_v1",
         "universe_id": "biotech_mock_v1",
+        "data_snapshot_id": "snap_unsupported",
         "as_of_date": "2026-05-08",
         "start_date": "2025-01-02",
         "end_date": "2025-01-06",

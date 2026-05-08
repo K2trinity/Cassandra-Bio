@@ -44,6 +44,7 @@ def _real_universe_error_payload(
     *,
     error: str,
     universe_id: str,
+    data_snapshot_id: str | None,
     as_of_date: str,
     start_date: str,
     end_date: str,
@@ -52,6 +53,7 @@ def _real_universe_error_payload(
     return {
         "error": error,
         "universe_id": universe_id,
+        "data_snapshot_id": data_snapshot_id,
         "as_of_date": as_of_date,
         "start_date": start_date,
         "end_date": end_date,
@@ -230,6 +232,7 @@ def _run_biotech_portfolio_backtest(
     tickers: tuple[str, ...],
     strategy_id: str,
     data_mode: str,
+    data_snapshot_id: str | None = None,
     stop_loss_pct: float = -0.08,
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
@@ -254,7 +257,11 @@ def _run_biotech_portfolio_backtest(
             data_mode=data_mode,
         )
         if isinstance(payload, dict) and payload.get("error"):
-            return {"error": f"{ticker}: {payload.get('error')}"}
+            error_payload = {"error": f"{ticker}: {payload.get('error')}"}
+            if data_snapshot_id is not None:
+                error_payload["universe_id"] = universe_id
+                error_payload["data_snapshot_id"] = data_snapshot_id
+            return error_payload
         runs.append(payload)
 
     portfolio_equity_curve = _portfolio_equity_curve(runs)
@@ -268,6 +275,7 @@ def _run_biotech_portfolio_backtest(
         "run_id": created_at.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8],
         "created_at": created_at.isoformat(timespec="seconds"),
         "universe_id": universe_id,
+        "data_snapshot_id": data_snapshot_id,
         "tickers": list(tickers),
         "start_date": start_date,
         "end_date": end_date,
@@ -297,6 +305,7 @@ def run_real_biotech_portfolio_backtest(
     db_path: str | Path | None = None,
     universe_id: str = BIOTECH_REAL_UNIVERSE_ID,
     as_of_date: str | None = None,
+    data_snapshot_id: str | None = None,
 ) -> dict:
     """Run the real multifactor strategy across the active biotech universe."""
     resolved_as_of_date = as_of_date or end_date
@@ -310,6 +319,7 @@ def run_real_biotech_portfolio_backtest(
         return _real_universe_error_payload(
             error=str(exc),
             universe_id=universe_id,
+            data_snapshot_id=data_snapshot_id,
             as_of_date=resolved_as_of_date,
             start_date=start_date,
             end_date=end_date,
@@ -319,6 +329,7 @@ def run_real_biotech_portfolio_backtest(
         return _real_universe_error_payload(
             error=str(exc),
             universe_id=universe_id,
+            data_snapshot_id=data_snapshot_id,
             as_of_date=resolved_as_of_date,
             start_date=start_date,
             end_date=end_date,
@@ -332,6 +343,7 @@ def run_real_biotech_portfolio_backtest(
                 f"as of {resolved_as_of_date}"
             ),
             universe_id=universe_id,
+            data_snapshot_id=data_snapshot_id,
             as_of_date=resolved_as_of_date,
             start_date=start_date,
             end_date=end_date,
@@ -343,6 +355,7 @@ def run_real_biotech_portfolio_backtest(
         start_date=start_date,
         end_date=end_date,
         universe_id=universe_id,
+        data_snapshot_id=data_snapshot_id,
         tickers=tickers,
         strategy_id=REAL_MULTIFACTOR_STRATEGY_ID,
         data_mode="real",
