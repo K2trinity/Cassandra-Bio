@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import * as d3 from 'd3';
-import { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, SignalMarker, TradeMarker } from './types';
+import { OHLCRow, BiotechEvent, HoverData, RangeSelection, AnomalySignal, SignalMarker, TradeMarker, ChartDisplayMode } from './types';
 
 interface PlacedEvent extends BiotechEvent {
   px: number; // canvas x
@@ -17,6 +17,7 @@ interface PlacedEvent extends BiotechEvent {
 interface Props {
   ohlcData: OHLCRow[];
   events?: BiotechEvent[] | null;
+  displayMode?: ChartDisplayMode;
   onEventClick?: (event: BiotechEvent) => void;
   onAnomalyDetected?: (signal: AnomalySignal) => void;
   onHover?: (date: string | null, ohlc?: HoverData) => void;
@@ -323,6 +324,7 @@ function formatScore(score?: number, useMagnitude = false): string {
 export default function CandlestickChart({
   ohlcData,
   events,
+  displayMode,
   onEventClick,
   onAnomalyDetected,
   onHover,
@@ -336,6 +338,11 @@ export default function CandlestickChart({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const resolvedDisplayMode: ChartDisplayMode = displayMode ?? 'candles_with_backtest';
+  const shouldRenderCandles = resolvedDisplayMode !== 'backtest_only';
+  const shouldRenderEvents = resolvedDisplayMode !== 'backtest_only';
+  const shouldRenderBacktestLine = resolvedDisplayMode !== 'candles_only';
+  const shouldRenderTradeAndSignalOverlays = resolvedDisplayMode === 'candles_with_backtest';
 
   // Refs for interaction state
   const placedRef = useRef<PlacedEvent[]>([]);
@@ -420,7 +427,7 @@ export default function CandlestickChart({
   useEffect(() => {
     if (!displayOhlcData || displayOhlcData.length === 0) return;
     drawChart(displayOhlcData, events || [], timeframeDateByDate, activeTimeframe);
-  }, [displayOhlcData, events, highlightedEventId, equityCurve, signals, trades, timeframeDateByDate, activeTimeframe]);
+  }, [displayOhlcData, events, highlightedEventId, equityCurve, signals, trades, timeframeDateByDate, activeTimeframe, resolvedDisplayMode]);
 
   function drawChart(
     rawData: OHLCRow[],
@@ -505,7 +512,7 @@ export default function CandlestickChart({
       timeframe,
     );
 
-    if (mappedEquityCurve.length > 0) {
+    if (shouldRenderBacktestLine && mappedEquityCurve.length > 0) {
       const baseEquity = mappedEquityCurve[0].equity;
       if (Number.isFinite(baseEquity) && baseEquity !== 0) {
         const yEquityReturn = d3.scaleLinear()
@@ -546,24 +553,26 @@ export default function CandlestickChart({
     const candleWidth = Math.max(1.5, (width / data.length) * 0.65);
 
     // Candlesticks
-    const candles = g.selectAll('.candle').data(data).enter().append('g').attr('class', 'candle');
+    if (shouldRenderCandles) {
+      const candles = g.selectAll('.candle').data(data).enter().append('g').attr('class', 'candle');
 
-    candles.append('line')
-      .attr('x1', (d) => x(d.date))
-      .attr('x2', (d) => x(d.date))
-      .attr('y1', (d) => y(d.high))
-      .attr('y2', (d) => y(d.low))
-      .attr('stroke', (d) => (d.close >= d.open ? '#00e676' : '#ff5252'))
-      .attr('stroke-width', 1);
+      candles.append('line')
+        .attr('x1', (d) => x(d.date))
+        .attr('x2', (d) => x(d.date))
+        .attr('y1', (d) => y(d.high))
+        .attr('y2', (d) => y(d.low))
+        .attr('stroke', (d) => (d.close >= d.open ? '#00e676' : '#ff5252'))
+        .attr('stroke-width', 1);
 
-    candles.append('rect')
-      .attr('x', (d) => x(d.date) - candleWidth / 2)
-      .attr('y', (d) => y(Math.max(d.open, d.close)))
-      .attr('width', candleWidth)
-      .attr('height', (d) => Math.max(1, Math.abs(y(d.open) - y(d.close))))
-      .attr('fill', (d) => (d.close >= d.open ? '#00e676' : '#ff5252'));
+      candles.append('rect')
+        .attr('x', (d) => x(d.date) - candleWidth / 2)
+        .attr('y', (d) => y(Math.max(d.open, d.close)))
+        .attr('width', candleWidth)
+        .attr('height', (d) => Math.max(1, Math.abs(y(d.open) - y(d.close))))
+        .attr('fill', (d) => (d.close >= d.open ? '#00e676' : '#ff5252'));
+    }
 
-    if (trades && trades.length > 0) {
+    if (shouldRenderTradeAndSignalOverlays && trades && trades.length > 0) {
       const tradeLayer = g.insert('g', '.candle').attr('class', 'trade-layer');
       trades.forEach((trade) => {
         const entryDate = mapOverlayDateToTimeframe(trade.entry_date, dateToOhlc, overlayDateMap, timeframe);
@@ -590,7 +599,7 @@ export default function CandlestickChart({
       });
     }
 
-    if (signals && signals.length > 0) {
+    if (shouldRenderTradeAndSignalOverlays && signals && signals.length > 0) {
       const signalLayer = g.append('g').attr('class', 'signal-layer');
       signals.forEach((signalItem) => {
         if (signalItem.signal === 0) return;
@@ -620,13 +629,15 @@ export default function CandlestickChart({
 
     // Place events overlaid on K-line
     const eventsByDate = new Map<string, BiotechEvent[]>();
-    for (const evt of eventList) {
-      const eventDate = mapOverlayDateToTimeframe(evt.date, dateToOhlc, overlayDateMap, timeframe);
-      if (!eventDate) continue;
+    if (shouldRenderEvents) {
+      for (const evt of eventList) {
+        const eventDate = mapOverlayDateToTimeframe(evt.date, dateToOhlc, overlayDateMap, timeframe);
+        if (!eventDate) continue;
 
-      const arr = eventsByDate.get(eventDate) || [];
-      arr.push(evt);
-      eventsByDate.set(eventDate, arr);
+        const arr = eventsByDate.get(eventDate) || [];
+        arr.push(evt);
+        eventsByDate.set(eventDate, arr);
+      }
     }
 
     const placed: PlacedEvent[] = [];
@@ -671,12 +682,14 @@ export default function CandlestickChart({
       }
     }
 
-    placedRef.current = placed;
+    placedRef.current = shouldRenderEvents ? placed : [];
 
-    quadtreeRef.current = d3.quadtree<PlacedEvent>()
-      .x((d) => d.px)
-      .y((d) => d.py)
-      .addAll(placed);
+    quadtreeRef.current = shouldRenderEvents
+      ? d3.quadtree<PlacedEvent>()
+        .x((d) => d.px)
+        .y((d) => d.py)
+        .addAll(placed)
+      : null;
 
     const canvas = canvasRef.current;
     if (canvas) {
@@ -925,7 +938,7 @@ export default function CandlestickChart({
       });
 
     // Anomaly detection
-    detectAnomalies(data, eventList);
+    detectAnomalies(data, shouldRenderEvents ? eventList : []);
   }
 
   function detectAnomalies(data: any[], eventList: BiotechEvent[]) {

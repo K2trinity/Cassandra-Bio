@@ -45,6 +45,41 @@ def test_kline_chart_exposes_day_week_month_timeframe_controls():
         assert label in bundle
 
 
+def test_kline_chart_display_modes_hide_candles_and_overlays():
+    repo_root = Path(__file__).resolve().parents[1]
+    types_source = (repo_root / "src/kline/chart/types.ts").read_text()
+    entry_source = (repo_root / "src/kline/chart/index.tsx").read_text()
+    chart_source = (repo_root / "src/kline/chart/CandlestickChart.tsx").read_text()
+    bundle = (repo_root / "static/vendor/pokie-chart.umd.js").read_text()
+
+    assert "ChartDisplayMode = 'candles_with_backtest' | 'backtest_only' | 'candles_only'" in types_source
+    assert "displayMode?: ChartDisplayMode" in types_source
+    assert "ChartDisplayMode" in entry_source
+    assert "displayMode={config.displayMode}" in entry_source
+
+    for expected in [
+        "resolvedDisplayMode",
+        "shouldRenderCandles",
+        "shouldRenderEvents",
+        "shouldRenderBacktestLine",
+        "shouldRenderTradeAndSignalOverlays",
+        "resolvedDisplayMode !== 'backtest_only'",
+        "resolvedDisplayMode !== 'candles_only'",
+        "resolvedDisplayMode === 'candles_with_backtest'",
+    ]:
+        assert expected in chart_source
+
+    for expected in [
+        "candles_with_backtest",
+        "backtest_only",
+        "candles_only",
+        "displayMode",
+        "trade-layer",
+        "signal-layer",
+    ]:
+        assert expected in bundle
+
+
 def test_static_kline_bundle_registers_without_node_process_global():
     node = shutil.which("node")
     if node is None:
