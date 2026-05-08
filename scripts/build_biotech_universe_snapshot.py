@@ -83,6 +83,7 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
     conn = duckdb.connect(str(db_path))
     try:
         conn.execute("BEGIN TRANSACTION")
+        new_member_to = _next_member_to_date(conn, snapshot)
         conn.execute(
             """
             DELETE FROM universe_membership
@@ -141,13 +142,14 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
                     membership_source,
                     as_of_date
                 )
-                VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 [
                     snapshot.universe_id,
                     member.security_id,
                     member.ticker,
                     snapshot.as_of_date,
+                    new_member_to,
                     ",".join(member.source_memberships),
                     snapshot.as_of_date,
                 ],
@@ -158,6 +160,19 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
         raise
     finally:
         conn.close()
+
+
+def _next_member_to_date(conn, snapshot: UniverseSnapshot) -> str | None:
+    row = conn.execute(
+        """
+        SELECT CAST(MIN(as_of_date) - INTERVAL 1 DAY AS VARCHAR)
+        FROM universe_snapshots
+        WHERE universe_id = ?
+          AND as_of_date > ?
+        """,
+        [snapshot.universe_id, snapshot.as_of_date],
+    ).fetchone()
+    return row[0] if row is not None else None
 
 
 def _expire_replaced_members(

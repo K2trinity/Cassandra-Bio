@@ -353,6 +353,135 @@ def test_cross_date_refresh_expires_members_missing_from_new_snapshot(tmp_path):
     assert mrna_range == ("2026-05-08", "2026-05-08")
 
 
+def test_out_of_order_rebuild_bounds_membership_before_next_snapshot(tmp_path):
+    import duckdb
+
+    from scripts.build_biotech_universe_snapshot import build_snapshot_from_csvs
+    from src.backtest.universe import load_universe_tickers
+
+    xbi_path = tmp_path / "xbi.csv"
+    ibb_path = tmp_path / "ibb.csv"
+    listings_path = tmp_path / "exchange_listings.csv"
+    db_path = tmp_path / "research.duckdb"
+    _write_csv(
+        listings_path,
+        [
+            {
+                "ticker": "XBI",
+                "company_name": "SPDR S&P Biotech ETF",
+                "exchange": "NYSEARCA",
+                "asset_type": "ETF",
+            }
+        ],
+    )
+    _write_csv(ibb_path, [])
+    _write_csv(
+        xbi_path,
+        [
+            {
+                "ticker": "MRNA",
+                "company_name": "Moderna, Inc.",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+    build_snapshot_from_csvs(
+        xbi_holdings=xbi_path,
+        ibb_holdings=ibb_path,
+        exchange_listings=listings_path,
+        db_path=db_path,
+        as_of_date="2026-05-08",
+    )
+
+    _write_csv(
+        xbi_path,
+        [
+            {
+                "ticker": "VRTX",
+                "company_name": "Vertex Pharmaceuticals Incorporated",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+    build_snapshot_from_csvs(
+        xbi_holdings=xbi_path,
+        ibb_holdings=ibb_path,
+        exchange_listings=listings_path,
+        db_path=db_path,
+        as_of_date="2026-05-09",
+    )
+
+    _write_csv(
+        xbi_path,
+        [
+            {
+                "ticker": "MRNA",
+                "company_name": "Moderna, Inc.",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            },
+            {
+                "ticker": "VRTX",
+                "company_name": "Vertex Pharmaceuticals Incorporated",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            },
+        ],
+    )
+    build_snapshot_from_csvs(
+        xbi_holdings=xbi_path,
+        ibb_holdings=ibb_path,
+        exchange_listings=listings_path,
+        db_path=db_path,
+        as_of_date="2026-05-08",
+    )
+
+    assert load_universe_tickers(
+        db_path=db_path,
+        universe_id="biotech_us_v1",
+        as_of_date="2026-05-09",
+    ) == ("VRTX",)
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        d1_ranges = conn.execute(
+            """
+            SELECT
+                ticker,
+                CAST(member_from AS VARCHAR),
+                CAST(member_to AS VARCHAR)
+            FROM universe_membership
+            WHERE universe_id = 'biotech_us_v1'
+              AND member_from = DATE '2026-05-08'
+            ORDER BY ticker
+            """
+        ).fetchall()
+        vrtx_ranges = conn.execute(
+            """
+            SELECT
+                CAST(member_from AS VARCHAR),
+                CAST(member_to AS VARCHAR)
+            FROM universe_membership
+            WHERE universe_id = 'biotech_us_v1'
+              AND ticker = 'VRTX'
+            ORDER BY member_from
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert d1_ranges == [
+        ("MRNA", "2026-05-08", "2026-05-08"),
+        ("VRTX", "2026-05-08", "2026-05-08"),
+    ]
+    assert vrtx_ranges == [
+        ("2026-05-08", "2026-05-08"),
+        ("2026-05-09", None),
+    ]
+
+
 def test_read_rows_rejects_sources_outside_approved_snapshot_inputs(tmp_path):
     from scripts.build_biotech_universe_snapshot import _read_rows
 
