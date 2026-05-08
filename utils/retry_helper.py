@@ -255,7 +255,7 @@ SEARCH_API_RETRY_CONFIG = RetryConfig(
     max_delay=25.0        # Cap at 25 seconds
 )
 
-# Database Retry Configuration (Neo4j, Redis)
+# Database Retry Configuration (Redis)
 DB_RETRY_CONFIG = RetryConfig(
     max_retries=5,        # Multiple retries for database operations
     initial_delay=1.0,    # Fast retry for local database connections

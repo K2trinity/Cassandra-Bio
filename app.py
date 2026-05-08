@@ -10,7 +10,6 @@ Architecture:
 - Flask: REST API server
 - SocketIO: Real-time progress updates
 - LangGraph: Multi-agent orchestration workflow
-- Neo4j: Knowledge graph storage (optional)
 """
 
 import os
@@ -22,7 +21,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 import markdown
 
 # ── Force unbuffered output so VSCode integrated terminal shows logs in real time
@@ -46,15 +45,6 @@ from config import Settings
 # Import the core LangGraph workflow
 from src.services.workflow_service import WorkflowService
 _workflow_service = WorkflowService()
-
-# Conditionally import Neo4j GraphManager
-try:
-    from src.graph.manager import GraphManager
-    NEO4J_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"GraphManager import failed: {e}. Knowledge graph features will use mock data.")
-    NEO4J_AVAILABLE = False
-
 
 # ============================================================================
 # Application Configuration
@@ -282,7 +272,6 @@ class SocketIOLogHandler:
     """
     自定义日志处理器，将运行日志实时推送到前端。
     附加功能：
-    - 图片路径提取（用于法证扫描实时预览）
     - 日志去重（避免重复消息刷屏）
     """
 
@@ -302,7 +291,6 @@ class SocketIOLogHandler:
 
             # Parse log level from message
             level = "info"
-            image_path = None
 
             if "ERROR" in message or "❌" in message or "CRITICAL" in message:
                 level = "error"
@@ -310,22 +298,13 @@ class SocketIOLogHandler:
                 level = "warning"
             elif "SUCCESS" in message or "✅" in message:
                 level = "success"
-            elif "Scanning" in message or "Analyzing figure" in message or "🔍" in message:
+            elif "Scanning" in message or "🔍" in message:
                 level = "scanning"
-                import re as _re
-                # 匹配实际文件名格式：figure_001_p3.png / page_2_img_1.png
-                img_match = _re.search(
-                    r'(figure_\d+[^\s.]*\.(?:png|jpe?g)|page_\d+_img_\d+[^\s.]*\.(?:png|jpe?g))',
-                    message, _re.IGNORECASE
-                )
-                if img_match:
-                    image_path = f'/static/temp/{img_match.group(1)}'
 
             clean_msg = message.strip()
             _emit_event('log', {
                 'level': level,
                 'message': clean_msg,
-                'image_path': image_path,
                 'timestamp': datetime.now().isoformat()
             })
         except Exception as e:
@@ -356,52 +335,10 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/graph')
-def graph_view():
-    """Knowledge Graph Visualization Page"""
-    return render_template('graph_view.html')
-
-
-@app.route('/graph-debug')
-def graph_debug():
-    """Graph Debugging and Testing Page"""
-    return render_template('graph_debug.html')
-
-
-@app.route('/test-socketio')
-def test_socketio():
-    """SocketIO Testing Page"""
-    return render_template('socketio_test.html')
-
-
 @app.route('/config')
 def config_page():
     """System Configuration Page"""
     return render_template('config.html')
-
-
-@app.route('/static/temp/<path:filename>')
-def serve_temp_image(filename: str):
-    """Serve temporary analysis images for real-time preview"""
-    try:
-        # Try multiple possible locations
-        possible_paths = [
-            Path("downloads") / "temp" / filename,
-            Path("downloads") / filename,
-            Path("temp") / filename,
-            Path("final_reports") / filename
-        ]
-        
-        for img_path in possible_paths:
-            if img_path.exists():
-                return send_file(img_path, mimetype='image/png')
-        
-        logger.warning(f"Image not found: {filename}")
-        return jsonify({"error": "Image not found"}), 404
-        
-    except Exception as e:
-        logger.error(f"Failed to serve image {filename}: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
@@ -620,210 +557,6 @@ def analyze():
             active_analysis["running"] = False
             active_analysis["status"] = "complete"
             active_analysis["completed_at"] = datetime.now().isoformat()
-
-            # ── Persist analysis to Neo4j knowledge graph (non-blocking) ──
-            # Run in a daemon thread so Neo4j connection lag NEVER delays
-            # SocketIO `analysis_complete` event reaching the browser.
-            def _neo4j_write(result=result, query=query):
-                import re as _re
-
-                # ── 1. Resolve drug name ──
-                _drug = (result.get("project_name") or "").strip()
-                if not _drug:
-                    _m = _re.search(
-                        r'(?:analyze|assess|evaluate|investigate|audit)\s+([A-Za-z0-9\-]+)',
-                        query, _re.IGNORECASE)
-                    _drug = _m.group(1).title() if _m else query.split()[0].title()
-                _task_id = active_analysis.get("task_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
-                _created = active_analysis.get("completed_at", datetime.now().isoformat())
-
-                # ── 2. Build graph data structures (nodes + links) ──
-                # Used for both Neo4j write AND local JSON cache
-                _risk_nodes: List[Dict]   = []  # {name, source, target, severity}
-                _rich_entities: List[Dict] = []  # {label, name, rel?, props?}
-                _source_nodes: List[str]   = []  # source IDs
-
-                # ── 2a. Extract from literature findings (compatible with legacy keys) ──
-                _literature_rows = result.get("literature_findings") or result.get("text_evidence", [])
-                for _ev in _literature_rows[:100]:
-                    if not isinstance(_ev, dict):
-                        continue
-
-                    # Risk / finding (primary node)
-                    _risk = (_ev.get("finding_type") or _ev.get("risk_type") or _ev.get("finding") or
-                             _ev.get("signal") or _ev.get("title") or "")[:120]
-                    _src  = (_ev.get("source_file") or _ev.get("source") or _ev.get("pmid") or _ev.get("file") or "")[:80]
-                    _tgt  = (_ev.get("target") or "")[:80]
-                    _mech = (_ev.get("mechanism") or "")[:80]
-                    _sev  = _ev.get("significance") or _ev.get("severity", "")
-
-                    if _risk:
-                        _risk_nodes.append({"name": _risk, "source": _src,
-                                            "target": _tgt, "severity": _sev})
-
-                    # Target / molecular target
-                    if _tgt:
-                        _rich_entities.append({"label": "Target", "name": _tgt})
-                    # Mechanism
-                    if _mech:
-                        _rich_entities.append({"label": "Mechanism", "name": _mech})
-                    # AdverseEvent (separate from generic Risk)
-                    _ae = _ev.get("adverse_event") or _ev.get("ae") or ""
-                    if _ae:
-                        _rich_entities.append({"label": "AdverseEvent", "name": str(_ae)[:120]})
-                    # Disease / indication
-                    _dis = _ev.get("disease") or _ev.get("indication") or _ev.get("condition") or ""
-                    if _dis:
-                        _rich_entities.append({"label": "Disease", "name": str(_dis)[:120]})
-                    # Clinical endpoint
-                    _ep = _ev.get("endpoint") or _ev.get("primary_endpoint") or ""
-                    if _ep:
-                        _rich_entities.append({"label": "Endpoint", "name": str(_ep)[:120]})
-                    # Gene / biomarker
-                    _gene = _ev.get("gene") or _ev.get("biomarker") or _ev.get("protein") or ""
-                    if _gene:
-                        _rich_entities.append({"label": "Gene", "name": str(_gene)[:80]})
-                    # Pathway
-                    _pw = _ev.get("pathway") or ""
-                    if _pw:
-                        _rich_entities.append({"label": "Pathway", "name": str(_pw)[:120]})
-                    # Source ID
-                    if _src:
-                        _source_nodes.append(_src)
-
-                # ── 2b. Extract from harvested_data (Source + Keyword nodes) ──
-                for _h in result.get("harvested_data", [])[:60]:
-                    if not isinstance(_h, dict):
-                        continue
-                    _pid   = _h.get("pmid") or _h.get("nct_id") or _h.get("id") or ""
-                    _title = (_h.get("title") or "")[:120]
-                    if _pid:
-                        _source_nodes.append(str(_pid)[:80])
-                        if _title:
-                            _risk_nodes.append({"name": _title, "source": str(_pid)[:80],
-                                                "target": "", "severity": ""})
-                    # Keywords from abstract headings (simple heuristic)
-                    _kws = _h.get("keywords") or _h.get("mesh_terms") or []
-                    if isinstance(_kws, list):
-                        for _kw in _kws[:5]:
-                            if _kw and isinstance(_kw, str) and len(_kw) > 2:
-                                _rich_entities.append({"label": "Keyword", "name": _kw[:80]})
-                    # Phase / status as endpoint-like node
-                    _phase = _h.get("phase") or _h.get("status") or ""
-                    if _phase and isinstance(_phase, str) and len(_phase) > 2:
-                        _rich_entities.append({"label": "Endpoint",
-                                               "name": f"Phase: {_phase}"[:60]})
-
-                # ── 2c. Extract query-level keywords as Keyword nodes ──
-                _stopwords = {"the", "a", "an", "of", "in", "for", "and", "or",
-                              "to", "is", "are", "be", "with", "analyze", "assess",
-                              "evaluate", "investigate", "audit", "conduct", "strict"}
-                for _qw in _re.findall(r'[A-Za-z][A-Za-z0-9\-]+', query):
-                    if len(_qw) > 3 and _qw.lower() not in _stopwords:
-                        _rich_entities.append({"label": "Keyword", "name": _qw})
-
-                # De-duplicate rich entities list
-                _seen_ents: set = set()
-                _unique_rich: List[Dict] = []
-                for _e in _rich_entities:
-                    _key = (_e["label"], _e["name"].lower())
-                    if _key not in _seen_ents:
-                        _seen_ents.add(_key)
-                        _unique_rich.append(_e)
-
-                # ── 3. Build local JSON cache (always saved, Neo4j independent) ──
-                try:
-                    _cache_dir = Path("cache") / "task_graphs"
-                    _cache_dir.mkdir(parents=True, exist_ok=True)
-                    # Build a flat graph representation for the cache
-                    _cache_nodes: List[Dict] = []
-                    _cache_links: List[Dict] = []
-                    _nid_map: Dict[str, str] = {}  # name:label → node_id
-
-                    def _get_or_add_node(name: str, label: str) -> str:
-                        _k = f"{label}:{name}"
-                        if _k not in _nid_map:
-                            _nid = f"{label.lower()}_{len(_nid_map)}"
-                            _nid_map[_k] = _nid
-                            _cache_nodes.append({"id": _nid, "label": label, "name": name})
-                        return _nid_map[_k]
-
-                    _analysis_nid = _get_or_add_node(_task_id[:30], "Analysis")
-                    _cache_nodes[-1]["query"] = query[:200]
-                    _drug_nid = _get_or_add_node(_drug, "Drug")
-                    _cache_links.append({"source": _analysis_nid,
-                                         "target": _drug_nid, "type": "ANALYZED"})
-
-                    for _rn in _risk_nodes[:80]:
-                        _r_nid = _get_or_add_node(_rn["name"], "Risk")
-                        _cache_links.append({"source": _drug_nid,
-                                              "target": _r_nid, "type": "HAS_RISK"})
-                        if _rn.get("source"):
-                            _s_nid = _get_or_add_node(_rn["source"], "Source")
-                            _cache_links.append({"source": _s_nid,
-                                                  "target": _drug_nid, "type": "REPORTS_FAILURE"})
-                        if _rn.get("target"):
-                            _t_nid = _get_or_add_node(_rn["target"], "Target")
-                            _cache_links.append({"source": _drug_nid,
-                                                  "target": _t_nid, "type": "TARGETS"})
-
-                    for _re2 in _unique_rich[:120]:
-                        _e_nid = _get_or_add_node(_re2["name"], _re2["label"])
-                        _rel_type = {"Disease": "TREATS", "Mechanism": "HAS_MECHANISM",
-                                     "AdverseEvent": "CAUSES_AE", "Endpoint": "HAS_ENDPOINT",
-                                     "Gene": "TARGETS_GENE", "Pathway": "AFFECTS_PATHWAY",
-                                     "Keyword": "ASSOCIATED_WITH",
-                                     "Target": "TARGETS"}.get(_re2["label"], "ASSOCIATED_WITH")
-                        _cache_links.append({"source": _drug_nid,
-                                              "target": _e_nid, "type": _rel_type})
-
-                    _cache_obj = {
-                        "task_id":    _task_id,
-                        "query":      query,
-                        "drug_name":  _drug,
-                        "created_at": _created,
-                        "nodes":      _cache_nodes,
-                        "links":      _cache_links,
-                    }
-                    _cache_path = _cache_dir / f"{_task_id}.json"
-                    with open(_cache_path, "w", encoding="utf-8") as _cf:
-                        json.dump(_cache_obj, _cf, ensure_ascii=False, indent=2)
-                    logger.info(f"💾 Task graph cached locally: {_cache_path.name} "
-                                f"({len(_cache_nodes)} nodes, {len(_cache_links)} links)")
-                except Exception as _ce:
-                    logger.warning(f"Local graph cache write failed: {_ce}")
-
-                # ── 4. Write to Neo4j (optional, skipped if unavailable) ──
-                try:
-                    if NEO4J_AVAILABLE:
-                        _graph = GraphManager()
-                        if _graph.driver:
-                            _graph.add_analysis_task(_task_id, query, _drug, _created)
-                            _graph.link_drug_to_task(_task_id, _drug)
-
-                            _written = 0
-                            for _rn in _risk_nodes[:80]:
-                                if _rn["name"]:
-                                    _graph.add_risk_signal_with_task(
-                                        _task_id, _drug, _rn["name"],
-                                        source=_rn["source"], target=_rn["target"],
-                                        metadata={"severity": _rn["severity"]}
-                                    )
-                                    _written += 1
-
-                            _ent_written = _graph.add_rich_entities(
-                                _task_id, _drug, _unique_rich[:120])
-
-                            logger.success(
-                                f"📊 Neo4j: task [{_task_id}] | drug={_drug} | "
-                                f"{_written} risk signals + {_ent_written} entities written"
-                            )
-                            _graph.close()
-                except Exception as _ge:
-                    logger.warning(f"Neo4j write skipped (will use local cache): {_ge}")
-
-            threading.Thread(target=_neo4j_write, daemon=True, name="neo4j-writer").start()
-
 
             full_report_markdown = ""
             report_path = result.get('final_report_path')
@@ -1674,507 +1407,6 @@ def _legacy_reportlab_convert(markdown_path: Path) -> Path:
 
 
 # ============================================================================
-# Routes: Knowledge Graph API
-# ============================================================================
-
-@app.route('/api/graph/data', methods=['GET'])
-def get_graph_data():
-    """
-    GET /api/graph/data
-    
-    Fetches knowledge graph data from Neo4j for visualization.
-    Falls back to mock data if Neo4j is unavailable.
-    
-    Response:
-        {
-            "success": true,
-            "nodes": [
-                {"id": "Drug_X", "label": "Drug", "name": "Pembrolizumab"},
-                {"id": "AE_1", "label": "AdverseEvent", "name": "Cardiotoxicity"}
-            ],
-            "links": [
-                {"source": "Drug_X", "target": "AE_1", "type": "CAUSES"}
-            ]
-        }
-    """
-    try:
-        if NEO4J_AVAILABLE:
-            # Attempt to connect to Neo4j
-            graph_manager = GraphManager()
-            
-            # Execute Cypher query
-            query = """
-            MATCH (n)-[r]->(m)
-            RETURN n, r, m
-            LIMIT 100
-            """
-            
-            results = graph_manager.query(query)
-            
-            # Format data for frontend
-            nodes = []
-            links = []
-            node_ids = set()
-            
-            for record in results:
-                # Extract nodes
-                source = record['n']
-                target = record['m']
-                relationship = record['r']
-                
-                # Add source node
-                source_id = str(source.id)
-                if source_id not in node_ids:
-                    nodes.append({
-                        'id': source_id,
-                        'label': list(source.labels)[0] if source.labels else 'Unknown',
-                        'name': source.get('name', source_id),
-                        'properties': dict(source)
-                    })
-                    node_ids.add(source_id)
-                
-                # Add target node
-                target_id = str(target.id)
-                if target_id not in node_ids:
-                    nodes.append({
-                        'id': target_id,
-                        'label': list(target.labels)[0] if target.labels else 'Unknown',
-                        'name': target.get('name', target_id),
-                        'properties': dict(target)
-                    })
-                    node_ids.add(target_id)
-                
-                # Add relationship
-                links.append({
-                    'source': source_id,
-                    'target': target_id,
-                    'type': relationship.type,
-                    'properties': dict(relationship)
-                })
-            
-            return jsonify({
-                "success": True,
-                "source": "neo4j",
-                "nodes": nodes,
-                "links": links
-            })
-        
-        else:
-            # Return mock data for demo purposes
-            return _get_mock_graph_data()
-            
-    except Exception as e:
-        logger.warning(f"Failed to fetch Neo4j data: {e}. Returning mock data.")
-        return _get_mock_graph_data()
-
-
-def _get_mock_graph_data() -> Dict[str, Any]:
-    """Returns static mock graph data for frontend testing"""
-    mock_data = {
-        "success": True,
-        "source": "mock",
-        "nodes": [
-            {"id": "drug_1", "label": "Drug", "name": "Pembrolizumab"},
-            {"id": "drug_2", "label": "Drug", "name": "Nivolumab"},
-            {"id": "target_1", "label": "Target", "name": "PD-1 Receptor"},
-            {"id": "ae_1", "label": "AdverseEvent", "name": "Cardiotoxicity"},
-            {"id": "ae_2", "label": "AdverseEvent", "name": "Hepatotoxicity"},
-            {"id": "trial_1", "label": "ClinicalTrial", "name": "NCT02345678"},
-            {"id": "paper_1", "label": "Paper", "name": "PMID:34567890"}
-        ],
-        "links": [
-            {"source": "drug_1", "target": "target_1", "type": "TARGETS"},
-            {"source": "drug_2", "target": "target_1", "type": "TARGETS"},
-            {"source": "drug_1", "target": "ae_1", "type": "CAUSES"},
-            {"source": "drug_1", "target": "ae_2", "type": "CAUSES"},
-            {"source": "trial_1", "target": "drug_1", "type": "STUDIES"},
-            {"source": "paper_1", "target": "ae_1", "type": "REPORTS"}
-        ]
-    }
-    
-    return jsonify(mock_data)
-
-
-@app.route('/test-simple', methods=['GET'])
-def test_simple():
-    """Simple test endpoint to verify Flask is working"""
-    return jsonify({
-        "status": "ok",
-        "message": "Flask is working!",
-        "neo4j_available": NEO4J_AVAILABLE,
-        "timestamp": datetime.now().isoformat()
-    })
-
-
-@app.route('/api/graph/global', methods=['GET'])
-def get_global_graph():
-    """GET /api/graph/global — 全局知识图谱（真实 Neo4j 数据，降级到 Mock）"""
-    try:
-        if NEO4J_AVAILABLE:
-            gm = GraphManager()
-            if gm.driver:
-                data = gm.get_global_graph_data(limit=300)
-                gm.close()
-                if data["nodes"]:
-                    return jsonify({
-                        "success": True,
-                        "source": "neo4j",
-                        "totalNodes": len(data["nodes"]),
-                        "totalRelationships": len(data["links"]),
-                        "nodes": data["nodes"],
-                        "links": data["links"]
-                    })
-        logger.info("📊 Neo4j empty/unavailable — returning mock global graph")
-        return jsonify(_get_mock_global_graph())
-    except Exception as e:
-        logger.error(f"Failed to fetch global graph: {e}")
-        return jsonify(_get_mock_global_graph())
-
-
-@app.route('/api/graph/tasks', methods=['GET'])
-def get_graph_tasks():
-    """GET /api/graph/tasks — 列出所有已分析任务（Neo4j 优先，降级到本地 JSON 缓存）"""
-    try:
-        tasks = []
-        source = "empty"
-
-        # ── 优先从 Neo4j 读取 ──
-        if NEO4J_AVAILABLE:
-            try:
-                gm = GraphManager()
-                if gm.driver:
-                    tasks = gm.get_all_tasks()
-                    gm.close()
-                    if tasks:
-                        source = "neo4j"
-            except Exception as _ne:
-                logger.warning(f"Neo4j task list failed, falling back to cache: {_ne}")
-
-        # ── 降级：从本地 JSON 缓存读取 ──
-        if not tasks:
-            _cache_dir = Path("cache") / "task_graphs"
-            if _cache_dir.exists():
-                _files = sorted(_cache_dir.glob("*.json"),
-                                key=lambda p: p.stat().st_mtime, reverse=True)
-                for _fp in _files[:100]:
-                    try:
-                        with open(_fp, "r", encoding="utf-8") as _cf:
-                            _c = json.load(_cf)
-                        tasks.append({
-                            "task_id":    _c.get("task_id", _fp.stem),
-                            "query":      _c.get("query", ""),
-                            "drug_name":  _c.get("drug_name", ""),
-                            "created_at": _c.get("created_at", ""),
-                            "drug_count": sum(1 for n in _c.get("nodes", [])
-                                             if n.get("label") == "Drug"),
-                            "risk_count": sum(1 for n in _c.get("nodes", [])
-                                             if n.get("label") == "Risk"),
-                            "node_count": len(_c.get("nodes", [])),
-                        })
-                    except Exception:
-                        pass
-                if tasks:
-                    source = "cache"
-
-        return jsonify({"success": True, "source": source, "tasks": tasks})
-    except Exception as e:
-        logger.error(f"Failed to get tasks: {e}")
-        return jsonify({"success": False, "tasks": [], "error": str(e)})
-
-
-@app.route('/api/graph/task/<task_id>', methods=['GET'])
-def get_task_graph_api(task_id: str):
-    """GET /api/graph/task/<task_id> — 获取特定分析任务的子图谱（Neo4j 优先，降级本地缓存）"""
-    try:
-        # ── 优先从 Neo4j 读取 ──
-        if NEO4J_AVAILABLE:
-            try:
-                gm = GraphManager()
-                if gm.driver:
-                    data = gm.get_task_graph(task_id)
-                    gm.close()
-                    if data["nodes"]:
-                        return jsonify({"success": True, "source": "neo4j",
-                                        "task_id": task_id,
-                                        "nodes": data["nodes"], "links": data["links"]})
-            except Exception as _ne:
-                logger.warning(f"Neo4j task graph failed, falling back to cache: {_ne}")
-
-        # ── 降级：从本地 JSON 缓存读取 ──
-        _cache_path = Path("cache") / "task_graphs" / f"{task_id}.json"
-        if _cache_path.exists():
-            try:
-                with open(_cache_path, "r", encoding="utf-8") as _cf:
-                    _c = json.load(_cf)
-                return jsonify({
-                    "success": True,
-                    "source":  "cache",
-                    "task_id": task_id,
-                    "query":   _c.get("query", ""),
-                    "nodes":   _c.get("nodes", []),
-                    "links":   _c.get("links", []),
-                })
-            except Exception as _ce:
-                logger.error(f"Cache read failed for task {task_id}: {_ce}")
-
-        return jsonify({"success": False, "nodes": [], "links": [],
-                        "error": "Task not found in Neo4j or local cache"})
-    except Exception as e:
-        logger.error(f"Failed to get task graph {task_id}: {e}")
-        return jsonify({"success": False, "nodes": [], "links": [], "error": str(e)})
-
-
-
-@app.route('/api/graph/drug/<drug_name>', methods=['GET'])
-def get_drug_graph(drug_name: str):
-    """
-    GET /api/graph/drug/<drug_name>
-    
-    ⭐️ 方案 B：药物专项图谱（Drill Down）
-    只返回与特定药物相关的子图，包括：
-    - 该药物的临床试验
-    - 相关论文和作者
-    - 不良事件报告
-    - 监管机构警告
-    - 可疑的引用链
-    
-    当用户在Demo中输入 "Simufilam" 并开始分析时，图谱动态刷新为这个视图。
-    
-    Response:
-        {
-            "success": true,
-            "drug": "Simufilam",
-            "nodes": [...],
-            "links": [...]
-        }
-    """
-    try:
-        if NEO4J_AVAILABLE:
-            gm = GraphManager()
-            if gm.driver:
-                data = gm.get_drug_subgraph(drug_name)
-                gm.close()
-                if data["nodes"]:
-                    return jsonify({
-                        "success": True,
-                        "source": "neo4j",
-                        "drug": drug_name,
-                        "nodes": data["nodes"],
-                        "links": data["links"]
-                    })
-        logger.info(f"📊 Neo4j empty/unavailable — returning mock drug graph for: {drug_name}")
-        return jsonify(_get_mock_drug_graph(drug_name))
-
-    except Exception as e:
-        logger.error(f"Failed to fetch drug graph for {drug_name}: {e}")
-        return jsonify(_get_mock_drug_graph(drug_name))
-
-
-@app.route('/api/graph/cross-query', methods=['GET'])
-def get_cross_query():
-    """
-    GET /api/graph/cross-query
-
-    跨任务关联查询 — 利用 Neo4j 图数据库跨越所有历史分析任务做关联分析。
-
-    Query params:
-        type  : shared_targets | shared_risks | drug_compare | top_entities | summary
-        drug1 : 药物名（drug_compare 用）
-        drug2 : 药物名（drug_compare 用）
-        label : 节点类型（top_entities 用，默认 Keyword）
-        min_drugs : 最少共享药物数（shared_* 用，默认 2）
-        limit : 最大返回条数（默认 20）
-
-    Examples:
-        /api/graph/cross-query?type=shared_targets
-        /api/graph/cross-query?type=shared_risks&min_drugs=2
-        /api/graph/cross-query?type=drug_compare&drug1=Nivolumab&drug2=Pembrolizumab
-        /api/graph/cross-query?type=top_entities&label=AdverseEvent&limit=15
-        /api/graph/cross-query?type=summary
-    """
-    qtype     = request.args.get('type', 'summary')
-    drug1     = request.args.get('drug1', '')
-    drug2     = request.args.get('drug2', '')
-    label     = request.args.get('label', 'Keyword')
-    min_drugs = int(request.args.get('min_drugs', 2))
-    limit     = int(request.args.get('limit', 20))
-
-    try:
-        if not NEO4J_AVAILABLE:
-            return jsonify({"success": False, "error": "Neo4j driver not installed",
-                            "hint": "pip install neo4j"}), 503
-
-        gm = GraphManager()
-        if not gm.driver:
-            return jsonify({"success": False,
-                            "error": "Neo4j unavailable — is the container running?",
-                            "hint": "docker-compose up neo4j"}), 503
-
-        if qtype == 'shared_targets':
-            data = gm.get_shared_targets(min_drugs=min_drugs, limit=limit)
-            gm.close()
-            return jsonify({"success": True, "type": qtype,
-                            "min_drugs": min_drugs, "results": data,
-                            "count": len(data)})
-
-        elif qtype == 'shared_risks':
-            data = gm.get_shared_risks(min_drugs=min_drugs, limit=limit)
-            gm.close()
-            return jsonify({"success": True, "type": qtype,
-                            "min_drugs": min_drugs, "results": data,
-                            "count": len(data)})
-
-        elif qtype == 'drug_compare':
-            if not drug1 or not drug2:
-                gm.close()
-                return jsonify({"success": False,
-                                "error": "drug_compare requires drug1 and drug2 params"}), 400
-            data = gm.get_drug_comparison(drug1, drug2, limit=limit)
-            gm.close()
-            return jsonify({"success": True, "type": qtype,
-                            "drug1": drug1, "drug2": drug2,
-                            "results": data, "count": len(data)})
-
-        elif qtype == 'top_entities':
-            data = gm.get_top_entities(label=label, limit=limit)
-            gm.close()
-            return jsonify({"success": True, "type": qtype,
-                            "label": label, "results": data,
-                            "count": len(data)})
-
-        elif qtype == 'summary':
-            data = gm.get_cross_task_summary()
-            gm.close()
-            return jsonify({"success": True, "type": qtype, **data})
-
-        else:
-            gm.close()
-            return jsonify({"success": False,
-                            "error": f"Unknown type '{qtype}'",
-                            "valid_types": ["shared_targets", "shared_risks",
-                                            "drug_compare", "top_entities", "summary"]}), 400
-
-    except Exception as e:
-        logger.error(f"Cross-query failed [{qtype}]: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-def _get_mock_global_graph() -> Dict[str, Any]:
-    """返回模拟的全局欺诈网络数据（返回字典，不是jsonify）"""
-    mock_data = {
-        "success": True,
-        "source": "mock",
-        "totalNodes": 50,
-        "totalRelationships": 87,
-        "displayedNodes": 20,
-        "nodes": [
-            # 药物节点
-            {"id": "drug_1", "label": "Drug", "name": "Simufilam", "group": "Drug", "properties": {"company": "Cassava Sciences"}},
-            {"id": "drug_2", "label": "Drug", "name": "Pembrolizumab", "group": "Drug", "properties": {"company": "Merck"}},
-            {"id": "drug_3", "label": "Drug", "name": "Nivolumab", "group": "Drug", "properties": {"company": "BMS"}},
-            
-            # 作者节点（可疑的共享作者）
-            {"id": "author_1", "label": "Author", "name": "Dr. Hoau-Yan Wang", "group": "Author", "properties": {"suspicious": True}},
-            {"id": "author_2", "label": "Author", "name": "Dr. Lindsay Burns", "group": "Author", "properties": {"suspicious": True}},
-            
-            # 论文节点
-            {"id": "paper_1", "label": "Paper", "name": "PMID:34567890", "group": "Paper", "properties": {"retracted": True}},
-            {"id": "paper_2", "label": "Paper", "name": "PMID:34567891", "group": "Paper", "properties": {"pubpeer_flags": 12}},
-            {"id": "paper_3", "label": "Paper", "name": "PMID:34567892", "group": "Paper", "properties": {}},
-            
-            # 临床试验
-            {"id": "trial_1", "label": "ClinicalTrial", "name": "NCT04994483", "group": "ClinicalTrial", "properties": {}},
-            {"id": "trial_2", "label": "ClinicalTrial", "name": "NCT02345678", "group": "ClinicalTrial", "properties": {}},
-            
-            # 不良事件
-            {"id": "ae_1", "label": "AdverseEvent", "name": "Cardiotoxicity", "group": "AdverseEvent", "properties": {"severity": "high"}},
-            {"id": "ae_2", "label": "AdverseEvent", "name": "Hepatotoxicity", "group": "AdverseEvent", "properties": {"severity": "medium"}},
-            
-            # 监管警告
-            {"id": "warning_1", "label": "RegulatoryWarning", "name": "FDA Warning Letter 2023", "group": "RegulatoryWarning", "properties": {}},
-            
-            # 公司节点
-            {"id": "company_1", "label": "Company", "name": "Cassava Sciences", "group": "Company", "properties": {"suspicious": True}},
-            {"id": "company_2", "label": "Company", "name": "Merck", "group": "Company", "properties": {}},
-        ],
-        "links": [
-            # 药物-作者关系（发现欺诈网络的关键）
-            {"source": "drug_1", "target": "author_1", "type": "RESEARCHED_BY"},
-            {"source": "drug_2", "target": "author_1", "type": "RESEARCHED_BY"},  # 🚨 同一作者为多个药物背书
-            
-            # 药物-论文关系
-            {"source": "drug_1", "target": "paper_1", "type": "SUPPORTED_BY"},
-            {"source": "drug_1", "target": "paper_2", "type": "SUPPORTED_BY"},
-            
-            # 作者-论文关系
-            {"source": "author_1", "target": "paper_1", "type": "AUTHORED"},
-            {"source": "author_2", "target": "paper_1", "type": "AUTHORED"},
-            {"source": "author_1", "target": "paper_2", "type": "AUTHORED"},
-            
-            # 药物-临床试验关系
-            {"source": "drug_1", "target": "trial_1", "type": "TESTED_IN"},
-            {"source": "drug_2", "target": "trial_2", "type": "TESTED_IN"},
-            
-            # 药物-不良事件关系
-            {"source": "drug_1", "target": "ae_1", "type": "CAUSES"},
-            {"source": "drug_2", "target": "ae_1", "type": "CAUSES"},
-            {"source": "drug_2", "target": "ae_2", "type": "CAUSES"},
-            
-            # 药物-公司关系
-            {"source": "drug_1", "target": "company_1", "type": "PRODUCED_BY"},
-            {"source": "drug_2", "target": "company_2", "type": "PRODUCED_BY"},
-            
-            # 公司-警告关系
-            {"source": "company_1", "target": "warning_1", "type": "RECEIVED"},
-        ],
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    return mock_data
-
-
-def _get_mock_drug_graph(drug_name: str) -> Dict[str, Any]:
-    """返回模拟的特定药物图谱数据（返回字典，不是jsonify）"""
-    mock_data = {
-        "success": True,
-        "source": "mock",
-        "drug": drug_name,
-        "nodes": [
-            # 中心药物节点
-            {"id": "drug_center", "label": "Drug", "name": drug_name, "group": "Drug", "isDrugCenter": True, "properties": {}},
-            
-            # 相关论文
-            {"id": "paper_1", "label": "Paper", "name": f"Study of {drug_name}", "group": "Paper", "properties": {"year": 2023}},
-            {"id": "paper_2", "label": "Paper", "name": f"{drug_name} efficacy trial", "group": "Paper", "properties": {"year": 2022}},
-            
-            # 作者
-            {"id": "author_1", "label": "Author", "name": "Dr. Smith", "group": "Author", "properties": {}},
-            {"id": "author_2", "label": "Author", "name": "Dr. Johnson", "group": "Author", "properties": {}},
-            
-            # 临床试验
-            {"id": "trial_1", "label": "ClinicalTrial", "name": "NCT12345678", "group": "ClinicalTrial", "properties": {"phase": "III"}},
-            
-            # 不良事件
-            {"id": "ae_1", "label": "AdverseEvent", "name": "Nausea", "group": "AdverseEvent", "properties": {"frequency": "common"}},
-            {"id": "ae_2", "label": "AdverseEvent", "name": "Dizziness", "group": "AdverseEvent", "properties": {"frequency": "rare"}},
-        ],
-        "links": [
-            {"source": "drug_center", "target": "paper_1", "type": "SUPPORTED_BY"},
-            {"source": "drug_center", "target": "paper_2", "type": "SUPPORTED_BY"},
-            {"source": "drug_center", "target": "trial_1", "type": "TESTED_IN"},
-            {"source": "drug_center", "target": "ae_1", "type": "CAUSES"},
-            {"source": "drug_center", "target": "ae_2", "type": "CAUSES"},
-            {"source": "author_1", "target": "paper_1", "type": "AUTHORED"},
-            {"source": "author_2", "target": "paper_1", "type": "AUTHORED"},
-            {"source": "author_1", "target": "paper_2", "type": "AUTHORED"},
-        ],
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    return mock_data
-
-
-# ============================================================================
 # Routes: Configuration API
 # ============================================================================
 
@@ -2235,54 +1467,6 @@ def test_gemini():
 
 
 
-@app.route('/api/test-neo4j', methods=['POST'])
-def test_neo4j():
-    """
-    POST /api/test-neo4j
-    
-    Tests Neo4j database connection.
-    
-    Request Body:
-        {
-            "uri": "bolt://localhost:7687",
-            "user": "neo4j",
-            "password": "password",
-            "database": "neo4j"
-        }
-    
-    Response:
-        {"success": true, "message": "Connection successful"}
-    """
-    try:
-        data = request.json
-        
-        from neo4j import GraphDatabase
-        from neo4j import basic_auth
-        
-        driver = GraphDatabase.driver(
-            data.get('uri'),
-            auth=basic_auth(data.get('user'), data.get('password'))
-        )
-        
-        # Test connection
-        with driver.session(database=data.get('database', 'neo4j')) as session:
-            result = session.run("RETURN 1 AS test")
-            test_value = result.single()['test']
-        
-        driver.close()
-        
-        return jsonify({
-            "success": True,
-            "message": "Neo4j connection successful"
-        })
-        
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
 @app.route('/api/test-redis', methods=['POST'])
 def test_redis():
     """
@@ -2326,7 +1510,6 @@ def save_config():
     Request Body:
         {
             "gemini": {...},
-            "neo4j": {...},
             "redis": {...},
             "engines": {...}
         }
@@ -2363,7 +1546,6 @@ def get_system_config():
     Response:
         {
             "gemini": {...},
-            "neo4j": {...},
             "redis": {...}
         }
     """
@@ -2373,11 +1555,6 @@ def get_system_config():
                 "model": getattr(config, 'REPORT_MODEL_NAME', 'gemini-2.5-pro'),
                 "temperature": getattr(config, 'REPORT_TEMPERATURE', 0.7),
                 "max_tokens": getattr(config, 'REPORT_MAX_TOKENS', 8192)
-            },
-            "neo4j": {
-                "uri": getattr(config, 'NEO4J_URI', 'bolt://localhost:7687'),
-                "user": getattr(config, 'NEO4J_USER', 'neo4j'),
-                "database": getattr(config, 'NEO4J_DATABASE', 'neo4j')
             },
             "redis": {
                 "uri": getattr(config, 'REDIS_URL', 'redis://localhost:6379/0')
@@ -2530,86 +1707,6 @@ def handle_request_report(data):
 
 
 # ============================================================================
-# Real-Time Graph Updates (实时图谱推送)
-# ============================================================================
-
-def emit_graph_node(node_type: str, node_name: str, properties: Dict = None):
-    """
-    🔥 实时推送新发现的节点到前端图谱
-    
-    当BioHarvestEngine发现新的论文、作者、临床试验时，
-    这个函数会立即通知前端，让图谱在评委眼前实时生长！
-    
-    Args:
-        node_type: 节点类型 (Drug, Paper, Author, ClinicalTrial, AdverseEvent, etc.)
-        node_name: 节点名称
-        properties: 节点属性字典
-        
-    Example:
-        emit_graph_node('Paper', 'PMID:34567890', {'title': '...', 'year': 2023})
-    """
-    try:
-        node_data = {
-            'id': f"{node_type}_{node_name.replace(':', '_').replace(' ', '_')}",
-            'label': node_type,
-            'name': node_name,
-            'properties': properties or {},
-            'group': node_type
-        }
-        
-        socketio.emit('graph_update', {
-            'type': 'node',
-            'data': node_data,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        logger.info(f"📊 Graph Update: New {node_type} → {node_name}")
-        
-    except Exception as e:
-        logger.error(f"Failed to emit graph node: {e}")
-
-
-def emit_graph_relationship(source_type: str, source_name: str, 
-                            target_type: str, target_name: str, 
-                            relationship_type: str, properties: Dict = None):
-    """
-    🔥 实时推送新发现的关系到前端图谱
-    
-    当发现两个节点之间的关系时（如：Drug → CAUSES → AdverseEvent），
-    这个函数会在图谱中绘制连接线。
-    
-    Args:
-        source_type: 源节点类型
-        source_name: 源节点名称
-        target_type: 目标节点类型
-        target_name: 目标节点名称
-        relationship_type: 关系类型 (CAUSES, AUTHORED, TESTED_IN, etc.)
-        properties: 关系属性字典
-    """
-    try:
-        source_id = f"{source_type}_{source_name.replace(':', '_').replace(' ', '_')}"
-        target_id = f"{target_type}_{target_name.replace(':', '_').replace(' ', '_')}"
-        
-        link_data = {
-            'source': source_id,
-            'target': target_id,
-            'type': relationship_type,
-            'properties': properties or {}
-        }
-        
-        socketio.emit('graph_update', {
-            'type': 'relationship',
-            'data': link_data,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        logger.info(f"📊 Graph Update: {source_name} → {relationship_type} → {target_name}")
-        
-    except Exception as e:
-        logger.error(f"Failed to emit graph relationship: {e}")
-
-
-# ============================================================================
 # Application Entry Point
 # ============================================================================
 
@@ -2618,7 +1715,6 @@ if __name__ == '__main__':
     logger.info("🧬 Cassandra - Biomedical Research Workflow Platform")
     logger.info("="*80)
     logger.info(f"🌐 Server: http://0.0.0.0:{config.PORT}")
-    logger.info(f"📊 Neo4j Available: {NEO4J_AVAILABLE}")
     logger.info(f"🔬 LangGraph Workflow: ✅ Loaded")
     logger.info("="*80)
     

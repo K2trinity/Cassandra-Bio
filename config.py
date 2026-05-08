@@ -7,7 +7,6 @@ loading from environment variables and .env files.
 
 Architecture:
 - Google Gemini via Vertex AI: Primary Intelligence Layer (Global Leader)
-- Neo4j: Knowledge Graph Database
 - Redis: State Management & Caching
 - Flask: REST API Server
 - PubMed/Tavily: External Research Tools
@@ -83,21 +82,7 @@ class Settings(BaseSettings):
         description="Flask server port (mapped to 7897 in docker-compose)"
     )
 
-    # ================== Section 2: Infrastructure (Database & Cache) ====================
-    # Neo4j Knowledge Graph Configuration
-    NEO4J_URI: str = Field(
-        "bolt://neo4j:7687",
-        description="Neo4j connection URI (Bolt protocol)"
-    )
-    NEO4J_USER: str = Field(
-        "neo4j",
-        description="Neo4j database username"
-    )
-    NEO4J_PASSWORD: str = Field(
-        "password",
-        description="Neo4j database password"
-    )
-    
+    # ================== Section 2: Infrastructure (Cache) ====================
     # Redis State Management Configuration
     REDIS_URL: str = Field(
         "redis://localhost:6379/0",

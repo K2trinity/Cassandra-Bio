@@ -9,12 +9,11 @@ has detailed analyses of manipulated figures BEFORE fraud becomes mainstream new
 
 Key Functions:
 - search_pubpeer_by_doi: Get all PubPeer comments for an article
-- extract_flagged_images: Extract URLs of images flagged as suspicious
 - get_fraud_signals: Summarize fraud indicators from comments
 
 Why PubPeer is Critical:
 1. Early Warning System: Fraud is often flagged on PubPeer years before retraction
-2. Image Evidence: Comments include annotated screenshots showing manipulation
+2. Community Evidence: Comments often describe suspected manipulation or data issues
 3. Statistical Red Flags: Scientists post detailed analyses of impossible data
 4. Community Validation: Multiple independent researchers confirming issues
 
@@ -243,63 +242,6 @@ def search_pubpeer_by_title(
     return []
 
 
-def extract_flagged_images(pubpeer_data: Dict) -> List[Dict[str, str]]:
-    """
-    🔥 Extract all images from PubPeer comments that show potential fraud.
-    
-    These images are valuable for figure-quality review - they're often annotated
-    screenshots showing duplicated bands, cloned regions, or statistical anomalies.
-    
-    Args:
-        pubpeer_data: Dictionary returned by search_pubpeer_by_doi()
-    
-    Returns:
-        List of image dictionaries with:
-        - url: Direct image URL
-        - comment_text: Associated comment text
-        - description: Auto-generated description of suspected issue
-    
-    Example:
-        >>> data = search_pubpeer_by_doi("10.3233/JAD-220762")
-        >>> images = extract_flagged_images(data)
-        >>> for img in images:
-        ...     print(f"Suspected issue: {img['description']}")
-        ...     print(f"Download: {img['url']}")
-    """
-    if not pubpeer_data or not pubpeer_data.get('has_comments'):
-        logger.info("No PubPeer comments, no images to extract")
-        return []
-    
-    flagged_images = []
-    
-    for comment in pubpeer_data.get('comments', []):
-        images = comment.get('images', [])
-        comment_text = comment.get('text', '').lower()
-        
-        for img_url in images:
-            # Analyze comment text for fraud keywords
-            description = "Potentially problematic figure"
-            
-            if any(kw in comment_text for kw in ['duplicate', 'duplication', 'copy', 'clone']):
-                description = "Suspected image duplication/cloning"
-            elif any(kw in comment_text for kw in ['manipulat', 'photoshop', 'edit', 'altered']):
-                description = "Suspected image manipulation"
-            elif any(kw in comment_text for kw in ['inconsisten', 'mismatch', 'error']):
-                description = "Suspected data inconsistency"
-            elif any(kw in comment_text for kw in ['statistic', 'impossible', 'improbable']):
-                description = "Suspected statistical anomaly"
-            
-            flagged_images.append({
-                'url': img_url,
-                'comment_text': comment.get('text', '')[:200],
-                'description': description,
-                'comment_date': comment.get('date', 'Unknown')
-            })
-    
-    logger.success(f"🔍 Extracted {len(flagged_images)} flagged images")
-    return flagged_images
-
-
 def _parse_pubpeer_comments(soup: BeautifulSoup) -> List[Dict]:
     """Parse comments from PubPeer HTML."""
     comments = []
@@ -321,21 +263,11 @@ def _parse_pubpeer_comments(soup: BeautifulSoup) -> List[Dict]:
             date_elem = comment_div.find('time')
             date = date_elem.get('datetime', 'Unknown') if date_elem else "Unknown"
             
-            # Extract images
-            images = []
-            img_tags = comment_div.find_all('img')
-            for img in img_tags:
-                src = img.get('src', '')
-                if src and not src.startswith('data:'):  # Skip inline base64 images
-                    full_url = urljoin(PUBPEER_BASE_URL, src)
-                    images.append(full_url)
-            
             if text:  # Only add if comment has text
                 comments.append({
                     'text': text,
                     'author': author,
-                    'date': date,
-                    'images': images
+                    'date': date
                 })
         
         except Exception as e:
@@ -494,16 +426,6 @@ if __name__ == "__main__":
         for i, comment in enumerate(result['comments'][:3], 1):  # Show first 3
             print(f"\n  {i}. {comment['author']} ({comment['date']})")
             print(f"     {comment['text'][:150]}...")
-            if comment['images']:
-                print(f"     🖼️ Includes {len(comment['images'])} images")
-        
-        # Extract flagged images
-        print("\n\n=== Extracting Flagged Images ===")
-        images = extract_flagged_images(result)
-        for img in images:
-            print(f"\n🔍 {img['description']}")
-            print(f"   URL: {img['url']}")
-            print(f"   Context: {img['comment_text'][:100]}...")
     else:
         print(f"\n✅ No PubPeer comments found (article appears clean)")
     

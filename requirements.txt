@@ -13,7 +13,6 @@ langchain-core>=0.1.0
 # ===== Data Processing =====
 pymupdf>=1.23.0        # PDF Text Extraction
 biopython>=1.81        # PubMed/NCBI API Integration
-Pillow>=9.5.0          # Figure Image Analysis
 pandas>=2.0.0          # Data Handling
 numpy>=1.24.0          # Scientific Computing
 
@@ -23,9 +22,6 @@ pdfkit>=1.0.0          # HTML to PDF Conversion (fallback, requires wkhtmltopdf)
 weasyprint>=60.0       # Primary PDF renderer — CSS Paged Media standard (CJK + SVG + @page)
 reportlab>=4.0.0       # Last-resort PDF fallback (pure Python, no system deps)
 flask-cors>=4.0.0      # CORS support for API endpoints
-
-# ===== Knowledge Graph Database =====
-neo4j>=5.15.0          # Neo4j Driver for Graph DB
 
 # ===== Cache & State Management =====
 redis>=5.2.1           # Redis Client for State Management

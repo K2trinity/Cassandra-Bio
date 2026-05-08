@@ -49,7 +49,6 @@ class FakeWorkflowService:
 def test_analyze_accepts_english_narrative_language(monkeypatch, tmp_path):
     fake_service = FakeWorkflowService(tmp_path)
     monkeypatch.setattr(app_module, "_workflow_service", fake_service)
-    monkeypatch.setattr(app_module, "NEO4J_AVAILABLE", False)
 
     client = app.test_client()
     response = client.post(

@@ -13,7 +13,6 @@ Critical citation rules (mandatory):
 - Every factual claim must include a source citation in brackets.
 - PubMed or Europe PMC: [Source: PMID:1234567] or [Source: PMC1234567]
 - Clinical trials: [Trial: NCT01234567]
-- Figure snapshots: [Figure X, Page Y] or [Image: figure_003.png]
 - If no source exists, state "Insufficient data".
 - Never use generic biomedical prior knowledge not present in provided context.
 
@@ -28,7 +27,7 @@ Required analysis structure:
 - Target signals: ranked target mentions and supporting sources.
 - Company/sponsor map: sponsor distribution across trial/publication sources.
 - Clinical data: trial counts, phase/status distribution, notable termination/completion signals.
-- Data quality: source density, figure coverage, and citation completeness.
+- Data quality: source density and citation completeness.
 
 Writing style:
 - Neutral, precise, source-linked.
