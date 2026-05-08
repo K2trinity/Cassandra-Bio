@@ -202,6 +202,48 @@ def test_duplicate_member_merge_uses_deterministic_source_precedence():
     assert member.source_memberships == ("ibb", "xbi")
 
 
+def test_source_payload_order_is_total_for_tied_sort_fields():
+    from src.backtest.universe_builder import (
+        UniverseSourceRow,
+        build_universe_snapshot,
+    )
+
+    first_xbi_row = UniverseSourceRow(
+        ticker="MRNA",
+        company_name="Moderna, Inc.",
+        exchange="NASDAQ",
+        asset_type="common_stock",
+        source="xbi",
+        source_weight=0.008,
+        cik="1682852",
+        cusip="60770K107",
+    )
+    second_xbi_row = UniverseSourceRow(
+        ticker="mrna",
+        company_name="Moderna, Inc.",
+        exchange="NYSE",
+        asset_type="Common Stock",
+        source="XBI",
+        source_weight=0.012,
+        cik="alternate-cik",
+        isin="US60770K1079",
+    )
+
+    first = build_universe_snapshot(
+        [first_xbi_row, second_xbi_row],
+        as_of_date="2026-05-08",
+    )
+    reversed_order = build_universe_snapshot(
+        [second_xbi_row, first_xbi_row],
+        as_of_date="2026-05-08",
+    )
+
+    assert first.universe_snapshot_id == reversed_order.universe_snapshot_id
+    assert first.to_catalog_payload()["source_payload_json"] == (
+        reversed_order.to_catalog_payload()["source_payload_json"]
+    )
+
+
 def test_universe_snapshot_catalog_payload_uses_json_strings():
     from src.backtest.universe_builder import (
         BIOTECH_US_UNIVERSE_ID,

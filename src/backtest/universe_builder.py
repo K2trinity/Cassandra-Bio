@@ -309,6 +309,7 @@ def _source_payload_sort_key(payload: dict[str, Any]) -> tuple[Any, ...]:
         payload["source"],
         payload["asset_type"],
         payload["company_name"],
+        _canonical_json(payload),
     )
 
 
