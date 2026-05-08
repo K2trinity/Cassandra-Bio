@@ -281,12 +281,48 @@ def test_real_portfolio_backtest_returns_credibility_for_empty_universe(tmp_path
     assert payload == {
         "error": "no active tickers found for universe biotech_us_v1 as of 2026-05-08",
         "universe_id": "biotech_us_v1",
+        "as_of_date": "2026-05-08",
         "start_date": "2025-01-02",
         "end_date": "2025-01-06",
         "data_credibility": {
             "eligible_universe_count": 0,
             "skipped_ticker_count": 0,
             "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+            "coverage_status": "no_active_members",
+        },
+    }
+
+
+def test_real_portfolio_backtest_returns_structured_error_for_unsupported_universe(
+    tmp_path,
+):
+    from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+        db_path=db_path,
+        universe_id="biotech_mock_v1",
+        as_of_date="2026-05-08",
+    )
+
+    assert payload == {
+        "error": "Unsupported production universe: biotech_mock_v1",
+        "universe_id": "biotech_mock_v1",
+        "as_of_date": "2026-05-08",
+        "start_date": "2025-01-02",
+        "end_date": "2025-01-06",
+        "data_credibility": {
+            "eligible_universe_count": 0,
+            "skipped_ticker_count": 0,
+            "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+            "coverage_status": "unsupported_universe",
         },
     }
 

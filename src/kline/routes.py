@@ -337,7 +337,7 @@ def api_backtest_portfolio_run():
     )
 
     if isinstance(result, dict) and result.get("error"):
-        return jsonify({"error": str(result.get("error"))}), 400
+        return jsonify(result), 400
 
     return jsonify(result)
 

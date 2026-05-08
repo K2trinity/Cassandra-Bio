@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 
 from src.backtest.runner import normalize_kline_ticker, run_kline_backtest
-from src.backtest.universe import load_universe_tickers
+from src.backtest.universe import UnsupportedUniverseError, load_universe_tickers
 from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
 
 BIOTECH_REAL_UNIVERSE_ID = BIOTECH_US_UNIVERSE_ID
@@ -22,6 +22,44 @@ DISCLOSURE_KEYS = {
     "positive_demo_expected",
     "mock",
 }
+
+
+def _data_credibility(
+    *,
+    eligible_universe_count: int,
+    coverage_status: str | None = None,
+) -> dict:
+    payload = {
+        "eligible_universe_count": eligible_universe_count,
+        "skipped_ticker_count": 0,
+        "survivorship_bias_warning": True,
+        "universe_bias_status": "current_constituents_only",
+    }
+    if coverage_status is not None:
+        payload["coverage_status"] = coverage_status
+    return payload
+
+
+def _real_universe_error_payload(
+    *,
+    error: str,
+    universe_id: str,
+    as_of_date: str,
+    start_date: str,
+    end_date: str,
+    coverage_status: str,
+) -> dict:
+    return {
+        "error": error,
+        "universe_id": universe_id,
+        "as_of_date": as_of_date,
+        "start_date": start_date,
+        "end_date": end_date,
+        "data_credibility": _data_credibility(
+            eligible_universe_count=0,
+            coverage_status=coverage_status,
+        ),
+    }
 
 
 def _without_disclosure_keys(value):
@@ -262,26 +300,43 @@ def run_real_biotech_portfolio_backtest(
 ) -> dict:
     """Run the real multifactor strategy across the active biotech universe."""
     resolved_as_of_date = as_of_date or end_date
-    tickers = load_universe_tickers(
-        db_path=db_path,
-        universe_id=universe_id,
-        as_of_date=resolved_as_of_date,
-    )
+    try:
+        tickers = load_universe_tickers(
+            db_path=db_path,
+            universe_id=universe_id,
+            as_of_date=resolved_as_of_date,
+        )
+    except UnsupportedUniverseError as exc:
+        return _real_universe_error_payload(
+            error=str(exc),
+            universe_id=universe_id,
+            as_of_date=resolved_as_of_date,
+            start_date=start_date,
+            end_date=end_date,
+            coverage_status="unsupported_universe",
+        )
+    except ValueError as exc:
+        return _real_universe_error_payload(
+            error=str(exc),
+            universe_id=universe_id,
+            as_of_date=resolved_as_of_date,
+            start_date=start_date,
+            end_date=end_date,
+            coverage_status="invalid_as_of_date",
+        )
+
     if not tickers:
-        return {
-            "error": (
+        return _real_universe_error_payload(
+            error=(
                 f"no active tickers found for universe {universe_id} "
                 f"as of {resolved_as_of_date}"
             ),
-            "universe_id": universe_id,
-            "start_date": start_date,
-            "end_date": end_date,
-            "data_credibility": {
-                "eligible_universe_count": 0,
-                "skipped_ticker_count": 0,
-                "survivorship_bias_warning": True,
-            },
-        }
+            universe_id=universe_id,
+            as_of_date=resolved_as_of_date,
+            start_date=start_date,
+            end_date=end_date,
+            coverage_status="no_active_members",
+        )
 
     payload = _run_biotech_portfolio_backtest(
         focus_ticker=focus_ticker,
@@ -296,12 +351,9 @@ def run_real_biotech_portfolio_backtest(
         slippage_pct=slippage_pct,
         holding_period_days=holding_period_days,
     )
-    payload["data_credibility"] = {
-        "eligible_universe_count": len(tickers),
-        "skipped_ticker_count": 0,
-        "survivorship_bias_warning": True,
-        "universe_bias_status": "current_constituents_only",
-    }
+    payload["data_credibility"] = _data_credibility(
+        eligible_universe_count=len(tickers),
+    )
     return payload
 
 

@@ -797,7 +797,19 @@ def test_backtest_portfolio_run_api_reuses_single_run_validation(monkeypatch):
 
 def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
     def fake_run_real_biotech_portfolio_backtest(**kwargs):
-        return {"error": "LLY: no real OHLC data"}
+        return {
+            "error": "LLY: no real OHLC data",
+            "universe_id": kwargs["universe_id"],
+            "as_of_date": kwargs["as_of_date"],
+            "start_date": kwargs["start_date"],
+            "end_date": kwargs["end_date"],
+            "data_credibility": {
+                "eligible_universe_count": 3,
+                "skipped_ticker_count": 0,
+                "survivorship_bias_warning": True,
+                "universe_bias_status": "current_constituents_only",
+            },
+        }
 
     monkeypatch.setattr(
         kline_routes,
@@ -817,7 +829,48 @@ def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
     )
 
     assert response.status_code == 400
-    assert response.get_json() == {"error": "LLY: no real OHLC data"}
+    assert response.get_json() == {
+        "error": "LLY: no real OHLC data",
+        "universe_id": "biotech_us_v1",
+        "as_of_date": "2025-03-31",
+        "start_date": "2025-01-02",
+        "end_date": "2025-03-31",
+        "data_credibility": {
+            "eligible_universe_count": 3,
+            "skipped_ticker_count": 0,
+            "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+        },
+    }
+
+
+def test_backtest_portfolio_run_api_returns_400_for_unsupported_universe():
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "universe_id": "biotech_mock_v1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Unsupported production universe: biotech_mock_v1",
+        "universe_id": "biotech_mock_v1",
+        "as_of_date": "2025-03-31",
+        "start_date": "2025-01-02",
+        "end_date": "2025-03-31",
+        "data_credibility": {
+            "eligible_universe_count": 0,
+            "skipped_ticker_count": 0,
+            "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+            "coverage_status": "unsupported_universe",
+        },
+    }
 
 
 def test_backtest_portfolio_run_api_allows_syntactically_valid_focus_ticker(
