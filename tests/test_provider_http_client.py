@@ -112,6 +112,16 @@ def test_response_helpers_classify_common_http_statuses():
     assert classify_http_status(401) == "fatal_error"
 
 
+def test_retry_after_seconds_parses_numeric_and_http_date():
+    from src.data_ingestion.http_client import retry_after_seconds
+
+    assert retry_after_seconds({"Retry-After": "12"}) == 12.0
+    assert retry_after_seconds(
+        {"Retry-After": "Wed, 21 Oct 2030 07:28:00 GMT"},
+        now="Wed, 21 Oct 2030 07:27:30 GMT",
+    ) == 30.0
+
+
 def test_fake_response_json_raises_clear_error_for_invalid_json():
     from src.data_ingestion.http_client import HttpResponse
 

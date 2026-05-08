@@ -62,3 +62,30 @@ def test_fmp_statement_methods_use_quarter_period_by_default():
         params == {"period": "quarter", "apikey": "unit-test-fmp-key"}
         for _, params, _ in fake.calls
     )
+
+
+def test_fmp_client_returns_fatal_error_for_invalid_json_success_response():
+    from src.data_ingestion.fmp_client import FmpClient
+
+    fake = FakeHttp(status_code=200, text="not-json")
+    client = FmpClient(api_key="unit-test-fmp-key", http_client=fake)
+
+    result = client.fetch_profile("MRNA")
+
+    assert result.status == "fatal_error"
+    assert result.payload is None
+    assert result.message == "invalid JSON response"
+
+
+def test_fmp_client_preserves_retry_after_for_rate_limits():
+    from src.data_ingestion.fmp_client import FmpClient
+
+    fake = FakeHttp(status_code=429, text='{"message":"slow down"}', headers={"Retry-After": "18"})
+    client = FmpClient(api_key="unit-test-fmp-key", http_client=fake)
+
+    result = client.fetch_profile("MRNA")
+
+    assert result.status == "rate_limited"
+    assert result.payload is None
+    assert result.retry_after_seconds == 18.0
+    assert result.message == "HTTP 429"

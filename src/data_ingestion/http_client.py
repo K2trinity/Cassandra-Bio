@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -112,6 +114,21 @@ def classify_http_status(status_code: int) -> str:
     return "fatal_error"
 
 
+def retry_after_seconds(
+    headers: Mapping[str, str],
+    *,
+    now: datetime | str | None = None,
+) -> float | None:
+    for key, value in headers.items():
+        if key.lower() != "retry-after":
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return _retry_after_http_date_seconds(str(value), now=now)
+    return None
+
+
 def _url_without_query(url: str) -> str:
     try:
         parts = urlsplit(url)
@@ -174,3 +191,28 @@ def _url_with_params(url: str, params: Mapping[str, Any] | None) -> str:
 
 def _redact_secret_query_text(text: str) -> str:
     return _SECRET_QUERY_PATTERN.sub(lambda match: f"{match.group(1)}<redacted>", text)
+
+
+def _retry_after_http_date_seconds(
+    value: str,
+    *,
+    now: datetime | str | None,
+) -> float | None:
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    current = _coerce_datetime(now) if now is not None else datetime.now(timezone.utc)
+    return max(0.0, (retry_at - current).total_seconds())
+
+
+def _coerce_datetime(value: datetime | str) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed

@@ -63,3 +63,16 @@ def test_tiingo_client_preserves_retry_after_for_rate_limits():
     assert result.rows is None
     assert result.retry_after_seconds == 12.0
     assert result.message == "HTTP 429"
+
+
+def test_tiingo_client_returns_fatal_error_for_invalid_json_success_response():
+    from src.data_ingestion.tiingo_client import TiingoClient
+
+    fake = FakeHttp(status_code=200, text="not-json")
+    client = TiingoClient(api_key="unit-test-tiingo-token", http_client=fake)
+
+    result = client.fetch_daily_prices("MRNA", "2026-05-01", "2026-05-08")
+
+    assert result.status == "fatal_error"
+    assert result.rows is None
+    assert result.message == "invalid JSON response"

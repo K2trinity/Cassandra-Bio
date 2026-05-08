@@ -6,8 +6,9 @@ from src.data_ingestion.http_client import (
     RequestsHttpClient,
     build_request_hash,
     classify_http_status,
+    retry_after_seconds,
 )
-from src.data_ingestion.tiingo_client import ProviderResult
+from src.data_ingestion.provider_result import ProviderResult
 
 FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 
@@ -61,15 +62,24 @@ class FmpClient:
         response = self.http_client.get(url, params=request_params, headers=None)
         status = classify_http_status(response.status_code)
         if status == "success":
+            try:
+                payload = response.json()
+            except ValueError:
+                return ProviderResult(
+                    status="fatal_error",
+                    request_hash=request_hash,
+                    message="invalid JSON response",
+                )
             return ProviderResult(
                 status=status,
                 request_hash=request_hash,
-                payload=response.json(),
+                payload=payload,
             )
         return ProviderResult(
             status=status,
             request_hash=request_hash,
             message=f"HTTP {response.status_code}",
+            retry_after_seconds=retry_after_seconds(response.headers),
         )
 
 
