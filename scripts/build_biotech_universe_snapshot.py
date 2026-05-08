@@ -79,6 +79,7 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
     import duckdb
 
     payload = snapshot.to_catalog_payload()
+    member_security_ids = tuple(member.security_id for member in snapshot.members)
     conn = duckdb.connect(str(db_path))
     try:
         conn.execute("BEGIN TRANSACTION")
@@ -98,6 +99,7 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
             """,
             [snapshot.universe_id, snapshot.as_of_date],
         )
+        _expire_replaced_members(conn, snapshot, member_security_ids)
         conn.execute(
             """
             INSERT OR REPLACE INTO universe_snapshots (
@@ -156,6 +158,36 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
         raise
     finally:
         conn.close()
+
+
+def _expire_replaced_members(
+    conn,
+    snapshot: UniverseSnapshot,
+    member_security_ids: tuple[str, ...],
+) -> None:
+    params: list[object] = [
+        snapshot.as_of_date,
+        snapshot.universe_id,
+        snapshot.as_of_date,
+        snapshot.as_of_date,
+    ]
+    missing_member_predicate = ""
+    if member_security_ids:
+        placeholders = ", ".join("?" for _ in member_security_ids)
+        missing_member_predicate = f"AND security_id NOT IN ({placeholders})"
+        params.extend(member_security_ids)
+
+    conn.execute(
+        f"""
+        UPDATE universe_membership
+        SET member_to = CAST(? AS DATE) - INTERVAL 1 DAY
+        WHERE universe_id = ?
+          AND member_from < ?
+          AND (member_to IS NULL OR member_to >= ?)
+          {missing_member_predicate}
+        """,
+        params,
+    )
 
 
 def _required_field(row: dict[str, str], field_name: str) -> str:
