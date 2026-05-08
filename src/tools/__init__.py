@@ -42,9 +42,7 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "project_source_payloads_for_frontend": ("src.engines.harvest.core.field_mappings", "project_source_payloads_for_frontend"),
     "get_mapping_table": ("src.engines.harvest.core.field_mappings", "get_mapping_table"),
     # PDF processing tools
-    "extract_images_from_pdf": ("src.tools.pdf_processor", "extract_images_from_pdf"),
     "extract_text_from_pdf": ("src.tools.pdf_processor", "extract_text_from_pdf"),
-    "extract_images_as_base64": ("src.tools.pdf_processor", "extract_images_as_base64"),
     "get_pdf_info": ("src.tools.pdf_processor", "get_pdf_info"),
     # PDF download tools (with preprint fallback)
     "download_pdf_from_url": ("src.tools.pdf_downloader", "download_pdf_from_url"),
@@ -59,7 +57,6 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     # PubPeer fraud detection tools
     "search_pubpeer_by_doi": ("src.tools.pubpeer_client", "search_pubpeer_by_doi"),
     "search_pubpeer_by_title": ("src.tools.pubpeer_client", "search_pubpeer_by_title"),
-    "extract_flagged_images": ("src.tools.pubpeer_client", "extract_flagged_images"),
 }
 
 __all__ = [
@@ -93,9 +90,7 @@ __all__ = [
     'project_source_payloads_for_frontend',
     'get_mapping_table',
     # PDF processing tools
-    'extract_images_from_pdf',
     'extract_text_from_pdf',
-    'extract_images_as_base64',
     'get_pdf_info',
     # PDF download tools (with preprint fallback)
     'download_pdf_from_url',
@@ -110,7 +105,6 @@ __all__ = [
     # PubPeer fraud detection tools
     'search_pubpeer_by_doi',
     'search_pubpeer_by_title',
-    'extract_flagged_images',
 ]
 
 

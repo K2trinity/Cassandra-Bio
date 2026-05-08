@@ -3,7 +3,6 @@
 当 LLM 生成的章节缺少可视化元素时，本模块可以：
 1. 从 harvest 数据中提取可量化指标
 2. 自动生成 chart / table blocks 注入到合适位置
-3. 从已下载 PDF 中提取关键 Figure 并嵌入为 image block
 
 用法:
     injector = ChartInjector()
@@ -12,10 +11,7 @@
 
 from __future__ import annotations
 
-import base64
-import os
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
@@ -43,7 +39,6 @@ class ChartInjector:
         self,
         doc: IRDocument,
         harvest_data: Optional[Dict[str, Any]] = None,
-        extracted_figures: Optional[List[Dict[str, str]]] = None,
     ) -> IRDocument:
         """
         主入口：扫描文档，根据证据数据补充图表。
@@ -51,10 +46,8 @@ class ChartInjector:
         Args:
             doc: IR 文档
             harvest_data: 结构化 harvest 数据
-            extracted_figures: 从 PDF 提取的图表 [{path, caption, source}]
         """
         harvest_data = harvest_data or {}
-        extracted_figures = extracted_figures or []
 
         for chapter in doc.chapters:
             has_visual = any(
@@ -63,10 +56,6 @@ class ChartInjector:
             )
             if not has_visual:
                 self._auto_inject_visuals(chapter, harvest_data)
-
-        # 注入文献图表
-        if extracted_figures:
-            self._inject_literature_figures(doc, extracted_figures)
 
         # 生成全局统计仪表盘（如果存在 harvest 汇总数据）
         if harvest_data:
@@ -689,101 +678,6 @@ class ChartInjector:
             },
             metadata={"auto_generated": True},
         )
-
-    # ─── 文献图表嵌入 ──────────────────────────────────────────────────────
-
-    def _inject_literature_figures(
-        self,
-        doc: IRDocument,
-        figures: List[Dict[str, str]],
-    ) -> None:
-        """将从 PDF 提取的关键图表嵌入到最相关的章节中"""
-        if not figures:
-            return
-
-        for fig in figures[:6]:  # 最多嵌入 6 张图
-            fig_path = fig.get("path", "")
-            if not fig_path or not os.path.exists(fig_path):
-                continue
-
-            # 将图片转为 base64 data URI
-            try:
-                with open(fig_path, "rb") as f:
-                    img_bytes = f.read()
-                ext = Path(fig_path).suffix.lower().lstrip(".")
-                if ext == "jpg":
-                    ext = "jpeg"
-                data_uri = f"data:image/{ext};base64,{base64.b64encode(img_bytes).decode('ascii')}"
-            except Exception as e:
-                logger.warning(f"Failed to read figure {fig_path}: {e}")
-                continue
-
-            caption = fig.get("caption", f"Figure from {fig.get('source', 'literature')}")
-            source = fig.get("source", "")
-
-            image_block = ChapterBlock(
-                type=BlockType.IMAGE,
-                content=data_uri,
-                metadata={
-                    "caption": caption,
-                    "alt": caption,
-                    "source": source,
-                    "css_class": "literature-figure",
-                    "auto_injected": True,
-                },
-            )
-
-            # 找最合适的章节插入
-            target_chapter = self._find_best_chapter(doc, fig)
-            if target_chapter:
-                target_chapter.blocks.append(image_block)
-                logger.info(f"📸 Injected literature figure into '{target_chapter.title}'")
-
-    def _find_best_chapter(
-        self, doc: IRDocument, fig: Dict[str, str]
-    ) -> Optional[Chapter]:
-        """根据 figure 的 caption/source 找到最相关的章节"""
-        caption = (fig.get("caption", "") + " " + fig.get("source", "")).lower()
-
-        best_score = 0
-        best_ch = None
-
-        for ch in doc.chapters:
-            score = 0
-            ch_text = ch.title.lower()
-
-            # 关键词匹配
-            if any(kw in caption for kw in ["clinical", "trial", "phase"]) and "trial" in ch_text:
-                score += 3
-            if any(kw in caption for kw in ["figure", "fig", "chart"]):
-                score += 1
-            if any(kw in caption for kw in ["safety", "adverse"]) and "safety" in ch_text:
-                score += 3
-            if any(kw in caption for kw in ["efficacy", "endpoint"]) and "efficac" in ch_text:
-                score += 3
-            if any(kw in caption for kw in ["forest", "kaplan", "survival"]):
-                score += 2
-
-            # 选当前章节视觉元素最少的
-            visual_count = sum(
-                1 for b in ch.blocks
-                if b.type in (BlockType.CHART, BlockType.IMAGE, BlockType.WORDCLOUD)
-            )
-            if visual_count == 0:
-                score += 2
-
-            if score > best_score:
-                best_score = score
-                best_ch = ch
-
-        # 兜底：选第一个非 Executive Summary 章节
-        if best_ch is None and doc.chapters:
-            for ch in doc.chapters:
-                if "executive" not in ch.title.lower() and "summary" not in ch.title.lower():
-                    return ch
-            return doc.chapters[-1]
-
-        return best_ch
 
     # ─── Summary Dashboard ─────────────────────────────────────────────────
 

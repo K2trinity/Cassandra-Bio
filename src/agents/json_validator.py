@@ -533,8 +533,8 @@ class SegmentedJSONGenerator:
             'max_tokens': 2500
         },
         'evidence': {
-            'fields': ['literature_synthesis', 'figure_findings'],
-            'description': 'Literature synthesis and figure-derived findings',
+            'fields': ['literature_synthesis'],
+            'description': 'Literature synthesis',
             'max_tokens': 2000
         },
         'risk': {

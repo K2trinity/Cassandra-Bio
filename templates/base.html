@@ -96,14 +96,14 @@
         }
         
         /* Ensure tabs fill available space and scroll properly */
-        #investigationTab, #graphTab, #reportsTab, #settingsTab {
+        #investigationTab, #reportsTab, #settingsTab {
             height: 100%;
             overflow: hidden;
             display: flex;
             flex-direction: column;
         }
         
-        #investigationTab.hidden, #graphTab.hidden, #reportsTab.hidden, #settingsTab.hidden {
+        #investigationTab.hidden, #reportsTab.hidden, #settingsTab.hidden {
             display: none !important;
         }
     </style>
@@ -168,16 +168,6 @@
                     <span class="font-medium">K-Line</span>
                 </a>
                 
-                <!-- Knowledge Graph tab - 暂时隐藏，功能未完善 -->
-                <!--
-                <a href="#" onclick="event.preventDefault(); showTab('graph');" data-tab="graph" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
-                    </svg>
-                    <span class="font-medium">Knowledge Graph</span>
-                </a>
-                -->
-                
                 <a href="{{ url_for('index', tab='reports') }}" onclick="if (document.getElementById('reportsTab')) { event.preventDefault(); showTab('reports'); }" data-tab="reports" class="nav-link flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-slate-800 transition-colors text-gray-400">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
@@ -203,7 +193,7 @@
                     <span class="text-gray-400">System Online</span>
                 </div>
                 <div class="mt-2 text-xs text-gray-500">
-                    v1.0.0 | Neo4j Connected
+                    v1.0.0 | Research Workflow
                 </div>
             </div>
         </aside>
@@ -233,7 +223,7 @@
             });
             
             // Hide all tab contents
-            const allTabs = ['investigationTab', 'graphTab', 'reportsTab', 'settingsTab'];
+            const allTabs = ['investigationTab', 'reportsTab', 'settingsTab'];
             allTabs.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.classList.add('hidden');
@@ -249,9 +239,6 @@
             if (tabName === 'reports' && typeof loadReports === 'function') {
                 loadReports();
             }
-            if (tabName === 'graph' && typeof loadGraph === 'function') {
-                loadGraph();
-            }
             if (tabName === 'settings' && typeof loadSettings === 'function') {
                 loadSettings();
             }
@@ -265,7 +252,7 @@
         // Support cross-page deep link like /investigation?tab=reports
         document.addEventListener('DOMContentLoaded', () => {
             const tab = new URLSearchParams(window.location.search).get('tab');
-            const allowedTabs = ['investigation', 'graph', 'reports', 'settings'];
+            const allowedTabs = ['investigation', 'reports', 'settings'];
             if (tab && allowedTabs.includes(tab) && document.getElementById(tab + 'Tab')) {
                 showTab(tab);
             }

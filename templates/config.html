@@ -124,83 +124,6 @@
             </div>
         </div>
 
-        <!-- Memory Cortex (Neo4j) -->
-        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
-            <div class="p-6 bg-gradient-to-r from-emerald-600/20 to-teal-600/20 border-b border-slate-700">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
-                            <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
-                            </svg>
-                        </div>
-                        <div>
-                            <h3 class="text-xl font-bold text-white">Memory Cortex</h3>
-                            <p class="text-sm text-gray-300">Neo4j Knowledge Graph Database</p>
-                        </div>
-                    </div>
-                    <div id="neo4jStatus" class="flex items-center gap-2 px-4 py-2 bg-slate-900/50 rounded-lg">
-                        <div class="w-2 h-2 bg-gray-500 rounded-full"></div>
-                        <span class="text-sm text-gray-400">Not tested</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="p-6 space-y-6">
-                <!-- Connection URI -->
-                <div>
-                    <label class="block text-sm font-semibold text-gray-300 mb-2">Connection URI</label>
-                    <div class="flex gap-3">
-                        <input 
-                            type="text" 
-                            id="neo4jUri"
-                            placeholder="bolt://localhost:7687"
-                            value="bolt://localhost:7687"
-                            class="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
-                        />
-                        <button id="testNeo4jBtn" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors">
-                            Test Connection
-                        </button>
-                    </div>
-                </div>
-                
-                <!-- Credentials -->
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-300 mb-2">Username</label>
-                        <input 
-                            type="text" 
-                            id="neo4jUser"
-                            placeholder="neo4j"
-                            value="neo4j"
-                            class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-300 mb-2">Password</label>
-                        <input 
-                            type="password" 
-                            id="neo4jPassword"
-                            placeholder="password"
-                            class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                    </div>
-                </div>
-                
-                <!-- Database -->
-                <div>
-                    <label class="block text-sm font-semibold text-gray-300 mb-2">Database Name</label>
-                    <input 
-                        type="text" 
-                        id="neo4jDatabase"
-                        placeholder="neo4j"
-                        value="neo4j"
-                        class="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                </div>
-            </div>
-        </div>
-
         <!-- Cache Layer (Redis) -->
         <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
             <div class="p-6 bg-gradient-to-r from-red-600/20 to-orange-600/20 border-b border-slate-700">
@@ -359,42 +282,6 @@
         }
     });
     
-    // Test Neo4j connection
-    document.getElementById('testNeo4jBtn').addEventListener('click', async () => {
-        const btn = document.getElementById('testNeo4jBtn');
-        const status = document.getElementById('neo4jStatus');
-        
-        btn.disabled = true;
-        btn.textContent = 'Testing...';
-        updateStatus(status, 'testing', 'Testing connection...');
-        
-        try {
-            const response = await fetch('/api/test-neo4j', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    uri: document.getElementById('neo4jUri').value,
-                    user: document.getElementById('neo4jUser').value,
-                    password: document.getElementById('neo4jPassword').value,
-                    database: document.getElementById('neo4jDatabase').value
-                })
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                updateStatus(status, 'success', 'Connected');
-            } else {
-                updateStatus(status, 'error', result.error || 'Connection failed');
-            }
-        } catch (error) {
-            updateStatus(status, 'error', 'Connection failed');
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Test Connection';
-        }
-    });
-    
     // Test Redis connection
     document.getElementById('testRedisBtn').addEventListener('click', async () => {
         const btn = document.getElementById('testRedisBtn');
@@ -465,12 +352,6 @@
                 temperature: parseFloat(document.getElementById('geminiTemp').value),
                 max_tokens: parseInt(document.getElementById('geminiMaxTokens').value)
             },
-            neo4j: {
-                uri: document.getElementById('neo4jUri').value,
-                user: document.getElementById('neo4jUser').value,
-                password: document.getElementById('neo4jPassword').value,
-                database: document.getElementById('neo4jDatabase').value
-            },
             redis: {
                 uri: document.getElementById('redisUri').value
             },
@@ -524,12 +405,6 @@
                     document.getElementById('tempValue').textContent = config.gemini.temperature;
                 }
                 if (config.gemini.max_tokens) document.getElementById('geminiMaxTokens').value = config.gemini.max_tokens;
-            }
-            
-            if (config.neo4j) {
-                if (config.neo4j.uri) document.getElementById('neo4jUri').value = config.neo4j.uri;
-                if (config.neo4j.user) document.getElementById('neo4jUser').value = config.neo4j.user;
-                if (config.neo4j.database) document.getElementById('neo4jDatabase').value = config.neo4j.database;
             }
             
             if (config.redis && config.redis.uri) {
