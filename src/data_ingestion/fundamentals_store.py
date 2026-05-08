@@ -131,7 +131,7 @@ def _canonical_json_value(value: Any, *, row_index: int, field: str) -> Any:
             )
             for index, item in enumerate(value)
         ]
-    if _is_pandas_missing_scalar(value):
+    if _is_missing_scalar(value):
         return None
     if isinstance(value, Decimal):
         if not value.is_finite():
@@ -202,7 +202,27 @@ def _numpy_scalar_to_python(value: Any) -> Any:
     return value
 
 
-def _is_pandas_missing_scalar(value: Any) -> bool:
+def _is_missing_scalar(value: Any) -> bool:
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    try:
+        import numpy as np
+    except ImportError:
+        pass
+    else:
+        if isinstance(value, np.generic):
+            try:
+                if np.isnat(value):
+                    return True
+            except TypeError:
+                pass
+            try:
+                if bool(np.issubdtype(value.dtype, np.floating)) and bool(
+                    np.isnan(value)
+                ):
+                    return True
+            except TypeError:
+                pass
     try:
         import pandas as pd
     except ImportError:

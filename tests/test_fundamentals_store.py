@@ -220,6 +220,9 @@ def test_write_fundamentals_rows_canonicalizes_pandas_missing_scalars_to_null(
                 "fiscal_period": "2026-Q1",
                 "filing_date": pd.NaT,
                 "cash_and_equivalents": pd.NA,
+                "net_income": np.float64(np.nan),
+                "research_expense": float("nan"),
+                "reported_at": np.datetime64("NaT"),
                 "notes": ["reported", pd.NA],
             }
         ],
@@ -246,12 +249,18 @@ def test_write_fundamentals_rows_canonicalizes_pandas_missing_scalars_to_null(
         "cash_and_equivalents": None,
         "filing_date": None,
         "fiscal_period": "2026-Q1",
+        "net_income": None,
         "notes": ["reported", None],
+        "reported_at": None,
+        "research_expense": None,
         "security_id": "FMP:MRNA",
         "ticker": "MRNA",
     }
     assert '"cash_and_equivalents":null' in stored[1]
     assert '"filing_date":null' in stored[1]
+    assert '"net_income":null' in stored[1]
+    assert '"reported_at":null' in stored[1]
+    assert '"research_expense":null' in stored[1]
 
 
 def test_write_fundamentals_rows_rejects_unserializable_payload_before_replacing_rows(
@@ -312,7 +321,9 @@ def test_write_fundamentals_rows_rejects_unserializable_payload_before_replacing
     ("row", "match"),
     [
         ({"security_id": "", "fiscal_period": "2026-Q1"}, "row 0.*security_id"),
+        ({"security_id": None, "fiscal_period": "2026-Q1"}, "row 0.*security_id"),
         ({"security_id": "FMP:MRNA", "fiscal_period": " "}, "row 0.*fiscal_period"),
+        ({"security_id": "FMP:MRNA", "fiscal_period": None}, "row 0.*fiscal_period"),
     ],
 )
 def test_write_fundamentals_rows_rejects_missing_identity_fields(
@@ -329,7 +340,10 @@ def test_write_fundamentals_rows_rejects_missing_identity_fields(
         )
 
 
-def test_write_fundamentals_rows_rejects_non_finite_before_replacing_rows(tmp_path):
+@pytest.mark.parametrize("non_finite_value", [float("inf"), np.float64("-inf")])
+def test_write_fundamentals_rows_rejects_non_finite_before_replacing_rows(
+    tmp_path, non_finite_value
+):
     from src.data_ingestion.fundamentals_store import write_fundamentals_rows
 
     db_path = tmp_path / "research.duckdb"
@@ -356,7 +370,7 @@ def test_write_fundamentals_rows_rejects_non_finite_before_replacing_rows(tmp_pa
                     "ticker": "MRNA",
                     "fiscal_period": "2026-Q2",
                     "filing_date": "2026-08-01",
-                    "cash_and_equivalents": np.nan,
+                    "cash_and_equivalents": non_finite_value,
                 }
             ],
             source="fmp",
