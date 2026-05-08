@@ -1931,7 +1931,7 @@ not print secrets.
 Run:
 
 ```powershell
-rg -n "4f701056|FMPyp|k2trinity73|TIINGO_API_KEY=|FMP_API_KEY=|SEC_USER_AGENT=" docs src scripts tests
+rg -n "REAL_TIINGO_TOKEN_FRAGMENT|REAL_FMP_KEY_FRAGMENT|REAL_SEC_CONTACT_FRAGMENT|TIINGO_API_KEY\s*=|FMP_API_KEY\s*=|SEC_USER_AGENT\s*=" docs src scripts tests
 ```
 
 Expected: no matches.
