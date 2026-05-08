@@ -113,6 +113,31 @@ CATALOG_SQL: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+        run_id TEXT,
+        data_snapshot_id TEXT,
+        provider TEXT,
+        phase TEXT,
+        ticker TEXT,
+        endpoint TEXT,
+        period_start DATE,
+        period_end DATE,
+        status TEXT,
+        attempt_count INTEGER,
+        last_error TEXT,
+        updated_at TIMESTAMP,
+        PRIMARY KEY (run_id, provider, phase, ticker, endpoint)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS data_snapshot_manifests (
+        data_snapshot_id TEXT PRIMARY KEY,
+        manifest_json TEXT,
+        manifest_path TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS fundamentals_normalized (
         security_id TEXT,
         ticker TEXT,
