@@ -58,8 +58,7 @@ class FixedWindowRateLimit:
 
 
 def _normalize_provider(provider: str) -> str:
-    provider_key = str(provider).strip()
+    provider_key = str(provider).strip().lower()
     if not provider_key:
         raise ValueError("provider must be non-empty")
     return provider_key
-

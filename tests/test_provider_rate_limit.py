@@ -35,6 +35,22 @@ def test_fixed_window_rate_limit_scopes_provider_windows_independently():
     assert fmp_decision.retry_after_seconds == 0.0
 
 
+def test_fixed_window_rate_limit_provider_keys_are_case_insensitive():
+    from src.data_ingestion.rate_limit import FixedWindowRateLimit
+
+    limiter = FixedWindowRateLimit(max_requests=1, window_seconds=5)
+
+    first = limiter.allow("tiingo", now=100.0)
+    same_provider = limiter.allow("TIINGO", now=101.0)
+    independent_provider = limiter.allow(" fmp ", now=101.0)
+
+    assert first.allowed is True
+    assert same_provider.allowed is False
+    assert same_provider.retry_after_seconds == 4.0
+    assert independent_provider.allowed is True
+    assert independent_provider.retry_after_seconds == 0.0
+
+
 def test_fixed_window_rate_limit_resets_after_window_elapsed():
     from src.data_ingestion.rate_limit import FixedWindowRateLimit
 
