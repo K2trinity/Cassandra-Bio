@@ -132,6 +132,42 @@ def test_download_biotech_data_dry_run_uses_fixture_universe(tmp_path):
     assert "SEC_USER_AGENT" not in combined_output
 
 
+def test_download_biotech_data_default_non_dry_run_requires_executable_provider(
+    tmp_path,
+):
+    repo_root = Path(__file__).resolve().parents[1]
+    fixture = tmp_path / "exchange_listings.csv"
+    fixture.write_text(
+        "ticker,company_name,exchange,asset_type,industry,cik\n"
+        "MRNA,Moderna Inc,NASDAQ,common_stock,Biotechnology,1682852\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            *_base_command(tmp_path),
+            "--limit-tickers",
+            "1",
+            "--exchange-listings-csv",
+            str(fixture),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_clean_provider_env(),
+    )
+
+    assert result.returncode != 0
+    assert "no executable provider" in result.stderr.lower()
+    assert "credential" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert "TIINGO_API_KEY" not in result.stderr
+    assert "SEC_USER_AGENT" not in result.stderr
+    assert "FMP_API_KEY" not in result.stderr
+    assert result.stdout == ""
+
+
 def test_download_biotech_data_rejects_fixture_with_missing_header(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     fixture = tmp_path / "exchange_listings.csv"

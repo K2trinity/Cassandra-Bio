@@ -141,6 +141,7 @@ def run_download(
             sec_client=sec_client,
             fmp_client=fmp_client,
         )
+        _ensure_executable_provider_planned(units, tiingo_client=tiingo_client)
         for unit in units:
             fetch_summary.setdefault(unit.provider, {})
             if unit.provider == "tiingo":
@@ -570,6 +571,29 @@ def _resolve_provider_clients(
             raise RuntimeError(_missing_credentials_message("fmp"))
 
     return tiingo_client, sec_client, fmp_client
+
+
+def _ensure_executable_provider_planned(
+    units: Sequence[_PlannedUnit],
+    *,
+    tiingo_client: Any | None,
+) -> None:
+    credentialed_units = [
+        unit for unit in units if unit.provider in {"tiingo", "sec", "fmp"}
+    ]
+    if not credentialed_units:
+        return
+    if (
+        any(unit.provider == "tiingo" for unit in credentialed_units)
+        and tiingo_client is not None
+    ):
+        return
+    providers = ", ".join(sorted({unit.provider for unit in credentialed_units}))
+    raise RuntimeError(
+        "Cannot run download because planned providers have no executable provider "
+        f"available ({providers}). Configure credentials for an implemented provider "
+        "or use --dry-run."
+    )
 
 
 def _only_requested_provider(request: DownloadRequest, provider: str) -> bool:
