@@ -26,9 +26,11 @@ from src.data_ingestion.checkpoints import (
     is_completed,
     record_checkpoint,
 )
+from src.data_ingestion.fmp_client import FmpClient
 from src.data_ingestion.manifest import build_snapshot_manifest, write_snapshot_manifest
 from src.data_ingestion.provider_config import load_provider_config
 from src.data_ingestion.provider_log import record_provider_fetch
+from src.data_ingestion.sec_client import SecClient
 from src.data_ingestion.tiingo_client import TiingoClient
 from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
 
@@ -133,8 +135,12 @@ def run_download(
     fetch_summary: dict[str, dict[str, int]] = {}
 
     if not request.dry_run:
-        config = load_provider_config()
-        tiingo_client = _resolve_tiingo_client(tiingo_client, config)
+        tiingo_client, sec_client, fmp_client = _resolve_provider_clients(
+            request,
+            tiingo_client=tiingo_client,
+            sec_client=sec_client,
+            fmp_client=fmp_client,
+        )
         for unit in units:
             fetch_summary.setdefault(unit.provider, {})
             if unit.provider == "tiingo":
@@ -416,6 +422,8 @@ def _plan_units(
     for provider in request.providers:
         if provider == "tiingo":
             units.extend(_tiingo_unit(member, request) for member in selected_members)
+        elif provider in {"nasdaq", "nasdaq_trader"}:
+            continue
         elif provider == "sec":
             units.extend(
                 _sec_unit(member)
@@ -533,12 +541,43 @@ def _build_data_snapshot(
     )
 
 
-def _resolve_tiingo_client(client: Any | None, config: Any) -> Any | None:
-    if client is not None:
-        return client
-    if not config.tiingo_api_key:
-        return None
-    return TiingoClient(config.tiingo_api_key)
+def _resolve_provider_clients(
+    request: DownloadRequest,
+    *,
+    tiingo_client: Any | None,
+    sec_client: Any | None,
+    fmp_client: Any | None,
+) -> tuple[Any | None, Any | None, Any | None]:
+    config = load_provider_config()
+    requested = set(request.providers)
+
+    if tiingo_client is None and "tiingo" in requested:
+        if config.tiingo_api_key:
+            tiingo_client = TiingoClient(config.tiingo_api_key)
+        elif _only_requested_provider(request, "tiingo"):
+            raise RuntimeError(_missing_credentials_message("tiingo"))
+
+    if sec_client is None and "sec" in requested:
+        if config.sec_user_agent:
+            sec_client = SecClient(config.sec_user_agent)
+        elif _only_requested_provider(request, "sec"):
+            raise RuntimeError(_missing_credentials_message("sec"))
+
+    if fmp_client is None and "fmp" in requested and config.fmp_api_key:
+        fmp_client = FmpClient(config.fmp_api_key)
+
+    return tiingo_client, sec_client, fmp_client
+
+
+def _only_requested_provider(request: DownloadRequest, provider: str) -> bool:
+    return set(request.providers) == {provider}
+
+
+def _missing_credentials_message(provider: str) -> str:
+    return (
+        f"Cannot run provider '{provider}' because required credentials are not "
+        "configured. Use --dry-run or configure credentials outside tracked files."
+    )
 
 
 def _price_source_token(providers: Sequence[str]) -> str:

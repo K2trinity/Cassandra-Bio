@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from src.backtest.universe_builder import UniverseSourceRow
 from src.data_ingestion.provider_result import ProviderResult
@@ -357,6 +358,177 @@ def test_stubbed_provider_skipped_reasons_are_structured(tmp_path):
         manifest = json.load(file)
     reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
     assert reasons == {"sec": "missing_client", "fmp": "stub_not_implemented"}
+
+
+def test_missing_tiingo_key_skips_tiingo_units_when_other_provider_requested(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    monkeypatch.setenv("SEC_USER_AGENT", "CassandraBio user@example.com")
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("tiingo", "sec"),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+    )
+
+    assert summary.skipped_units == 2
+    assert summary.failed_units == 0
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
+    assert reasons == {"tiingo": "missing_client", "sec": "stub_not_implemented"}
+
+
+def test_missing_tiingo_key_fails_when_tiingo_is_only_requested(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_download(
+            DownloadRequest(
+                snapshot_date="2026-05-08",
+                start_date="2026-05-01",
+                end_date="2026-05-08",
+                providers=("tiingo",),
+                dry_run=False,
+                limit_tickers=1,
+                research_dir=tmp_path,
+            ),
+            universe_rows=_universe_rows(),
+        )
+
+    message = str(exc_info.value)
+    assert "tiingo" in message.lower()
+    assert "credential" in message.lower()
+    assert "TIINGO_API_KEY" not in message
+
+
+def test_missing_sec_user_agent_skips_sec_units_when_other_provider_requested(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("sec", "fmp"),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        fmp_client=object(),
+    )
+
+    assert summary.skipped_units == 2
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
+    assert reasons == {"sec": "missing_client", "fmp": "stub_not_implemented"}
+
+
+def test_missing_sec_user_agent_fails_when_sec_is_only_requested(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_download(
+            DownloadRequest(
+                snapshot_date="2026-05-08",
+                start_date="2026-05-01",
+                end_date="2026-05-08",
+                providers=("sec",),
+                dry_run=False,
+                limit_tickers=1,
+                research_dir=tmp_path,
+            ),
+            universe_rows=_universe_rows(),
+        )
+
+    message = str(exc_info.value)
+    assert "sec" in message.lower()
+    assert "credential" in message.lower()
+    assert "SEC_USER_AGENT" not in message
+
+
+def test_missing_fmp_key_skips_fmp_units(tmp_path, monkeypatch):
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("fmp",),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+    )
+
+    assert summary.skipped_units == 1
+    assert summary.failed_units == 0
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    assert manifest["skipped"][0]["reason"] == "missing_client"
+
+
+def test_injected_provider_clients_do_not_require_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("tiingo", "sec", "fmp"),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        tiingo_client=FakeTiingoClient(),
+        sec_client=object(),
+        fmp_client=object(),
+    )
+
+    assert summary.completed_units == 1
+    assert summary.skipped_units == 2
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
+    assert reasons == {"sec": "stub_not_implemented", "fmp": "stub_not_implemented"}
 
 
 def test_tiingo_rate_limited_and_failed_statuses_update_counts(tmp_path):
