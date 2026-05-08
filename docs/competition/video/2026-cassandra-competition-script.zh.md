@@ -73,10 +73,10 @@ Engine：结构化 Agent 工作流、slot contract 和 quality gate，让 AI 执
 
 画面：
 打开 LLY 的 K-line workspace。展示事件层、Backtest 面板、事件可信边界。若出现正收益或 polished curve，画面角落标注：
-`演示路径，不代表真实研究收益`
+`模拟演示路径，不代表真实研究收益`
 
 旁白：
-在 validation 阶段，Cassandra 使用 ticker 级 trusted events 做验证：事件必须有来源、范围、归属和可进入回测的资格。K-line 和 backtest 展示的是市场验证工作流，而不是疾病报告直接生成的交易信号。这里的短曲线用于展示产品体验；真实研究结论仍然要依赖可信事件和明确的数据边界。
+在 validation 阶段，Cassandra 使用 ticker 级 trusted events 做验证：事件必须有来源、范围、归属和可进入回测的资格。K-line 和 backtest 展示的是市场验证工作流，而不是疾病报告直接生成的交易信号。这里如果出现正收益或 polished curve，只限于 mock/demo 路径，用于展示产品体验，不代表真实研究表现；真实研究结论仍然要依赖可信事件和明确的数据边界。
 
 字幕：
 Validation：用 ticker 级可信事件验证假设，不把疾病综述当作交易信号。
