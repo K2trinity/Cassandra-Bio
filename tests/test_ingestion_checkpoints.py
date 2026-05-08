@@ -31,6 +31,8 @@ def test_record_checkpoint_upserts_resumable_unit(tmp_path):
         phase="prices",
         ticker="MRNA",
         endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-01-01",
+        period_end="2020-01-31",
     )
 
     assert loaded == checkpoint
@@ -81,7 +83,69 @@ def test_record_checkpoint_replaces_existing_unit(tmp_path):
         phase="PRICES",
         ticker="mrna",
         endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-01-01",
+        period_end="2020-01-31",
     ) == second
+
+
+def test_date_window_checkpoints_coexist_for_same_endpoint(tmp_path):
+    from src.data_ingestion.checkpoints import (
+        IngestionCheckpoint,
+        get_checkpoint,
+        record_checkpoint,
+    )
+
+    db_path = tmp_path / "research.duckdb"
+    january = IngestionCheckpoint(
+        run_id="run-1",
+        data_snapshot_id="snap-1",
+        provider="tiingo",
+        phase="prices",
+        ticker="MRNA",
+        endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-01-01",
+        period_end="2020-01-31",
+        status="success",
+        attempt_count=1,
+        last_error=None,
+    )
+    february = IngestionCheckpoint(
+        run_id="run-1",
+        data_snapshot_id="snap-1",
+        provider="tiingo",
+        phase="prices",
+        ticker="MRNA",
+        endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-02-01",
+        period_end="2020-02-29",
+        status="failed",
+        attempt_count=2,
+        last_error="rate limited",
+    )
+
+    record_checkpoint(january, db_path=db_path)
+    record_checkpoint(february, db_path=db_path)
+
+    assert get_checkpoint(
+        db_path=db_path,
+        run_id="run-1",
+        provider="tiingo",
+        phase="prices",
+        ticker="MRNA",
+        endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-01-01",
+        period_end="2020-01-31",
+    ) == january
+    assert get_checkpoint(
+        db_path=db_path,
+        run_id="run-1",
+        provider="tiingo",
+        phase="prices",
+        ticker="MRNA",
+        endpoint="/tiingo/daily/MRNA/prices",
+        period_start="2020-02-01",
+        period_end="2020-02-29",
+    ) == february
 
 
 def test_completed_checkpoint_is_detected_case_insensitively(tmp_path):

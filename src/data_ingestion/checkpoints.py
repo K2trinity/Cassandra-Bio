@@ -37,9 +37,23 @@ def record_checkpoint(
         conn.execute(
             """
             DELETE FROM ingestion_checkpoints
-            WHERE run_id = ? AND provider = ? AND phase = ? AND ticker = ? AND endpoint = ?
+            WHERE run_id = ?
+              AND provider = ?
+              AND phase = ?
+              AND ticker = ?
+              AND endpoint = ?
+              AND period_start = ?
+              AND period_end = ?
             """,
-            [row.run_id, row.provider, row.phase, row.ticker, row.endpoint],
+            [
+                row.run_id,
+                row.provider,
+                row.phase,
+                row.ticker,
+                row.endpoint,
+                _period_key(row.period_start),
+                _period_key(row.period_end),
+            ],
         )
         conn.execute(
             """
@@ -66,8 +80,8 @@ def record_checkpoint(
                 row.phase,
                 row.ticker,
                 row.endpoint,
-                row.period_start,
-                row.period_end,
+                _period_key(row.period_start),
+                _period_key(row.period_end),
                 row.status,
                 row.attempt_count,
                 row.last_error,
@@ -89,6 +103,8 @@ def get_checkpoint(
     phase: str,
     ticker: str,
     endpoint: str,
+    period_start: str | None = None,
+    period_end: str | None = None,
 ) -> IngestionCheckpoint | None:
     path = initialize_research_database(db_path or RESEARCH_DB_PATH)
 
@@ -105,13 +121,19 @@ def get_checkpoint(
                 phase,
                 ticker,
                 endpoint,
-                CAST(period_start AS VARCHAR),
-                CAST(period_end AS VARCHAR),
+                NULLIF(period_start, ''),
+                NULLIF(period_end, ''),
                 status,
                 attempt_count,
                 last_error
             FROM ingestion_checkpoints
-            WHERE run_id = ? AND provider = ? AND phase = ? AND ticker = ? AND endpoint = ?
+            WHERE run_id = ?
+              AND provider = ?
+              AND phase = ?
+              AND ticker = ?
+              AND endpoint = ?
+              AND period_start = ?
+              AND period_end = ?
             """,
             [
                 _require_text(run_id, "run_id"),
@@ -119,6 +141,8 @@ def get_checkpoint(
                 _provider_phase(phase, "phase"),
                 _ticker(ticker),
                 _require_text(endpoint, "endpoint"),
+                _period_key(period_start),
+                _period_key(period_end),
             ],
         ).fetchone()
     finally:
@@ -129,8 +153,27 @@ def get_checkpoint(
     return IngestionCheckpoint(*row)
 
 
-def is_completed(**kwargs) -> bool:
-    checkpoint = get_checkpoint(**kwargs)
+def is_completed(
+    *,
+    db_path: str | Path | None = None,
+    run_id: str,
+    provider: str,
+    phase: str,
+    ticker: str,
+    endpoint: str,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> bool:
+    checkpoint = get_checkpoint(
+        db_path=db_path,
+        run_id=run_id,
+        provider=provider,
+        phase=phase,
+        ticker=ticker,
+        endpoint=endpoint,
+        period_start=period_start,
+        period_end=period_end,
+    )
     return checkpoint is not None and checkpoint.status == "success"
 
 
@@ -142,8 +185,8 @@ def _normalized(checkpoint: IngestionCheckpoint) -> IngestionCheckpoint:
         phase=_provider_phase(checkpoint.phase, "phase"),
         ticker=_ticker(checkpoint.ticker),
         endpoint=_require_text(checkpoint.endpoint, "endpoint"),
-        period_start=checkpoint.period_start,
-        period_end=checkpoint.period_end,
+        period_start=_period_value(checkpoint.period_start),
+        period_end=_period_value(checkpoint.period_end),
         status=_provider_phase(checkpoint.status, "status"),
         attempt_count=int(checkpoint.attempt_count),
         last_error=checkpoint.last_error,
@@ -156,6 +199,15 @@ def _provider_phase(value: str, field_name: str) -> str:
 
 def _ticker(value: str) -> str:
     return _require_text(value, "ticker").upper()
+
+
+def _period_key(value: str | None) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _period_value(value: str | None) -> str | None:
+    text = _period_key(value)
+    return text or None
 
 
 def _require_text(value: str, field_name: str) -> str:

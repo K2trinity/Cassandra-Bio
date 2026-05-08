@@ -120,13 +120,21 @@ CATALOG_SQL: tuple[str, ...] = (
         phase TEXT,
         ticker TEXT,
         endpoint TEXT,
-        period_start DATE,
-        period_end DATE,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
         status TEXT,
         attempt_count INTEGER,
         last_error TEXT,
         updated_at TIMESTAMP,
-        PRIMARY KEY (run_id, provider, phase, ticker, endpoint)
+        PRIMARY KEY (
+            run_id,
+            provider,
+            phase,
+            ticker,
+            endpoint,
+            period_start,
+            period_end
+        )
     )
     """,
     """
