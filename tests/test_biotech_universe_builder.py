@@ -56,6 +56,13 @@ def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
                 asset_type="fund",
                 source="IBB",
             ),
+            UniverseSourceRow(
+                ticker="bbh",
+                company_name="VanEck Biotech ETF",
+                exchange="NASDAQ",
+                asset_type="benchmark_etf",
+                source="BBH",
+            ),
         ],
         as_of_date="2026-05-08",
     )
@@ -64,7 +71,7 @@ def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
     assert snapshot.as_of_date == "2026-05-08"
     assert snapshot.bias_status == "current_constituents_only"
     assert snapshot.survivorship_bias_warning is True
-    assert snapshot.benchmark_tickers == ("IBB", "XBI")
+    assert snapshot.benchmark_tickers == ("BBH", "IBB", "XBI")
 
     assert [member.ticker for member in snapshot.members] == ["ABBA", "MRNA"]
     mrna = snapshot.members[1]
@@ -98,8 +105,9 @@ def test_universe_snapshot_id_is_deterministic_and_content_addressed():
                 ticker="XBI",
                 company_name="SPDR S&P Biotech ETF",
                 exchange="NYSEARCA",
-                asset_type="ETF",
+                asset_type="benchmark_etf",
                 source="XBI",
+                source_weight=0.012,
             ),
         ],
         as_of_date="2026-05-08",
@@ -110,8 +118,9 @@ def test_universe_snapshot_id_is_deterministic_and_content_addressed():
                 ticker="xbi",
                 company_name="SPDR S&P Biotech ETF",
                 exchange="NYSEARCA",
-                asset_type="etf",
+                asset_type="benchmark_etf",
                 source="xbi",
+                source_weight=0.012,
             ),
             UniverseSourceRow(
                 ticker="mrna",
@@ -161,8 +170,9 @@ def test_universe_snapshot_catalog_payload_uses_json_strings():
                 ticker="XBI",
                 company_name="SPDR S&P Biotech ETF",
                 exchange="NYSEARCA",
-                asset_type="ETF",
+                asset_type="benchmark_etf",
                 source="XBI",
+                source_weight=0.012,
             ),
         ],
         as_of_date="2026-05-08",
@@ -177,7 +187,32 @@ def test_universe_snapshot_catalog_payload_uses_json_strings():
     assert payload["survivorship_bias_warning"] is True
     assert payload["member_count"] == 1
     assert json.loads(payload["benchmark_tickers_json"]) == ["XBI"]
-    assert json.loads(payload["source_payload_json"]) == [{"source": "xbi"}]
+    assert json.loads(payload["source_payload_json"]) == [
+        {
+            "asset_type": "common stock",
+            "cik": None,
+            "company_name": "Moderna, Inc.",
+            "cusip": None,
+            "exchange": "NASDAQ",
+            "industry": None,
+            "isin": None,
+            "source": "xbi",
+            "source_weight": None,
+            "ticker": "MRNA",
+        },
+        {
+            "asset_type": "benchmark_etf",
+            "cik": None,
+            "company_name": "SPDR S&P Biotech ETF",
+            "cusip": None,
+            "exchange": "NYSEARCA",
+            "industry": None,
+            "isin": None,
+            "source": "xbi",
+            "source_weight": 0.012,
+            "ticker": "XBI",
+        },
+    ]
     assert json.loads(payload["coverage_json"]) == {
         "benchmark_tickers": ["XBI"],
         "member_count": 1,

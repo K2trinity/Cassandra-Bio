@@ -22,6 +22,7 @@ _COMMON_STOCK_TYPES = {
 }
 _BENCHMARK_ASSET_TYPES = {
     "etf",
+    "benchmark_etf",
     "fund",
     "mutual fund",
     "mutual_fund",
@@ -66,11 +67,11 @@ class UniverseSnapshot:
     members: tuple[UniverseMember, ...]
     benchmark_tickers: tuple[str, ...]
     sources: tuple[str, ...]
+    source_payloads: tuple[dict[str, Any], ...]
     bias_status: str = BIOTECH_BIAS_STATUS
     survivorship_bias_warning: bool = True
 
     def to_catalog_payload(self) -> dict[str, Any]:
-        source_payload = [{"source": source} for source in self.sources]
         return {
             "universe_snapshot_id": self.universe_snapshot_id,
             "universe_id": self.universe_id,
@@ -79,7 +80,7 @@ class UniverseSnapshot:
             "survivorship_bias_warning": self.survivorship_bias_warning,
             "member_count": len(self.members),
             "benchmark_tickers_json": _canonical_json(list(self.benchmark_tickers)),
-            "source_payload_json": _canonical_json(source_payload),
+            "source_payload_json": _canonical_json(list(self.source_payloads)),
             "coverage_json": _canonical_json(
                 {
                     "benchmark_tickers": list(self.benchmark_tickers),
@@ -99,12 +100,21 @@ def build_universe_snapshot(
     members_by_ticker: dict[str, dict[str, Any]] = {}
     benchmark_tickers: set[str] = set()
     sources: set[str] = set()
+    source_payloads: list[dict[str, Any]] = []
 
     for row in rows:
         ticker = _normalize_ticker(row.ticker)
         source = _normalize_source(row.source)
         asset_type = _normalize_asset_type(row.asset_type)
         sources.add(source)
+        source_payloads.append(
+            _row_payload(
+                row,
+                ticker=ticker,
+                source=source,
+                asset_type=asset_type,
+            )
+        )
 
         if asset_type in _BENCHMARK_ASSET_TYPES:
             benchmark_tickers.add(ticker)
@@ -151,11 +161,13 @@ def build_universe_snapshot(
     )
     benchmark_tuple = tuple(sorted(benchmark_tickers))
     source_tuple = tuple(sorted(sources))
+    source_payload_tuple = tuple(sorted(source_payloads, key=_source_payload_sort_key))
     snapshot_id = _build_universe_snapshot_id(
         as_of_date=canonical_date,
         members=members,
         benchmark_tickers=benchmark_tuple,
         sources=source_tuple,
+        source_payloads=source_payload_tuple,
     )
 
     return UniverseSnapshot(
@@ -165,6 +177,7 @@ def build_universe_snapshot(
         members=members,
         benchmark_tickers=benchmark_tuple,
         sources=source_tuple,
+        source_payloads=source_payload_tuple,
     )
 
 
@@ -174,6 +187,7 @@ def _build_universe_snapshot_id(
     members: tuple[UniverseMember, ...],
     benchmark_tickers: tuple[str, ...],
     sources: tuple[str, ...],
+    source_payloads: tuple[dict[str, Any], ...],
 ) -> str:
     payload = {
         "as_of_date": as_of_date,
@@ -194,6 +208,7 @@ def _build_universe_snapshot_id(
             }
             for member in members
         ],
+        "source_payloads": source_payloads,
         "sources": sources,
         "survivorship_bias_warning": True,
         "universe_id": BIOTECH_US_UNIVERSE_ID,
@@ -233,7 +248,42 @@ def _normalize_exchange(value: str) -> str:
 
 
 def _normalize_asset_type(value: str) -> str:
-    return value.strip().lower().replace("-", " ")
+    asset_type = value.strip().lower().replace("-", " ")
+    if asset_type == "common_stock":
+        return "common stock"
+    if asset_type == "mutual_fund":
+        return "mutual fund"
+    return asset_type
+
+
+def _row_payload(
+    row: UniverseSourceRow,
+    *,
+    ticker: str,
+    source: str,
+    asset_type: str,
+) -> dict[str, Any]:
+    return {
+        "ticker": ticker,
+        "company_name": row.company_name,
+        "exchange": _normalize_exchange(row.exchange),
+        "asset_type": asset_type,
+        "source": source,
+        "source_weight": row.source_weight,
+        "industry": row.industry,
+        "cik": row.cik,
+        "cusip": row.cusip,
+        "isin": row.isin,
+    }
+
+
+def _source_payload_sort_key(payload: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        payload["ticker"],
+        payload["source"],
+        payload["asset_type"],
+        payload["company_name"],
+    )
 
 
 def _json_ready(value: Any) -> Any:
