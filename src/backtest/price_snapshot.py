@@ -215,6 +215,39 @@ def write_prices_daily_frame(
     _write_planned_partitions(pending_writes)
 
 
+def append_prices_daily_frame(
+    frame: pd.DataFrame,
+    *,
+    output_root: str | Path | None = None,
+) -> None:
+    missing = [column for column in PRICE_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Price frame missing columns: {missing}")
+    _validate_price_frame_partition_keys(frame)
+
+    root = (
+        Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
+    )
+    pending_writes = []
+    for (source, data_snapshot_id), group in frame.groupby(
+        ["source", "data_snapshot_id"],
+        sort=True,
+    ):
+        source = _validate_source(source)
+        data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
+        pending_writes.extend(
+            _plan_partition_writes(
+                group[PRICE_COLUMNS],
+                root,
+                source=source,
+                data_snapshot_id=data_snapshot_id,
+            )
+        )
+
+    _preflight_partition_writes(pending_writes)
+    _write_planned_partitions(pending_writes)
+
+
 def _write_partition(
     frame: pd.DataFrame,
     root: Path,
