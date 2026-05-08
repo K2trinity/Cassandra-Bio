@@ -83,7 +83,7 @@ def test_parse_symbol_directories_combines_sources_and_keeps_common_class_ticker
         [
             "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
             "MRNA|Moderna, Inc. Common Stock|Q|N|N|100|N|N",
-            "CDZIP|Cadiz Inc Depositary Shares|Q|N|N|100|N|N",
+            "CDZIP|Cadiz Inc Preferred Depositary Shares|Q|N|N|100|N|N",
         ]
     )
     other_text = "\n".join(
@@ -102,13 +102,32 @@ def test_parse_symbol_directories_combines_sources_and_keeps_common_class_ticker
     assert [row.ticker for row in rows] == ["MRNA", "AKO.A", "BRK.B"]
 
 
+def test_parse_nasdaq_listed_keeps_common_equivalent_ads_rows():
+    from src.data_ingestion.nasdaq_trader import parse_nasdaq_listed
+
+    text = "\n".join(
+        [
+            "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+            "ARGX|argenx SE - American Depositary Shares|Q|N|N|100|N|N",
+            "BNTX|BioNTech SE - American Depositary Shares|Q|N|N|100|N|N",
+            "GMAB|Genmab A/S - American Depositary Shares|Q|N|N|100|N|N",
+            "LEGN|Legend Biotech Corporation - American Depositary Shares|Q|N|N|100|N|N",
+        ]
+    )
+
+    rows = parse_nasdaq_listed(text)
+
+    assert [row.ticker for row in rows] == ["ARGX", "BNTX", "GMAB", "LEGN"]
+    assert {row.asset_type for row in rows} == {"common_stock"}
+
+
 def test_parse_nasdaq_listed_filters_preferred_depositary_notes_and_funds():
     from src.data_ingestion.nasdaq_trader import parse_nasdaq_listed
 
     text = "\n".join(
         [
             "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
-            "MNSBP|MainStreet Bancshares Inc. Depositary Shares|Q|N|N|100|N|N",
+            "MNSBP|MainStreet Bancshares Inc. Preferred Depositary Shares|Q|N|N|100|N|N",
             "WAFDP|WaFd Inc. Preferred Stock|Q|N|N|100|N|N",
             "SENIOR|Example Corp 5.50% Senior Notes due 2030|Q|N|N|100|N|N",
             "CEF|Example Closed-End Fund|Q|N|N|100|N|N",

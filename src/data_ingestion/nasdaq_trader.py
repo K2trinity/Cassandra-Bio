@@ -43,7 +43,6 @@ _NAME_EXCLUSION_PATTERNS = (
     re.compile(r"\bPREFERRED\b"),
     re.compile(r"\bPREFERENCE\b"),
     re.compile(r"\bPFD\b"),
-    re.compile(r"\bDEPOSITARY\b"),
     re.compile(r"\bSENIOR\s+NOTES?\b"),
     re.compile(r"\bNOTES?\s+DUE\b"),
     re.compile(r"\bCLOSED[- ]END\s+FUND\b"),
