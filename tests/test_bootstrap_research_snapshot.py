@@ -25,6 +25,17 @@ def test_bootstrap_research_snapshot_script_help_runs_from_repo_root():
     assert result.returncode == 0, result.stderr
     assert "--snapshot-date" in result.stdout
     assert "--universe-id" in result.stdout
+    assert "--price-source" in result.stdout
+
+
+def test_bootstrap_research_snapshot_parser_defaults_to_biotech_us_tiingo():
+    from scripts.bootstrap_research_snapshot import build_arg_parser
+    from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
+
+    args = build_arg_parser().parse_args(["--snapshot-date", "2026-05-07"])
+
+    assert args.universe_id == BIOTECH_US_UNIVERSE_ID
+    assert args.price_source == "tiingo"
 
 
 def test_bootstrap_research_snapshot_creates_snapshot_from_local_ohlc(tmp_path):
@@ -42,7 +53,6 @@ def test_bootstrap_research_snapshot_creates_snapshot_from_local_ohlc(tmp_path):
         db_path=db_path,
         event_db_path=event_db_path,
         snapshot_date="2026-05-07",
-        universe_id="biotech_four_v1",
     )
 
     assert result["data_snapshot_id"].startswith("snap_20260507_")
@@ -59,6 +69,7 @@ def test_bootstrap_research_snapshot_creates_snapshot_from_local_ohlc(tmp_path):
         SELECT
             data_snapshot_id,
             universe_id,
+            price_source,
             bias_profile,
             price_partition_root,
             event_source_db,
@@ -74,13 +85,14 @@ def test_bootstrap_research_snapshot_creates_snapshot_from_local_ohlc(tmp_path):
 
     assert row is not None
     assert row[0] == result["data_snapshot_id"]
-    assert row[1] == "biotech_four_v1"
-    assert row[2] == "survivorship_biased"
-    assert row[3] == str(research_dir / "prices_daily")
-    assert row[4] == str(event_db_path)
-    assert row[5] == _expected_event_source_hash(event_db_path)
-    assert row[6] == _expected_ohlc_manifest_hash(ohlc_dir)
-    assert json.loads(row[7]) == {"rows": 2, "tickers": 1}
+    assert row[1] == "biotech_us_v1"
+    assert row[2] == "tiingo"
+    assert row[3] == "unknown_bias"
+    assert row[4] == str(research_dir / "prices_daily")
+    assert row[5] == str(event_db_path)
+    assert row[6] == _expected_event_source_hash(event_db_path)
+    assert row[7] == _expected_ohlc_manifest_hash(ohlc_dir)
+    assert json.loads(row[8]) == {"rows": 2, "tickers": 1}
 
 
 def test_bootstrap_research_snapshot_id_changes_when_local_ohlc_content_changes(
