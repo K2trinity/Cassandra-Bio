@@ -80,7 +80,7 @@ def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
     ]
     mrna = snapshot.members[1]
     assert mrna.security_id == "BIO:MRNA"
-    assert mrna.company_name == "Moderna, Inc."
+    assert mrna.company_name == "Moderna Inc"
     assert mrna.exchange == "NASDAQ"
     assert mrna.asset_type == "common_stock"
     assert mrna.source_memberships == ("ibb", "xbi")
@@ -153,6 +153,53 @@ def test_universe_snapshot_id_is_deterministic_and_content_addressed():
     assert first.universe_snapshot_id == reordered.universe_snapshot_id
     assert first.universe_snapshot_id.startswith("univ_20260508_")
     assert first.universe_snapshot_id != changed.universe_snapshot_id
+
+
+def test_duplicate_member_merge_uses_deterministic_source_precedence():
+    from src.backtest.universe_builder import (
+        UniverseSourceRow,
+        build_universe_snapshot,
+    )
+
+    xbi_row = UniverseSourceRow(
+        ticker="MRNA",
+        company_name="Moderna from XBI",
+        exchange="NYSE",
+        asset_type="common_stock",
+        source="xbi",
+        source_weight=0.008,
+        industry="Pharma",
+        cik="xbi-cik",
+    )
+    ibb_row = UniverseSourceRow(
+        ticker="mrna",
+        company_name="Moderna from IBB",
+        exchange="Nasdaq",
+        asset_type="Common Stock",
+        source="IBB",
+        source_weight=0.021,
+        industry="Biotechnology",
+        cusip="60770K107",
+    )
+
+    first = build_universe_snapshot(
+        [xbi_row, ibb_row],
+        as_of_date="2026-05-08",
+    )
+    reversed_order = build_universe_snapshot(
+        [ibb_row, xbi_row],
+        as_of_date="2026-05-08",
+    )
+
+    assert first.universe_snapshot_id == reversed_order.universe_snapshot_id
+    assert first.members == reversed_order.members
+    member = first.members[0]
+    assert member.company_name == "Moderna from IBB"
+    assert member.exchange == "NASDAQ"
+    assert member.industry == "Biotechnology"
+    assert member.cusip == "60770K107"
+    assert member.cik == "xbi-cik"
+    assert member.source_memberships == ("ibb", "xbi")
 
 
 def test_universe_snapshot_catalog_payload_uses_json_strings():

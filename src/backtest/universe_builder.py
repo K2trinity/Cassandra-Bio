@@ -29,6 +29,13 @@ _BENCHMARK_ASSET_TYPES = {
     "exchange traded fund",
     "exchange_traded_fund",
 }
+_SOURCE_PRECEDENCE = {
+    "exchange_listings": 0,
+    "nasdaq_screener": 0,
+    "nyse": 0,
+    "ibb": 1,
+    "xbi": 2,
+}
 
 
 @dataclass(frozen=True)
@@ -98,7 +105,7 @@ def build_universe_snapshot(
     as_of_date: str | date | datetime,
 ) -> UniverseSnapshot:
     canonical_date = _canonical_as_of_date(as_of_date)
-    members_by_ticker: dict[str, dict[str, Any]] = {}
+    rows_by_member_ticker: dict[str, list[dict[str, Any]]] = {}
     benchmark_tickers: set[str] = set()
     sources: set[str] = set()
     source_payloads: list[dict[str, Any]] = []
@@ -108,59 +115,24 @@ def build_universe_snapshot(
         source = _normalize_source(row.source)
         asset_type = _normalize_asset_type(row.asset_type)
         sources.add(source)
-        source_payloads.append(
-            _row_payload(
-                row,
-                ticker=ticker,
-                source=source,
-                asset_type=asset_type,
-            )
+        row_payload = _row_payload(
+            row,
+            ticker=ticker,
+            source=source,
+            asset_type=asset_type,
         )
+        source_payloads.append(row_payload)
 
         if asset_type in _BENCHMARK_ASSET_TYPES:
             benchmark_tickers.add(ticker)
             continue
         if asset_type not in _COMMON_STOCK_TYPES:
             continue
-
-        member = members_by_ticker.setdefault(
-            ticker,
-            {
-                "security_id": f"BIO:{ticker}",
-                "ticker": ticker,
-                "company_name": row.company_name,
-                "exchange": _normalize_exchange(row.exchange),
-                "asset_type": "common_stock",
-                "source_memberships": set(),
-                "source_weights": {},
-                "industry": row.industry,
-                "cik": row.cik,
-                "cusip": row.cusip,
-                "isin": row.isin,
-            },
-        )
-        member["source_memberships"].add(source)
-        if row.source_weight is not None:
-            member["source_weights"][source] = row.source_weight
-        for field_name in ("industry", "cik", "cusip", "isin"):
-            if member[field_name] is None and getattr(row, field_name) is not None:
-                member[field_name] = getattr(row, field_name)
+        rows_by_member_ticker.setdefault(ticker, []).append(row_payload)
 
     members = tuple(
-        UniverseMember(
-            security_id=member["security_id"],
-            ticker=member["ticker"],
-            company_name=member["company_name"],
-            exchange=member["exchange"],
-            asset_type=member["asset_type"],
-            source_memberships=tuple(sorted(member["source_memberships"])),
-            source_weights=dict(sorted(member["source_weights"].items())),
-            industry=member["industry"],
-            cik=member["cik"],
-            cusip=member["cusip"],
-            isin=member["isin"],
-        )
-        for member in sorted(members_by_ticker.values(), key=lambda item: item["ticker"])
+        _build_member_from_rows(ticker, candidate_rows)
+        for ticker, candidate_rows in sorted(rows_by_member_ticker.items())
     )
     benchmark_tuple = tuple(sorted(benchmark_tickers))
     source_tuple = tuple(sorted(sources))
@@ -258,6 +230,56 @@ def _normalize_asset_type(value: str) -> str:
     if asset_type == "mutual_fund":
         return "mutual fund"
     return asset_type
+
+
+def _source_rank(source: str) -> tuple[int, str]:
+    return (_SOURCE_PRECEDENCE.get(source, 100), source)
+
+
+def _member_row_sort_key(payload: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        _source_rank(payload["source"]),
+        payload["ticker"],
+        payload["company_name"],
+        payload["exchange"],
+        _canonical_json(payload),
+    )
+
+
+def _build_member_from_rows(
+    ticker: str,
+    candidate_rows: list[dict[str, Any]],
+) -> UniverseMember:
+    sorted_rows = sorted(candidate_rows, key=_member_row_sort_key)
+    primary = sorted_rows[0]
+    return UniverseMember(
+        security_id=f"BIO:{ticker}",
+        ticker=ticker,
+        company_name=primary["company_name"],
+        exchange=primary["exchange"],
+        asset_type="common_stock",
+        source_memberships=tuple(sorted({row["source"] for row in sorted_rows})),
+        source_weights=_source_weights_from_rows(sorted_rows),
+        industry=_first_non_empty(sorted_rows, "industry"),
+        cik=_first_non_empty(sorted_rows, "cik"),
+        cusip=_first_non_empty(sorted_rows, "cusip"),
+        isin=_first_non_empty(sorted_rows, "isin"),
+    )
+
+
+def _source_weights_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for row in rows:
+        if row["source_weight"] is not None and row["source"] not in weights:
+            weights[row["source"]] = row["source_weight"]
+    return dict(sorted(weights.items()))
+
+
+def _first_non_empty(rows: list[dict[str, Any]], field_name: str) -> Any:
+    for row in rows:
+        if row[field_name] is not None:
+            return row[field_name]
+    return None
 
 
 def _row_payload(
