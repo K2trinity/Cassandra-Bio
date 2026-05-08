@@ -57,6 +57,7 @@ class DownloadRequest:
 @dataclass(frozen=True)
 class DownloadSummary:
     data_snapshot_id: str
+    run_id: str
     dry_run: bool
     providers: tuple[str, ...]
     universe_member_count: int
@@ -76,6 +77,12 @@ class _PlannedUnit:
     endpoint: str
     period_start: str | None
     period_end: str | None
+
+
+@dataclass(frozen=True)
+class _UnitExecutionResult:
+    status: str
+    reason: str | None = None
 
 
 def run_download(
@@ -100,6 +107,12 @@ def run_download(
     )
     data_snapshot_id = _build_snapshot_id(request, universe_snapshot.universe_snapshot_id)
     units = _plan_units(request, selected_members)
+    run_id = _build_run_id(
+        request,
+        universe_snapshot_id=universe_snapshot.universe_snapshot_id,
+        selected_members=selected_members,
+        units=units,
+    )
 
     if not request.dry_run:
         write_universe_snapshot(universe_snapshot, db_path=db_path)
@@ -108,8 +121,6 @@ def run_download(
                 request=request,
                 data_snapshot_id=data_snapshot_id,
                 universe_snapshot_id=universe_snapshot.universe_snapshot_id,
-                selected_members=selected_members,
-                planned_units=len(units),
             ),
             db_path=db_path,
         )
@@ -130,6 +141,7 @@ def run_download(
                 result = _execute_tiingo_unit(
                     unit,
                     request=request,
+                    run_id=run_id,
                     data_snapshot_id=data_snapshot_id,
                     db_path=db_path,
                     client=tiingo_client,
@@ -138,20 +150,21 @@ def run_download(
                 result = _skip_stubbed_unit(
                     unit,
                     request=request,
+                    run_id=run_id,
                     data_snapshot_id=data_snapshot_id,
                     db_path=db_path,
                     client=sec_client if unit.provider == "sec" else fmp_client,
                 )
 
-            fetch_summary[unit.provider][result] = (
-                fetch_summary[unit.provider].get(result, 0) + 1
+            fetch_summary[unit.provider][result.status] = (
+                fetch_summary[unit.provider].get(result.status, 0) + 1
             )
-            if result == "success":
+            if result.status == "success":
                 completed_units += 1
-            elif result == "skipped":
+            elif result.status == "skipped":
                 skipped_units += 1
-                skipped.append(_unit_payload(unit, reason="not_available"))
-            elif result == "rate_limited":
+                skipped.append(_unit_payload(unit, reason=result.reason or "skipped"))
+            elif result.status == "rate_limited":
                 rate_limited_units += 1
             else:
                 failed_units += 1
@@ -170,6 +183,8 @@ def run_download(
             },
             "planned_units": len(units),
             "selected_tickers": [member.ticker for member in selected_members],
+            "phases": sorted({unit.phase for unit in units}),
+            "endpoints": [unit.endpoint for unit in units],
         },
         fetch_summary=fetch_summary,
         skipped=skipped,
@@ -179,13 +194,28 @@ def run_download(
         },
         metadata={
             "dry_run": request.dry_run,
+            "run_id": run_id,
             "universe_snapshot_id": universe_snapshot.universe_snapshot_id,
+            "execution_plan": {
+                "date_range": {
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
+                },
+                "planned_units": len(units),
+                "selected_tickers": [member.ticker for member in selected_members],
+                "phases": sorted({unit.phase for unit in units}),
+                "endpoints": [unit.endpoint for unit in units],
+            },
         },
     )
-    manifest_path = write_snapshot_manifest(manifest, output_dir=research_dir / "manifests")
+    manifest_path = write_snapshot_manifest(
+        manifest,
+        output_dir=research_dir / "manifests" / run_id,
+    )
 
     return DownloadSummary(
         data_snapshot_id=data_snapshot_id,
+        run_id=run_id,
         dry_run=request.dry_run,
         providers=request.providers,
         universe_member_count=len(universe_snapshot.members),
@@ -202,13 +232,14 @@ def _execute_tiingo_unit(
     unit: _PlannedUnit,
     *,
     request: DownloadRequest,
+    run_id: str,
     data_snapshot_id: str,
     db_path: Path,
     client: Any | None,
-) -> str:
+) -> _UnitExecutionResult:
     if request.resume and is_completed(
         db_path=db_path,
-        run_id=data_snapshot_id,
+        run_id=run_id,
         provider=unit.provider,
         phase=unit.phase,
         ticker=unit.ticker,
@@ -216,11 +247,18 @@ def _execute_tiingo_unit(
         period_start=unit.period_start,
         period_end=unit.period_end,
     ):
-        return "skipped"
+        return _UnitExecutionResult("skipped", "already_completed")
 
     if client is None:
-        _record_checkpoint(unit, data_snapshot_id, db_path, "skipped", "no Tiingo client")
-        return "skipped"
+        _record_checkpoint(
+            unit,
+            run_id,
+            data_snapshot_id,
+            db_path,
+            "skipped",
+            "missing_client",
+        )
+        return _UnitExecutionResult("skipped", "missing_client")
 
     try:
         result = client.fetch_daily_prices(
@@ -228,44 +266,6 @@ def _execute_tiingo_unit(
             start_date=request.start_date,
             end_date=request.end_date,
         )
-        record_provider_fetch(
-            provider=unit.provider,
-            endpoint=unit.endpoint,
-            request_hash=result.request_hash,
-            status=result.status,
-            message=result.message,
-            metadata={
-                "ticker": unit.ticker,
-                "period_start": unit.period_start,
-                "period_end": unit.period_end,
-                "retry_after_seconds": result.retry_after_seconds,
-            },
-            db_path=db_path,
-        )
-        if result.status == "success":
-            frame = normalize_tiingo_eod_prices(
-                result.rows or [],
-                ticker=unit.ticker,
-                data_snapshot_id=data_snapshot_id,
-            )
-            if not frame.empty:
-                append_prices_daily_frame(
-                    frame,
-                    output_root=Path(request.research_dir) / "prices_daily",
-                )
-            _record_checkpoint(unit, data_snapshot_id, db_path, "success", None)
-            return "success"
-        if result.status == "rate_limited":
-            _record_checkpoint(
-                unit,
-                data_snapshot_id,
-                db_path,
-                "rate_limited",
-                result.message,
-            )
-            return "rate_limited"
-        _record_checkpoint(unit, data_snapshot_id, db_path, "failed", result.message)
-        return "failed"
     except Exception as exc:
         request_hash = _stable_request_hash(unit)
         record_provider_fetch(
@@ -277,21 +277,96 @@ def _execute_tiingo_unit(
             metadata={"ticker": unit.ticker},
             db_path=db_path,
         )
-        _record_checkpoint(unit, data_snapshot_id, db_path, "failed", str(exc))
-        return "failed"
+        _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "failed", str(exc))
+        return _UnitExecutionResult("failed", str(exc))
+
+    record_provider_fetch(
+        provider=unit.provider,
+        endpoint=unit.endpoint,
+        request_hash=result.request_hash,
+        status=result.status,
+        message=result.message,
+        metadata={
+            "ticker": unit.ticker,
+            "period_start": unit.period_start,
+            "period_end": unit.period_end,
+            "retry_after_seconds": result.retry_after_seconds,
+        },
+        db_path=db_path,
+    )
+
+    if result.status == "success":
+        if not result.rows:
+            _record_checkpoint(
+                unit,
+                run_id,
+                data_snapshot_id,
+                db_path,
+                "skipped",
+                "no_rows",
+            )
+            return _UnitExecutionResult("skipped", "no_rows")
+        try:
+            frame = normalize_tiingo_eod_prices(
+                result.rows,
+                ticker=unit.ticker,
+                data_snapshot_id=data_snapshot_id,
+            )
+            if frame.empty:
+                _record_checkpoint(
+                    unit,
+                    run_id,
+                    data_snapshot_id,
+                    db_path,
+                    "skipped",
+                    "no_valid_rows",
+                )
+                return _UnitExecutionResult("skipped", "no_valid_rows")
+            append_prices_daily_frame(
+                frame,
+                output_root=Path(request.research_dir) / "prices_daily",
+            )
+        except Exception as exc:
+            _record_checkpoint(
+                unit,
+                run_id,
+                data_snapshot_id,
+                db_path,
+                "failed",
+                str(exc),
+            )
+            return _UnitExecutionResult("failed", str(exc))
+
+        _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "success", None)
+        return _UnitExecutionResult("success")
+
+    if result.status == "rate_limited":
+        _record_checkpoint(
+            unit,
+            run_id,
+            data_snapshot_id,
+            db_path,
+            "rate_limited",
+            result.message,
+        )
+        return _UnitExecutionResult("rate_limited", result.message)
+
+    _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "failed", result.message)
+    return _UnitExecutionResult("failed", result.message)
 
 
 def _skip_stubbed_unit(
     unit: _PlannedUnit,
     *,
     request: DownloadRequest,
+    run_id: str,
     data_snapshot_id: str,
     db_path: Path,
     client: Any | None,
-) -> str:
+) -> _UnitExecutionResult:
     if request.resume and is_completed(
         db_path=db_path,
-        run_id=data_snapshot_id,
+        run_id=run_id,
         provider=unit.provider,
         phase=unit.phase,
         ticker=unit.ticker,
@@ -299,16 +374,17 @@ def _skip_stubbed_unit(
         period_start=unit.period_start,
         period_end=unit.period_end,
     ):
-        return "skipped"
-    reason = "client execution is not implemented in Task 6"
+        return _UnitExecutionResult("skipped", "already_completed")
+    reason = "stub_not_implemented"
     if client is None:
-        reason = f"no {unit.provider.upper()} client"
-    _record_checkpoint(unit, data_snapshot_id, db_path, "skipped", reason)
-    return "skipped"
+        reason = "missing_client"
+    _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "skipped", reason)
+    return _UnitExecutionResult("skipped", reason)
 
 
 def _record_checkpoint(
     unit: _PlannedUnit,
+    run_id: str,
     data_snapshot_id: str,
     db_path: Path,
     status: str,
@@ -316,7 +392,7 @@ def _record_checkpoint(
 ) -> None:
     record_checkpoint(
         IngestionCheckpoint(
-            run_id=data_snapshot_id,
+            run_id=run_id,
             data_snapshot_id=data_snapshot_id,
             provider=unit.provider,
             phase=unit.phase,
@@ -410,13 +486,36 @@ def _build_snapshot_id(request: DownloadRequest, universe_snapshot_id: str) -> s
     )
 
 
+def _build_run_id(
+    request: DownloadRequest,
+    *,
+    universe_snapshot_id: str,
+    selected_members: Sequence[UniverseMember],
+    units: Sequence[_PlannedUnit],
+) -> str:
+    payload = {
+        "date_range": {
+            "end_date": request.end_date,
+            "start_date": request.start_date,
+        },
+        "endpoints": sorted({unit.endpoint for unit in units}),
+        "phases": sorted({unit.phase for unit in units}),
+        "providers": sorted(set(request.providers)),
+        "selected_tickers": [member.ticker for member in selected_members],
+        "snapshot_date": request.snapshot_date,
+        "universe_snapshot_id": universe_snapshot_id,
+    }
+    digest = sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"run_{request.snapshot_date.replace('-', '')}_{digest}"
+
+
 def _build_data_snapshot(
     *,
     request: DownloadRequest,
     data_snapshot_id: str,
     universe_snapshot_id: str,
-    selected_members: Sequence[UniverseMember],
-    planned_units: int,
 ) -> DataSnapshot:
     return DataSnapshot(
         data_snapshot_id=data_snapshot_id,
@@ -429,8 +528,6 @@ def _build_data_snapshot(
         event_snapshot_hash=_stable_hash("no-events"),
         security_master_hash=_stable_hash(universe_snapshot_id),
         coverage={
-            "planned_units": planned_units,
-            "selected_tickers": [member.ticker for member in selected_members],
             "universe_snapshot_id": universe_snapshot_id,
         },
     )
