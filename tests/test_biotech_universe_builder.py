@@ -1,0 +1,213 @@
+from __future__ import annotations
+
+import json
+
+
+def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
+    from src.backtest.universe_builder import (
+        UniverseSourceRow,
+        build_universe_snapshot,
+    )
+
+    snapshot = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="xbi",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="ETF",
+                source="XBI",
+                source_weight=0.012,
+            ),
+            UniverseSourceRow(
+                ticker="mrna",
+                company_name="Moderna, Inc.",
+                exchange="NASDAQ",
+                asset_type="Common Stock",
+                source="XBI",
+                source_weight=0.008,
+                industry="Biotechnology",
+                cik="1682852",
+                cusip="60770K107",
+                isin="US60770K1079",
+            ),
+            UniverseSourceRow(
+                ticker="MRNA",
+                company_name="Moderna Inc",
+                exchange="Nasdaq",
+                asset_type="common_stock",
+                source="IBB",
+                source_weight=0.021,
+            ),
+            UniverseSourceRow(
+                ticker="ABBA",
+                company_name="ABBA Therapeutics",
+                exchange="NASDAQ",
+                asset_type="Common Stock",
+                source="Manual",
+            ),
+            UniverseSourceRow(
+                ticker="ibb",
+                company_name="iShares Biotechnology ETF",
+                exchange="NASDAQ",
+                asset_type="fund",
+                source="IBB",
+            ),
+        ],
+        as_of_date="2026-05-08",
+    )
+
+    assert snapshot.universe_id == "biotech_us_v1"
+    assert snapshot.as_of_date == "2026-05-08"
+    assert snapshot.bias_status == "current_constituents_only"
+    assert snapshot.survivorship_bias_warning is True
+    assert snapshot.benchmark_tickers == ("IBB", "XBI")
+
+    assert [member.ticker for member in snapshot.members] == ["ABBA", "MRNA"]
+    mrna = snapshot.members[1]
+    assert mrna.company_name == "Moderna, Inc."
+    assert mrna.exchange == "NASDAQ"
+    assert mrna.asset_type == "common_stock"
+    assert mrna.source_memberships == ("ibb", "xbi")
+    assert mrna.source_weights == {"ibb": 0.021, "xbi": 0.008}
+    assert mrna.industry == "Biotechnology"
+    assert mrna.cik == "1682852"
+    assert mrna.cusip == "60770K107"
+    assert mrna.isin == "US60770K1079"
+
+
+def test_universe_snapshot_id_is_deterministic_and_content_addressed():
+    from src.backtest.universe_builder import (
+        UniverseSourceRow,
+        build_universe_snapshot,
+    )
+
+    first = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="MRNA",
+                company_name="Moderna, Inc.",
+                exchange="NASDAQ",
+                asset_type="Common Stock",
+                source="XBI",
+            ),
+            UniverseSourceRow(
+                ticker="XBI",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="ETF",
+                source="XBI",
+            ),
+        ],
+        as_of_date="2026-05-08",
+    )
+    reordered = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="xbi",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="etf",
+                source="xbi",
+            ),
+            UniverseSourceRow(
+                ticker="mrna",
+                company_name="Moderna, Inc.",
+                exchange="NASDAQ",
+                asset_type="common_stock",
+                source="xbi",
+            ),
+        ],
+        as_of_date="2026-05-08",
+    )
+    changed = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="MRNA",
+                company_name="Moderna, Inc.",
+                exchange="NASDAQ",
+                asset_type="Common Stock",
+                source="XBI",
+            ),
+        ],
+        as_of_date="2026-05-09",
+    )
+
+    assert first.universe_snapshot_id == reordered.universe_snapshot_id
+    assert first.universe_snapshot_id.startswith("univ_20260508_")
+    assert first.universe_snapshot_id != changed.universe_snapshot_id
+
+
+def test_universe_snapshot_catalog_payload_uses_json_strings():
+    from src.backtest.universe_builder import (
+        UniverseSourceRow,
+        build_universe_snapshot,
+    )
+
+    snapshot = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="MRNA",
+                company_name="Moderna, Inc.",
+                exchange="NASDAQ",
+                asset_type="Common Stock",
+                source="XBI",
+            ),
+            UniverseSourceRow(
+                ticker="XBI",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="ETF",
+                source="XBI",
+            ),
+        ],
+        as_of_date="2026-05-08",
+    )
+
+    payload = snapshot.to_catalog_payload()
+
+    assert payload["universe_snapshot_id"] == snapshot.universe_snapshot_id
+    assert payload["universe_id"] == "biotech_us_v1"
+    assert payload["as_of_date"] == "2026-05-08"
+    assert payload["bias_status"] == "current_constituents_only"
+    assert payload["survivorship_bias_warning"] is True
+    assert json.loads(payload["benchmark_json"]) == ["XBI"]
+    assert json.loads(payload["source_json"]) == ["xbi"]
+    assert json.loads(payload["coverage_json"]) == {
+        "benchmark_tickers": 1,
+        "members": 1,
+        "sources": 1,
+    }
+
+
+def test_research_database_creates_universe_snapshots_catalog_table(tmp_path):
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = tmp_path / "research.duckdb"
+
+    initialize_research_database(db_path)
+
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info('universe_snapshots')").fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert "universe_snapshots" in tables
+    assert {
+        "universe_snapshot_id",
+        "universe_id",
+        "as_of_date",
+        "bias_status",
+        "survivorship_bias_warning",
+        "benchmark_json",
+        "source_json",
+        "coverage_json",
+        "created_at",
+    }.issubset(columns)

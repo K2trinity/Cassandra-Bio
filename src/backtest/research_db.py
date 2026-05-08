@@ -54,6 +54,19 @@ CATALOG_SQL: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS universe_snapshots (
+        universe_snapshot_id TEXT PRIMARY KEY,
+        universe_id TEXT,
+        as_of_date DATE,
+        bias_status TEXT,
+        survivorship_bias_warning BOOLEAN,
+        benchmark_json TEXT,
+        source_json TEXT,
+        coverage_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS data_snapshots (
         data_snapshot_id TEXT PRIMARY KEY,
         snapshot_date DATE,
