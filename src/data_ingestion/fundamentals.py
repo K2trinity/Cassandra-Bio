@@ -8,14 +8,26 @@ def _normalized_ticker(ticker: str) -> str:
     return ticker.strip().upper()
 
 
-def _to_float(value: Any) -> float:
+def _is_missing_numeric(value: Any) -> bool:
     if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def _to_float(value: Any) -> float:
+    if _is_missing_numeric(value):
         return 0.0
     return float(value)
 
 
 def _missing_fields(payload: Mapping[str, Any], fields: tuple[str, ...]) -> list[str]:
-    return [field for field in fields if payload.get(field) is None]
+    return [field for field in fields if _is_missing_numeric(payload.get(field))]
 
 
 def _fiscal_period(statement: Mapping[str, Any]) -> str:

@@ -116,6 +116,40 @@ def test_normalize_fmp_financial_statements_suppresses_runway_when_cash_is_missi
     assert rows[0]["has_missing_numeric_fields"] is True
 
 
+def test_normalize_fmp_financial_statements_marks_blank_and_invalid_numerics_missing():
+    from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
+
+    rows = normalize_fmp_financial_statements(
+        ticker="MRNA",
+        source="fmp",
+        statements=[
+            {
+                "calendarYear": "2025",
+                "period": "Q4",
+                "cashAndCashEquivalents": " ",
+                "shortTermInvestments": "not-a-number",
+                "operatingCashFlow": "-25",
+            }
+        ],
+    )
+
+    assert rows[0]["cash_and_equivalents"] == 0.0
+    assert rows[0]["short_term_investments"] == 0.0
+    assert rows[0]["cash_and_short_term_investments"] == 0.0
+    assert rows[0]["operating_cash_flow"] == -25.0
+    assert rows[0]["cash_runway_quarters"] is None
+    assert rows[0]["missing_numeric_fields"] == [
+        "cashAndCashEquivalents",
+        "shortTermInvestments",
+        "researchAndDevelopmentExpenses",
+        "sellingGeneralAndAdministrativeExpenses",
+        "revenue",
+        "netIncome",
+        "totalDebt",
+    ]
+    assert rows[0]["has_missing_numeric_fields"] is True
+
+
 def test_normalize_fmp_financial_statements_uses_empty_fiscal_period_fallback():
     from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
 
@@ -212,6 +246,33 @@ def test_normalize_sec_company_facts_converts_missing_value_to_zero():
     assert rows[0]["value"] == 0.0
     assert rows[0]["missing_numeric_fields"] == ["val"]
     assert rows[0]["has_missing_numeric_fields"] is True
+
+
+def test_normalize_sec_company_facts_marks_blank_and_invalid_values_missing():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    rows = normalize_sec_company_facts(
+        cik="42",
+        ticker="abba",
+        companyfacts={
+            "facts": {
+                "us-gaap": {
+                    "NetIncomeLoss": {
+                        "units": {
+                            "USD": [
+                                {"fy": "2025", "fp": "Q1", "val": ""},
+                                {"fy": "2025", "fp": "Q2", "val": "not-a-number"},
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert [row["value"] for row in rows] == [0.0, 0.0]
+    assert [row["missing_numeric_fields"] for row in rows] == [["val"], ["val"]]
+    assert [row["has_missing_numeric_fields"] for row in rows] == [True, True]
 
 
 def test_normalize_sec_company_facts_skips_missing_or_invalid_fiscal_year():
