@@ -74,7 +74,12 @@ def test_build_universe_snapshot_filters_benchmarks_and_merges_sources():
     assert snapshot.benchmark_tickers == ("BBH", "IBB", "XBI")
 
     assert [member.ticker for member in snapshot.members] == ["ABBA", "MRNA"]
+    assert [member.security_id for member in snapshot.members] == [
+        "BIO:ABBA",
+        "BIO:MRNA",
+    ]
     mrna = snapshot.members[1]
+    assert mrna.security_id == "BIO:MRNA"
     assert mrna.company_name == "Moderna, Inc."
     assert mrna.exchange == "NASDAQ"
     assert mrna.asset_type == "common_stock"

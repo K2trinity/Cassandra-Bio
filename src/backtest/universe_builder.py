@@ -47,6 +47,7 @@ class UniverseSourceRow:
 
 @dataclass(frozen=True)
 class UniverseMember:
+    security_id: str
     ticker: str
     company_name: str
     exchange: str
@@ -125,6 +126,7 @@ def build_universe_snapshot(
         member = members_by_ticker.setdefault(
             ticker,
             {
+                "security_id": f"BIO:{ticker}",
                 "ticker": ticker,
                 "company_name": row.company_name,
                 "exchange": _normalize_exchange(row.exchange),
@@ -146,6 +148,7 @@ def build_universe_snapshot(
 
     members = tuple(
         UniverseMember(
+            security_id=member["security_id"],
             ticker=member["ticker"],
             company_name=member["company_name"],
             exchange=member["exchange"],
@@ -195,6 +198,7 @@ def _build_universe_snapshot_id(
         "bias_status": BIOTECH_BIAS_STATUS,
         "members": [
             {
+                "security_id": member.security_id,
                 "ticker": member.ticker,
                 "company_name": member.company_name,
                 "exchange": member.exchange,
