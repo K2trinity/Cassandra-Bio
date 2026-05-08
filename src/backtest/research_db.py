@@ -112,6 +112,35 @@ CATALOG_SQL: tuple[str, ...] = (
         created_at TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS fundamentals_normalized (
+        security_id TEXT,
+        ticker TEXT,
+        fiscal_period TEXT,
+        filing_date DATE,
+        source TEXT,
+        payload_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sec_companyfacts_normalized (
+        security_id TEXT,
+        ticker TEXT,
+        cik TEXT,
+        taxonomy TEXT,
+        concept TEXT,
+        unit TEXT,
+        fiscal_year INTEGER,
+        fiscal_period TEXT,
+        form TEXT,
+        filed DATE,
+        period_end DATE,
+        value DOUBLE,
+        source TEXT,
+        created_at TIMESTAMP
+    )
+    """,
 )
 
 

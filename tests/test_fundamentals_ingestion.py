@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+
+def test_normalize_fmp_financial_statements_extracts_biotech_burn_fields():
+    from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
+
+    rows = normalize_fmp_financial_statements(
+        ticker=" mrna ",
+        source="fmp_income_balance_cashflow",
+        statements=[
+            {
+                "calendarYear": "2025",
+                "period": "Q3",
+                "fillingDate": "2025-11-06",
+                "cashAndCashEquivalents": "120.5",
+                "shortTermInvestments": 29.5,
+                "operatingCashFlow": "-50",
+                "researchAndDevelopmentExpenses": "14.25",
+                "sellingGeneralAndAdministrativeExpenses": "8.75",
+                "revenue": "1000",
+                "netIncome": "-22",
+                "totalDebt": "12",
+            }
+        ],
+    )
+
+    assert rows == [
+        {
+            "security_id": "FMP:MRNA",
+            "ticker": "MRNA",
+            "fiscal_period": "2025-Q3",
+            "filing_date": "2025-11-06",
+            "source": "fmp_income_balance_cashflow",
+            "cash_and_short_term_investments": 150.0,
+            "operating_cash_flow": -50.0,
+            "research_and_development": 14.25,
+            "selling_general_and_administrative": 8.75,
+            "revenue": 1000.0,
+            "net_income": -22.0,
+            "total_debt": 12.0,
+            "cash_runway_quarters": 3.0,
+        }
+    ]
+
+
+def test_normalize_fmp_financial_statements_handles_positive_ocf_and_missing_values():
+    from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
+
+    rows = normalize_fmp_financial_statements(
+        ticker="jnj",
+        source="fmp",
+        statements=[
+            {
+                "calendarYear": "2025",
+                "period": "FY",
+                "operatingCashFlow": "10",
+            }
+        ],
+    )
+
+    assert rows[0]["ticker"] == "JNJ"
+    assert rows[0]["cash_and_short_term_investments"] == 0.0
+    assert rows[0]["research_and_development"] == 0.0
+    assert rows[0]["selling_general_and_administrative"] == 0.0
+    assert rows[0]["revenue"] == 0.0
+    assert rows[0]["net_income"] == 0.0
+    assert rows[0]["total_debt"] == 0.0
+    assert rows[0]["cash_runway_quarters"] is None
+
+
+def test_normalize_sec_company_facts_keeps_cik_and_concept_source():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    rows = normalize_sec_company_facts(
+        cik=" 12345 ",
+        ticker=" lly ",
+        companyfacts={
+            "facts": {
+                "us-gaap": {
+                    "ResearchAndDevelopmentExpense": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "fy": "2025",
+                                    "fp": "Q2",
+                                    "form": "10-Q",
+                                    "filed": "2025-08-04",
+                                    "end": "2025-06-30",
+                                    "val": "125.5",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert rows == [
+        {
+            "security_id": "SEC:0000012345",
+            "ticker": "LLY",
+            "cik": "0000012345",
+            "taxonomy": "us-gaap",
+            "concept": "ResearchAndDevelopmentExpense",
+            "unit": "USD",
+            "fiscal_year": 2025,
+            "fiscal_period": "Q2",
+            "form": "10-Q",
+            "filed": "2025-08-04",
+            "period_end": "2025-06-30",
+            "value": 125.5,
+            "source": "sec_companyfacts",
+        }
+    ]
+
+
+def test_normalize_sec_company_facts_returns_empty_list_for_empty_facts():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    assert normalize_sec_company_facts(cik="1", ticker="MRNA", companyfacts={}) == []
+    assert (
+        normalize_sec_company_facts(
+            cik="1", ticker="MRNA", companyfacts={"facts": {"us-gaap": {}}}
+        )
+        == []
+    )
+
+
+def test_initialize_research_database_creates_fundamentals_catalog_tables(tmp_path):
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = tmp_path / "research.duckdb"
+    initialize_research_database(db_path)
+
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+    finally:
+        conn.close()
+
+    assert {
+        "fundamentals_normalized",
+        "sec_companyfacts_normalized",
+    }.issubset(tables)
