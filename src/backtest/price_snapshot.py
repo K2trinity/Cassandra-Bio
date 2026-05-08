@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.data_loader import DATA_DIR
-from src.backtest.data_sources import YFINANCE_PROFILE
+from src.backtest.data_sources import TIINGO_PROFILE, YFINANCE_PROFILE
 from src.backtest.research_db import RESEARCH_DIR
 
 PRICE_COLUMNS = [
@@ -20,12 +20,17 @@ PRICE_COLUMNS = [
     "low",
     "close",
     "adj_close",
+    "adj_open",
+    "adj_high",
+    "adj_low",
+    "adj_volume",
     "volume",
     "vwap",
     "split_factor",
     "dividend",
     "delisting_return",
     "adjustment_mode",
+    "adjustment_quality",
     "source",
     "source_symbol",
     "data_snapshot_id",
@@ -41,6 +46,10 @@ FLOAT_COLUMNS = [
     "low",
     "close",
     "adj_close",
+    "adj_open",
+    "adj_high",
+    "adj_low",
+    "adj_volume",
     "volume",
     "vwap",
     "split_factor",
@@ -134,12 +143,17 @@ def normalize_ohlc_frame(
     source_id = source.upper().replace("-", "_")
     df["security_id"] = f"{source_id}:{ticker.upper()}"
     df["ticker"] = ticker.upper()
-    df["adj_close"] = df["close"]
+    df["adj_close"] = pd.Series(float("nan"), index=df.index, dtype="float64")
+    df["adj_open"] = pd.Series(float("nan"), index=df.index, dtype="float64")
+    df["adj_high"] = pd.Series(float("nan"), index=df.index, dtype="float64")
+    df["adj_low"] = pd.Series(float("nan"), index=df.index, dtype="float64")
+    df["adj_volume"] = pd.Series(float("nan"), index=df.index, dtype="float64")
     df["vwap"] = pd.Series(float("nan"), index=df.index, dtype="float64")
     df["split_factor"] = 1.0
     df["dividend"] = 0.0
     df["delisting_return"] = pd.Series(float("nan"), index=df.index, dtype="float64")
-    df["adjustment_mode"] = "vendor_or_raw_close"
+    df["adjustment_mode"] = "raw_ohlc_cache"
+    df["adjustment_quality"] = "raw_only"
     df["source"] = source
     df["source_symbol"] = ticker.upper()
     df["data_snapshot_id"] = data_snapshot_id
@@ -162,6 +176,41 @@ def normalize_ohlc_frame(
         raise ValueError(f"Duplicate price rows for security/date: {duplicate_keys}")
 
     return df[PRICE_COLUMNS].sort_values(["ticker", "date"]).reset_index(drop=True)
+
+
+def write_prices_daily_frame(
+    frame: pd.DataFrame,
+    *,
+    output_root: str | Path | None = None,
+) -> None:
+    missing = [column for column in PRICE_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Price frame missing columns: {missing}")
+
+    root = Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
+    pending_writes = []
+    snapshot_roots = set()
+    for (source, data_snapshot_id), group in frame.groupby(
+        ["source", "data_snapshot_id"],
+        sort=True,
+    ):
+        source = _validate_source(source)
+        data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
+        snapshot_roots.add(root / f"data_snapshot_id={data_snapshot_id}")
+        pending_writes.extend(
+            _plan_partition_writes(
+                group[PRICE_COLUMNS],
+                root,
+                source=source,
+                data_snapshot_id=data_snapshot_id,
+            )
+        )
+
+    for snapshot_root in snapshot_roots:
+        if snapshot_root.exists():
+            raise FileExistsError(f"Price snapshot already exists: {snapshot_root}")
+    _preflight_partition_writes(pending_writes)
+    _write_planned_partitions(pending_writes)
 
 
 def _write_partition(
@@ -219,9 +268,11 @@ def _write_planned_partitions(
 
 
 def _validate_source(source: str) -> str:
-    if source != YFINANCE_PROFILE.source_id:
+    supported_sources = {YFINANCE_PROFILE.source_id, TIINGO_PROFILE.source_id}
+    if source not in supported_sources:
         raise ValueError(
-            f"Unsupported OHLC source {source!r}; expected {YFINANCE_PROFILE.source_id!r}."
+            f"Unsupported OHLC source {source!r}; "
+            f"expected one of {sorted(supported_sources)!r}."
         )
     return _safe_partition_token("source", source)
 
