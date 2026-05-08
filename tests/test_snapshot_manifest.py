@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 
 def test_write_snapshot_manifest_is_deterministic_and_redacts_secrets(tmp_path):
     from src.data_ingestion.manifest import (
@@ -37,3 +39,31 @@ def test_write_snapshot_manifest_is_deterministic_and_redacts_secrets(tmp_path):
 
     second_path = write_snapshot_manifest(manifest, output_dir=tmp_path)
     assert second_path.read_text(encoding="utf-8") == raw
+
+
+@pytest.mark.parametrize(
+    "snapshot_id",
+    [
+        "../manifest-escape",
+        "nested/snap-1",
+        "nested\\snap-1",
+        "snap..escape",
+    ],
+)
+def test_write_snapshot_manifest_rejects_unsafe_snapshot_ids(
+    tmp_path,
+    snapshot_id,
+):
+    from src.data_ingestion.manifest import write_snapshot_manifest
+
+    output_dir = tmp_path / "manifests"
+    escape_path = tmp_path / "manifest-escape-manifest.json"
+
+    with pytest.raises(ValueError, match="data_snapshot_id"):
+        write_snapshot_manifest(
+            {"data_snapshot_id": snapshot_id, "payload": "ok"},
+            output_dir=output_dir,
+        )
+
+    assert not escape_path.exists()
+    assert not output_dir.exists() or list(output_dir.iterdir()) == []

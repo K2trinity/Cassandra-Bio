@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from src.backtest.research_db import RESEARCH_DIR
+
+_SAFE_SNAPSHOT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def build_snapshot_manifest(
@@ -23,7 +26,7 @@ def build_snapshot_manifest(
     secret_values: Sequence[str] = (),
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "data_snapshot_id": _require_text(data_snapshot_id, "data_snapshot_id"),
+        "data_snapshot_id": _safe_snapshot_id(data_snapshot_id),
         "snapshot_date": _require_text(snapshot_date, "snapshot_date"),
         "universe_id": _require_text(universe_id, "universe_id"),
         "universe_bias_status": "current_constituents_only",
@@ -46,10 +49,10 @@ def write_snapshot_manifest(
     *,
     output_dir: str | Path | None = None,
 ) -> Path:
+    snapshot_id = _safe_snapshot_id(str(manifest["data_snapshot_id"]))
     root = Path(output_dir) if output_dir is not None else RESEARCH_DIR / "manifests"
     root.mkdir(parents=True, exist_ok=True)
 
-    snapshot_id = _require_text(str(manifest["data_snapshot_id"]), "data_snapshot_id")
     path = root / f"{snapshot_id}-manifest.json"
     tmp_path = path.with_name(f".{path.name}.tmp")
     content = json.dumps(manifest, sort_keys=True, indent=2, allow_nan=False)
@@ -63,6 +66,16 @@ def _redacted_json(value: Mapping[str, Any], secret_values: Sequence[str]) -> st
     for secret in secret_values:
         if secret:
             text = text.replace(str(secret), "<redacted>")
+    return text
+
+
+def _safe_snapshot_id(value: str) -> str:
+    text = _require_text(value, "data_snapshot_id")
+    if ".." in text or not _SAFE_SNAPSHOT_ID_PATTERN.fullmatch(text):
+        raise ValueError(
+            "data_snapshot_id must use only letters, digits, underscores, dots, "
+            "and hyphens, with no path traversal"
+        )
     return text
 
 

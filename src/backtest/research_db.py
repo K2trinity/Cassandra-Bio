@@ -6,6 +6,40 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 RESEARCH_DIR = ROOT_DIR / "data" / "research"
 RESEARCH_DB_PATH = RESEARCH_DIR / "cassandra_research.duckdb"
 
+_INGESTION_CHECKPOINTS_SCHEMA_SQL = """
+        run_id TEXT,
+        data_snapshot_id TEXT,
+        provider TEXT,
+        phase TEXT,
+        ticker TEXT,
+        endpoint TEXT,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        status TEXT,
+        attempt_count INTEGER,
+        last_error TEXT,
+        updated_at TIMESTAMP,
+        PRIMARY KEY (
+            run_id,
+            provider,
+            phase,
+            ticker,
+            endpoint,
+            period_start,
+            period_end
+        )
+"""
+
+_INGESTION_CHECKPOINTS_PRIMARY_KEY = {
+    "run_id",
+    "provider",
+    "phase",
+    "ticker",
+    "endpoint",
+    "period_start",
+    "period_end",
+}
+
 CATALOG_SQL: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS security_master (
@@ -112,29 +146,9 @@ CATALOG_SQL: tuple[str, ...] = (
         created_at TIMESTAMP
     )
     """,
-    """
+    f"""
     CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
-        run_id TEXT,
-        data_snapshot_id TEXT,
-        provider TEXT,
-        phase TEXT,
-        ticker TEXT,
-        endpoint TEXT,
-        period_start TEXT NOT NULL,
-        period_end TEXT NOT NULL,
-        status TEXT,
-        attempt_count INTEGER,
-        last_error TEXT,
-        updated_at TIMESTAMP,
-        PRIMARY KEY (
-            run_id,
-            provider,
-            phase,
-            ticker,
-            endpoint,
-            period_start,
-            period_end
-        )
+{_INGESTION_CHECKPOINTS_SCHEMA_SQL}
     )
     """,
     """
@@ -187,6 +201,109 @@ def initialize_research_database(db_path: str | Path | None = None) -> Path:
     try:
         for statement in CATALOG_SQL:
             conn.execute(statement)
+        _migrate_ingestion_checkpoints(conn)
     finally:
         conn.close()
     return path
+
+
+def _migrate_ingestion_checkpoints(conn) -> None:
+    if not _ingestion_checkpoints_needs_migration(conn):
+        return
+
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute("DROP TABLE IF EXISTS ingestion_checkpoints_migrated")
+        conn.execute(
+            f"""
+            CREATE TABLE ingestion_checkpoints_migrated (
+{_INGESTION_CHECKPOINTS_SCHEMA_SQL}
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO ingestion_checkpoints_migrated (
+                run_id,
+                data_snapshot_id,
+                provider,
+                phase,
+                ticker,
+                endpoint,
+                period_start,
+                period_end,
+                status,
+                attempt_count,
+                last_error,
+                updated_at
+            )
+            SELECT
+                CAST(run_id AS VARCHAR),
+                CAST(data_snapshot_id AS VARCHAR),
+                CAST(provider AS VARCHAR),
+                CAST(phase AS VARCHAR),
+                CAST(ticker AS VARCHAR),
+                CAST(endpoint AS VARCHAR),
+                CASE
+                    WHEN period_start IS NULL THEN ''
+                    ELSE CAST(period_start AS VARCHAR)
+                END,
+                CASE
+                    WHEN period_end IS NULL THEN ''
+                    ELSE CAST(period_end AS VARCHAR)
+                END,
+                CAST(status AS VARCHAR),
+                attempt_count,
+                CAST(last_error AS VARCHAR),
+                updated_at
+            FROM ingestion_checkpoints
+            WHERE run_id IS NOT NULL
+              AND provider IS NOT NULL
+              AND phase IS NOT NULL
+              AND ticker IS NOT NULL
+              AND endpoint IS NOT NULL
+            """
+        )
+        conn.execute("DROP TABLE ingestion_checkpoints")
+        conn.execute(
+            "ALTER TABLE ingestion_checkpoints_migrated RENAME TO ingestion_checkpoints"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _ingestion_checkpoints_needs_migration(conn) -> bool:
+    rows = conn.execute("PRAGMA table_info('ingestion_checkpoints')").fetchall()
+    columns = {row[1]: row for row in rows}
+    if set(columns) != {
+        "run_id",
+        "data_snapshot_id",
+        "provider",
+        "phase",
+        "ticker",
+        "endpoint",
+        "period_start",
+        "period_end",
+        "status",
+        "attempt_count",
+        "last_error",
+        "updated_at",
+    }:
+        return True
+
+    period_start = str(columns["period_start"][2]).upper()
+    period_end = str(columns["period_end"][2]).upper()
+    if period_start not in {"TEXT", "VARCHAR"} or period_end not in {"TEXT", "VARCHAR"}:
+        return True
+
+    if not bool(columns["period_start"][3]) or not bool(columns["period_end"][3]):
+        return True
+
+    primary_key = {
+        row[1]
+        for row in rows
+        if str(row[5]).lower() not in {"false", "0", "none", ""}
+    }
+    return primary_key != _INGESTION_CHECKPOINTS_PRIMARY_KEY
