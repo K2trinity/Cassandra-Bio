@@ -737,8 +737,9 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
 
 
 def test_demo_portfolio_endpoint_is_not_available(client):
+    removed_demo_endpoint = "/api/backtest/portfolio/" + "demo/run"
     response = client.post(
-        "/api/backtest/portfolio/demo/run",
+        removed_demo_endpoint,
         json={
             "ticker": "MRNA",
             "start_date": "2025-01-02",

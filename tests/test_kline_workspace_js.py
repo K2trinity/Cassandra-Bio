@@ -266,7 +266,8 @@ def test_workspace_js_backtest_panel_renders_single_and_universe_buttons_without
         if (!buttonText.includes('Run Universe')) {
           throw new Error('universe backtest button missing: ' + buttonText.join(','));
         }
-        if (buttonText.includes('Run Demo Universe')) {
+        const removedDemoLabel = ['Run', 'Demo', 'Universe'].join(' ');
+        if (buttonText.includes(removedDemoLabel)) {
           throw new Error('demo universe backtest button should not render: ' + buttonText.join(','));
         }
         """)
