@@ -6,7 +6,12 @@ from typing import Iterable, Mapping, Any
 import numpy as np
 import pandas as pd
 
-from src.backtest.price_snapshot import FLOAT_COLUMNS, PRICE_COLUMNS, _empty_price_frame
+from src.backtest.price_snapshot import (
+    FLOAT_COLUMNS,
+    PRICE_COLUMNS,
+    _empty_price_frame,
+    _safe_partition_token,
+)
 
 TIINGO_REQUIRED_FIELDS = {
     "date",
@@ -46,6 +51,8 @@ def normalize_tiingo_eod_prices(
     ticker: str,
     data_snapshot_id: str,
 ) -> pd.DataFrame:
+    source_symbol = _safe_partition_token("ticker", ticker.upper())
+    data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
     rows = list(rows)
     if not rows:
         return _empty_price_frame()
@@ -57,7 +64,6 @@ def normalize_tiingo_eod_prices(
                 f"Tiingo row {index} missing required fields: {sorted(missing)}"
             )
 
-    source_symbol = ticker.upper()
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce").dt.date
     for column in TIINGO_NUMERIC_FIELDS:

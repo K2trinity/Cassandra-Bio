@@ -115,6 +115,7 @@ def normalize_ohlc_frame(
     source: str,
 ) -> pd.DataFrame:
     source = _validate_source(source)
+    ticker = _safe_partition_token("ticker", ticker.upper())
     data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
     missing = REQUIRED_COLUMNS - set(frame.columns)
     if missing:
@@ -141,8 +142,8 @@ def normalize_ohlc_frame(
         return _empty_price_frame()
 
     source_id = source.upper().replace("-", "_")
-    df["security_id"] = f"{source_id}:{ticker.upper()}"
-    df["ticker"] = ticker.upper()
+    df["security_id"] = f"{source_id}:{ticker}"
+    df["ticker"] = ticker
     df["adj_close"] = pd.Series(float("nan"), index=df.index, dtype="float64")
     df["adj_open"] = pd.Series(float("nan"), index=df.index, dtype="float64")
     df["adj_high"] = pd.Series(float("nan"), index=df.index, dtype="float64")
@@ -155,7 +156,7 @@ def normalize_ohlc_frame(
     df["adjustment_mode"] = "raw_ohlc_cache"
     df["adjustment_quality"] = "raw_only"
     df["source"] = source
-    df["source_symbol"] = ticker.upper()
+    df["source_symbol"] = ticker
     df["data_snapshot_id"] = data_snapshot_id
     df["ingested_at"] = (
         datetime.now(timezone.utc)
@@ -186,6 +187,7 @@ def write_prices_daily_frame(
     missing = [column for column in PRICE_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"Price frame missing columns: {missing}")
+    _validate_price_frame_partition_keys(frame)
 
     root = Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
     pending_writes = []
@@ -245,10 +247,42 @@ def _plan_partition_writes(
             / f"source={source}"
             / f"year={int(year)}"
         )
-        tickers = "_".join(sorted(group["ticker"].unique()))
+        tickers = "_".join(
+            sorted(
+                _safe_partition_token("ticker", ticker)
+                for ticker in group["ticker"].unique()
+            )
+        )
         path = partition / f"{tickers}.parquet"
         pending_writes.append((group, partition, path))
     return pending_writes
+
+
+def _validate_price_frame_partition_keys(frame: pd.DataFrame) -> None:
+    for row_number, row in frame.reset_index(drop=True).iterrows():
+        source = _require_non_null_partition_value(row["source"], "source", row_number)
+        data_snapshot_id = _require_non_null_partition_value(
+            row["data_snapshot_id"],
+            "data_snapshot_id",
+            row_number,
+        )
+        ticker = _require_non_null_partition_value(row["ticker"], "ticker", row_number)
+        source_symbol = _require_non_null_partition_value(
+            row["source_symbol"],
+            "source_symbol",
+            row_number,
+        )
+
+        _validate_source(source)
+        _safe_partition_token("data_snapshot_id", data_snapshot_id)
+        _safe_partition_token("ticker", ticker)
+        _safe_partition_token("source_symbol", source_symbol)
+
+
+def _require_non_null_partition_value(value: object, name: str, row_number: int) -> str:
+    if pd.isna(value):
+        raise ValueError(f"{name} must be a non-empty string at row {row_number}.")
+    return _safe_partition_token(name, value)
 
 
 def _preflight_partition_writes(

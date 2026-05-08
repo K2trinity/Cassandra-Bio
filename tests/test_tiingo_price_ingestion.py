@@ -103,6 +103,17 @@ def test_normalize_tiingo_eod_prices_empty_input_returns_price_columns():
         assert pd.api.types.is_numeric_dtype(result[column]), column
 
 
+def test_normalize_tiingo_eod_prices_rejects_unsafe_ticker():
+    from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+
+    with pytest.raises(ValueError, match="ticker contains unsupported path characters"):
+        normalize_tiingo_eod_prices(
+            [_tiingo_row()],
+            ticker="../BAD",
+            data_snapshot_id="snap-tiingo",
+        )
+
+
 def test_write_prices_daily_frame_writes_tiingo_partitions_and_preflights_overwrite(
     tmp_path,
 ):
@@ -174,3 +185,66 @@ def test_write_prices_daily_frame_rejects_existing_snapshot_root_before_writing(
         / "ABBA.parquet"
     )
     assert not unexpected_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("column", "bad_value"),
+    [
+        ("source", None),
+        ("source", ""),
+        ("source", " "),
+        ("data_snapshot_id", None),
+        ("data_snapshot_id", ""),
+        ("data_snapshot_id", " "),
+    ],
+)
+def test_write_prices_daily_frame_rejects_invalid_partition_keys_before_writing(
+    tmp_path,
+    column,
+    bad_value,
+):
+    from src.backtest.price_snapshot import write_prices_daily_frame
+    from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+
+    output_root = tmp_path / "prices_daily"
+    valid = normalize_tiingo_eod_prices(
+        [_tiingo_row()],
+        ticker="MRNA",
+        data_snapshot_id="snap-tiingo",
+    )
+    invalid = valid.copy()
+    invalid.loc[0, column] = bad_value
+    frame = pd.concat([valid, invalid], ignore_index=True)
+
+    with pytest.raises(ValueError, match=column):
+        write_prices_daily_frame(frame, output_root=output_root)
+
+    assert list(output_root.rglob("*.parquet")) == []
+
+
+def test_write_prices_daily_frame_rejects_unsafe_ticker_before_path_planning(
+    tmp_path,
+):
+    from src.backtest.price_snapshot import write_prices_daily_frame
+    from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+
+    output_root = tmp_path / "prices_daily"
+    frame = normalize_tiingo_eod_prices(
+        [_tiingo_row()],
+        ticker="MRNA",
+        data_snapshot_id="snap-tiingo",
+    )
+    frame.loc[0, "ticker"] = "../BAD"
+    frame.loc[0, "source_symbol"] = "../BAD"
+
+    with pytest.raises(ValueError, match="ticker contains unsupported path characters"):
+        write_prices_daily_frame(frame, output_root=output_root)
+
+    assert list(output_root.rglob("*.parquet")) == []
+    escaped_path = (
+        output_root
+        / "data_snapshot_id=snap-tiingo"
+        / "source=tiingo"
+        / "BAD.parquet"
+    )
+    assert not escaped_path.exists()
