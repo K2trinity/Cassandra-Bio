@@ -188,6 +188,7 @@ def write_prices_daily_frame(
     if missing:
         raise ValueError(f"Price frame missing columns: {missing}")
     _validate_price_frame_partition_keys(frame)
+    _validate_price_frame_unique_logical_keys(frame)
 
     root = Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
     pending_writes = []
@@ -224,6 +225,7 @@ def append_prices_daily_frame(
     if missing:
         raise ValueError(f"Price frame missing columns: {missing}")
     _validate_price_frame_partition_keys(frame)
+    _validate_price_frame_unique_logical_keys(frame)
 
     root = (
         Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
@@ -235,8 +237,14 @@ def append_prices_daily_frame(
     ):
         source = _validate_source(source)
         data_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
+        _ensure_no_existing_price_key_overlap(
+            group[PRICE_COLUMNS],
+            root,
+            source=source,
+            data_snapshot_id=data_snapshot_id,
+        )
         pending_writes.extend(
-            _plan_partition_writes(
+            _plan_append_partition_writes(
                 group[PRICE_COLUMNS],
                 root,
                 source=source,
@@ -291,6 +299,27 @@ def _plan_partition_writes(
     return pending_writes
 
 
+def _plan_append_partition_writes(
+    frame: pd.DataFrame,
+    root: Path,
+    *,
+    source: str,
+    data_snapshot_id: str,
+) -> list[tuple[pd.DataFrame, Path, Path]]:
+    pending_writes = []
+    years = pd.to_datetime(frame["date"]).dt.year
+    for (year, ticker), group in frame.groupby([years, "ticker"], sort=True):
+        safe_ticker = _safe_partition_token("ticker", ticker)
+        partition = (
+            root
+            / f"data_snapshot_id={data_snapshot_id}"
+            / f"source={source}"
+            / f"year={int(year)}"
+        )
+        pending_writes.append((group, partition, partition / f"{safe_ticker}.parquet"))
+    return pending_writes
+
+
 def _validate_price_frame_partition_keys(frame: pd.DataFrame) -> None:
     for row_number, row in frame.reset_index(drop=True).iterrows():
         source = _require_non_null_partition_value(row["source"], "source", row_number)
@@ -310,6 +339,61 @@ def _validate_price_frame_partition_keys(frame: pd.DataFrame) -> None:
         _safe_partition_token("data_snapshot_id", data_snapshot_id)
         _safe_partition_token("ticker", ticker)
         _safe_partition_token("source_symbol", source_symbol)
+
+
+def _validate_price_frame_unique_logical_keys(frame: pd.DataFrame) -> None:
+    key_frame = _price_key_frame(frame)
+    duplicates = key_frame.duplicated(keep=False)
+    if duplicates.any():
+        duplicate_keys = key_frame.loc[duplicates].drop_duplicates().to_dict("records")
+        raise ValueError(f"Duplicate price rows for logical keys: {duplicate_keys}")
+
+
+def _ensure_no_existing_price_key_overlap(
+    frame: pd.DataFrame,
+    root: Path,
+    *,
+    source: str,
+    data_snapshot_id: str,
+) -> None:
+    incoming_keys = _price_key_set(frame)
+    years = sorted(pd.to_datetime(frame["date"]).dt.year.dropna().unique())
+    for year in years:
+        partition = (
+            root
+            / f"data_snapshot_id={data_snapshot_id}"
+            / f"source={source}"
+            / f"year={int(year)}"
+        )
+        if not partition.exists():
+            continue
+        for path in sorted(partition.glob("*.parquet")):
+            existing = pd.read_parquet(path)
+            missing = [
+                column for column in PRICE_COLUMNS if column not in existing.columns
+            ]
+            if missing:
+                raise ValueError(
+                    f"Existing price partition {path} missing columns: {missing}"
+                )
+            overlapping = incoming_keys & _price_key_set(existing[PRICE_COLUMNS])
+            if overlapping:
+                sample = sorted(overlapping)[:5]
+                raise FileExistsError(
+                    "Price snapshot already exists: incoming price rows "
+                    "overlap existing price rows "
+                    f"in {path}: {sample}"
+                )
+
+
+def _price_key_set(frame: pd.DataFrame) -> set[tuple[str, str, str, object]]:
+    return set(_price_key_frame(frame).itertuples(index=False, name=None))
+
+
+def _price_key_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    keys = frame[["source", "data_snapshot_id", "security_id", "date"]].copy()
+    keys["date"] = pd.to_datetime(keys["date"], errors="coerce").dt.date
+    return keys
 
 
 def _require_non_null_partition_value(value: object, name: str, row_number: int) -> str:

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from datetime import date, datetime
+from decimal import Decimal
+import math
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +20,10 @@ def write_fundamentals_rows(
 ) -> int:
     normalized_source = _normalize_source(source)
     normalized_ticker = _normalize_ticker(ticker)
-    payloads = [dict(row) for row in rows]
+    payloads = _canonicalize_fundamentals_rows(rows)
+    if not payloads:
+        return 0
+
     path = initialize_research_database(db_path or RESEARCH_DB_PATH)
 
     import duckdb
@@ -68,6 +74,126 @@ def write_fundamentals_rows(
         conn.close()
 
     return len(payloads)
+
+
+def _canonicalize_fundamentals_rows(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    payloads = []
+    for row_index, row in enumerate(rows):
+        payload = {
+            str(key): _canonical_json_value(value, row_index=row_index, field=str(key))
+            for key, value in dict(row).items()
+        }
+        for field in ("security_id", "fiscal_period"):
+            value = payload.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"fundamentals row {row_index} missing non-empty {field}."
+                )
+            payload[field] = value.strip()
+        for field in ("filing_date", "filed"):
+            if field in payload and payload[field] is not None:
+                payload[field] = _canonical_date_value(
+                    payload[field],
+                    row_index=row_index,
+                    field=field,
+                )
+        payloads.append(payload)
+    return payloads
+
+
+def _canonical_json_value(value: Any, *, row_index: int, field: str) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _canonical_json_value(
+                nested_value,
+                row_index=row_index,
+                field=f"{field}.{key}",
+            )
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _canonical_json_value(
+                item,
+                row_index=row_index,
+                field=f"{field}[{index}]",
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return [
+            _canonical_json_value(
+                item,
+                row_index=row_index,
+                field=f"{field}[{index}]",
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError(
+                f"fundamentals row {row_index} field {field} must be finite."
+            )
+        return format(value, "f")
+    if isinstance(value, (datetime, date)):
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        return value.isoformat()
+
+    numpy_scalar = _numpy_scalar_to_python(value)
+    if numpy_scalar is not value:
+        return _canonical_json_value(
+            numpy_scalar,
+            row_index=row_index,
+            field=field,
+        )
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(
+                f"fundamentals row {row_index} field {field} must be finite."
+            )
+        return value
+    return value
+
+
+def _canonical_date_value(value: Any, *, row_index: int, field: str) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return stripped
+        try:
+            return (
+                datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+                .date()
+                .isoformat()
+            )
+        except ValueError:
+            try:
+                return date.fromisoformat(stripped).isoformat()
+            except ValueError as exc:
+                raise ValueError(
+                    f"fundamentals row {row_index} field {field} must be an ISO date."
+                ) from exc
+    raise ValueError(
+        f"fundamentals row {row_index} field {field} must be a date or ISO date string."
+    )
+
+
+def _numpy_scalar_to_python(value: Any) -> Any:
+    try:
+        import numpy as np
+    except ImportError:
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
 
 
 def _normalize_source(source: str) -> str:
