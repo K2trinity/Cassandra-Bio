@@ -37,7 +37,9 @@ def build_snapshot_from_csvs(
     path = initialize_research_database(db_path or RESEARCH_DB_PATH)
     _write_snapshot(path, snapshot)
     return {
+        "universe_snapshot_id": snapshot.universe_snapshot_id,
         "universe_id": snapshot.universe_id,
+        "as_of_date": snapshot.as_of_date,
         "member_count": len(snapshot.members),
         "benchmark_tickers": list(snapshot.benchmark_tickers),
         "bias_status": snapshot.bias_status,
@@ -79,6 +81,23 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
     payload = snapshot.to_catalog_payload()
     conn = duckdb.connect(str(db_path))
     try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute(
+            """
+            DELETE FROM universe_membership
+            WHERE universe_id = ?
+              AND member_from = ?
+            """,
+            [snapshot.universe_id, snapshot.as_of_date],
+        )
+        conn.execute(
+            """
+            DELETE FROM universe_snapshots
+            WHERE universe_id = ?
+              AND as_of_date = ?
+            """,
+            [snapshot.universe_id, snapshot.as_of_date],
+        )
         conn.execute(
             """
             INSERT OR REPLACE INTO universe_snapshots (
@@ -131,6 +150,10 @@ def _write_snapshot(db_path: str | Path, snapshot: UniverseSnapshot) -> None:
                     snapshot.as_of_date,
                 ],
             )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
 

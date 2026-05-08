@@ -83,8 +83,11 @@ def test_build_snapshot_from_csvs_writes_universe_catalog_tables(tmp_path):
         as_of_date="2026-05-08",
     )
 
+    assert summary["universe_snapshot_id"].startswith("univ_20260508_")
     assert summary == {
+        "universe_snapshot_id": summary["universe_snapshot_id"],
         "universe_id": "biotech_us_v1",
+        "as_of_date": "2026-05-08",
         "member_count": 2,
         "benchmark_tickers": ["XBI"],
         "bias_status": "current_constituents_only",
@@ -153,6 +156,117 @@ def test_build_snapshot_from_csvs_writes_universe_catalog_tables(tmp_path):
             "2026-05-08",
         ),
     ]
+
+
+def test_same_day_rebuild_replaces_snapshot_and_active_membership(tmp_path):
+    import duckdb
+
+    from scripts.build_biotech_universe_snapshot import build_snapshot_from_csvs
+    from src.backtest.universe import load_universe_tickers
+
+    xbi_path = tmp_path / "xbi.csv"
+    ibb_path = tmp_path / "ibb.csv"
+    listings_path = tmp_path / "exchange_listings.csv"
+    db_path = tmp_path / "research.duckdb"
+    _write_csv(
+        xbi_path,
+        [
+            {
+                "ticker": "MRNA",
+                "company_name": "Moderna, Inc.",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+    _write_csv(
+        ibb_path,
+        [
+            {
+                "ticker": "JNJ",
+                "company_name": "Johnson & Johnson",
+                "exchange": "NYSE",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+    _write_csv(
+        listings_path,
+        [
+            {
+                "ticker": "XBI",
+                "company_name": "SPDR S&P Biotech ETF",
+                "exchange": "NYSEARCA",
+                "asset_type": "ETF",
+            }
+        ],
+    )
+    first_summary = build_snapshot_from_csvs(
+        xbi_holdings=xbi_path,
+        ibb_holdings=ibb_path,
+        exchange_listings=listings_path,
+        db_path=db_path,
+        as_of_date="2026-05-08",
+    )
+
+    _write_csv(
+        xbi_path,
+        [
+            {
+                "ticker": "VRTX",
+                "company_name": "Vertex Pharmaceuticals Incorporated",
+                "exchange": "NASDAQ",
+                "asset_type": "common_stock",
+            }
+        ],
+    )
+    _write_csv(ibb_path, [])
+    second_summary = build_snapshot_from_csvs(
+        xbi_holdings=xbi_path,
+        ibb_holdings=ibb_path,
+        exchange_listings=listings_path,
+        db_path=db_path,
+        as_of_date="2026-05-08",
+    )
+
+    assert first_summary["universe_snapshot_id"] != second_summary[
+        "universe_snapshot_id"
+    ]
+    assert second_summary["as_of_date"] == "2026-05-08"
+    assert second_summary["member_count"] == 1
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        snapshot_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM universe_snapshots
+            WHERE universe_id = 'biotech_us_v1'
+              AND as_of_date = DATE '2026-05-08'
+            """
+        ).fetchone()[0]
+        membership_tickers = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT ticker
+                FROM universe_membership
+                WHERE universe_id = 'biotech_us_v1'
+                  AND member_from = DATE '2026-05-08'
+                ORDER BY ticker
+                """
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    assert snapshot_count == 1
+    assert membership_tickers == ["VRTX"]
+    assert load_universe_tickers(
+        db_path=db_path,
+        universe_id="biotech_us_v1",
+        as_of_date="2026-05-08",
+    ) == ("VRTX",)
 
 
 def test_read_rows_rejects_sources_outside_approved_snapshot_inputs(tmp_path):
