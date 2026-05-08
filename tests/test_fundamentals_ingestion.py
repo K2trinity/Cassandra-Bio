@@ -150,6 +150,49 @@ def test_normalize_fmp_financial_statements_marks_blank_and_invalid_numerics_mis
     assert rows[0]["has_missing_numeric_fields"] is True
 
 
+def test_normalize_fmp_financial_statements_marks_nonfinite_numerics_missing():
+    from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
+
+    rows = normalize_fmp_financial_statements(
+        ticker="MRNA",
+        source="fmp",
+        statements=[
+            {
+                "calendarYear": "2025",
+                "period": "Q4",
+                "cashAndCashEquivalents": "NaN",
+                "shortTermInvestments": "Infinity",
+                "operatingCashFlow": "-Infinity",
+                "researchAndDevelopmentExpenses": float("nan"),
+                "sellingGeneralAndAdministrativeExpenses": float("inf"),
+                "revenue": "-inf",
+                "netIncome": "12",
+                "totalDebt": "0",
+            }
+        ],
+    )
+
+    assert rows[0]["cash_and_equivalents"] == 0.0
+    assert rows[0]["short_term_investments"] == 0.0
+    assert rows[0]["cash_and_short_term_investments"] == 0.0
+    assert rows[0]["operating_cash_flow"] == 0.0
+    assert rows[0]["rd_expense"] == 0.0
+    assert rows[0]["sga_expense"] == 0.0
+    assert rows[0]["revenue"] == 0.0
+    assert rows[0]["net_income"] == 12.0
+    assert rows[0]["total_debt"] == 0.0
+    assert rows[0]["cash_runway_quarters"] is None
+    assert rows[0]["missing_numeric_fields"] == [
+        "cashAndCashEquivalents",
+        "shortTermInvestments",
+        "operatingCashFlow",
+        "researchAndDevelopmentExpenses",
+        "sellingGeneralAndAdministrativeExpenses",
+        "revenue",
+    ]
+    assert rows[0]["has_missing_numeric_fields"] is True
+
+
 def test_normalize_fmp_financial_statements_uses_empty_fiscal_period_fallback():
     from src.data_ingestion.fundamentals import normalize_fmp_financial_statements
 
@@ -273,6 +316,38 @@ def test_normalize_sec_company_facts_marks_blank_and_invalid_values_missing():
     assert [row["value"] for row in rows] == [0.0, 0.0]
     assert [row["missing_numeric_fields"] for row in rows] == [["val"], ["val"]]
     assert [row["has_missing_numeric_fields"] for row in rows] == [True, True]
+
+
+def test_normalize_sec_company_facts_marks_nonfinite_values_missing():
+    from src.data_ingestion.fundamentals import normalize_sec_company_facts
+
+    rows = normalize_sec_company_facts(
+        cik="42",
+        ticker="abba",
+        companyfacts={
+            "facts": {
+                "us-gaap": {
+                    "NetIncomeLoss": {
+                        "units": {
+                            "USD": [
+                                {"fy": "2025", "fp": "Q1", "val": "NaN"},
+                                {"fy": "2025", "fp": "Q2", "val": "Infinity"},
+                                {"fy": "2025", "fp": "Q3", "val": float("-inf")},
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert [row["value"] for row in rows] == [0.0, 0.0, 0.0]
+    assert [row["missing_numeric_fields"] for row in rows] == [
+        ["val"],
+        ["val"],
+        ["val"],
+    ]
+    assert [row["has_missing_numeric_fields"] for row in rows] == [True, True, True]
 
 
 def test_normalize_sec_company_facts_skips_missing_or_invalid_fiscal_year():

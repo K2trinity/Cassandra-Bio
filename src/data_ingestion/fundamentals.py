@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import math
 from typing import Any
 
 
@@ -14,10 +15,10 @@ def _is_missing_numeric(value: Any) -> bool:
     if isinstance(value, str) and not value.strip():
         return True
     try:
-        float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
         return True
-    return False
+    return not math.isfinite(numeric)
 
 
 def _to_float(value: Any) -> float:
