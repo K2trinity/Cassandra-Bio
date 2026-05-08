@@ -64,6 +64,12 @@ def _universe_rows() -> list[UniverseSourceRow]:
     ]
 
 
+def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+
+
 def test_dry_run_plans_units_without_fetching_and_returns_member_count(tmp_path):
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
@@ -364,7 +370,7 @@ def test_missing_tiingo_key_skips_tiingo_units_when_other_provider_requested(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    _clear_provider_env(monkeypatch)
     monkeypatch.setenv("SEC_USER_AGENT", "CassandraBio user@example.com")
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
@@ -394,7 +400,7 @@ def test_missing_tiingo_key_fails_when_tiingo_is_only_requested(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
+    _clear_provider_env(monkeypatch)
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
@@ -422,7 +428,7 @@ def test_missing_sec_user_agent_skips_sec_units_when_other_provider_requested(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    _clear_provider_env(monkeypatch)
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
@@ -451,7 +457,7 @@ def test_missing_sec_user_agent_fails_when_sec_is_only_requested(
     tmp_path,
     monkeypatch,
 ):
-    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    _clear_provider_env(monkeypatch)
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
@@ -475,8 +481,12 @@ def test_missing_sec_user_agent_fails_when_sec_is_only_requested(
     assert "SEC_USER_AGENT" not in message
 
 
-def test_missing_fmp_key_skips_fmp_units(tmp_path, monkeypatch):
-    monkeypatch.delenv("FMP_API_KEY", raising=False)
+def test_missing_fmp_key_skips_fmp_units_when_other_provider_requested(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setenv("SEC_USER_AGENT", "CassandraBio user@example.com")
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
@@ -485,7 +495,7 @@ def test_missing_fmp_key_skips_fmp_units(tmp_path, monkeypatch):
             snapshot_date="2026-05-08",
             start_date="2026-05-01",
             end_date="2026-05-08",
-            providers=("fmp",),
+            providers=("sec", "fmp"),
             dry_run=False,
             limit_tickers=1,
             research_dir=tmp_path,
@@ -493,17 +503,44 @@ def test_missing_fmp_key_skips_fmp_units(tmp_path, monkeypatch):
         universe_rows=_universe_rows(),
     )
 
-    assert summary.skipped_units == 1
+    assert summary.skipped_units == 2
     assert summary.failed_units == 0
     with open(summary.manifest_path, encoding="utf-8") as file:
         manifest = json.load(file)
-    assert manifest["skipped"][0]["reason"] == "missing_client"
+    reasons = {item["provider"]: item["reason"] for item in manifest["skipped"]}
+    assert reasons == {"sec": "stub_not_implemented", "fmp": "missing_client"}
+
+
+def test_missing_fmp_key_fails_when_fmp_is_only_requested(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_download(
+            DownloadRequest(
+                snapshot_date="2026-05-08",
+                start_date="2026-05-01",
+                end_date="2026-05-08",
+                providers=("fmp",),
+                dry_run=False,
+                limit_tickers=1,
+                research_dir=tmp_path,
+            ),
+            universe_rows=_universe_rows(),
+        )
+
+    message = str(exc_info.value)
+    assert "fmp" in message.lower()
+    assert "credential" in message.lower()
+    assert "FMP_API_KEY" not in message
 
 
 def test_injected_provider_clients_do_not_require_credentials(tmp_path, monkeypatch):
-    monkeypatch.delenv("TIINGO_API_KEY", raising=False)
-    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
-    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    _clear_provider_env(monkeypatch)
 
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 

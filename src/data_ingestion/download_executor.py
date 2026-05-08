@@ -563,8 +563,11 @@ def _resolve_provider_clients(
         elif _only_requested_provider(request, "sec"):
             raise RuntimeError(_missing_credentials_message("sec"))
 
-    if fmp_client is None and "fmp" in requested and config.fmp_api_key:
-        fmp_client = FmpClient(config.fmp_api_key)
+    if fmp_client is None and "fmp" in requested:
+        if config.fmp_api_key:
+            fmp_client = FmpClient(config.fmp_api_key)
+        elif _only_requested_provider(request, "fmp"):
+            raise RuntimeError(_missing_credentials_message("fmp"))
 
     return tiingo_client, sec_client, fmp_client
 
