@@ -7,10 +7,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.backtest.portfolio_runner import (
-    BIOTECH_REAL_TICKERS,
-    run_real_biotech_portfolio_backtest,
-)
+from src.backtest.portfolio_runner import run_real_biotech_portfolio_backtest
 from src.backtest.runner import (
     load_saved_run,
     normalize_kline_ticker,
@@ -327,16 +324,6 @@ def api_backtest_portfolio_run():
         return error_response
 
     assert parsed is not None
-    if parsed["ticker"] not in BIOTECH_REAL_TICKERS:
-        return (
-            jsonify(
-                {
-                    "error": "portfolio backtest is only available for MRNA, JNJ, LLY, and XBI",
-                }
-            ),
-            400,
-        )
-
     result = run_real_biotech_portfolio_backtest(
         focus_ticker=parsed["ticker"],
         start_date=parsed["start_date"],
@@ -345,6 +332,8 @@ def api_backtest_portfolio_run():
         max_position_pct=parsed["max_position_pct"],
         slippage_pct=parsed["slippage_pct"],
         holding_period_days=parsed["holding_period_days"],
+        universe_id=(parsed["data"].get("universe_id") or "biotech_us_v1"),
+        as_of_date=parsed["end_date"],
     )
 
     if isinstance(result, dict) and result.get("error"):

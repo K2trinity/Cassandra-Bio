@@ -654,8 +654,8 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         return {
             "run_id": "portfolio-123",
             "created_at": "2026-05-06T12:00:00",
-            "universe_id": "biotech_four_v1",
-            "tickers": ["MRNA", "JNJ", "LLY", "XBI"],
+            "universe_id": kwargs["universe_id"],
+            "tickers": ["BIIB", "MRNA", "VRTX"],
             "start_date": kwargs["start_date"],
             "end_date": kwargs["end_date"],
             "strategy": {"id": "multifactor_score"},
@@ -664,7 +664,7 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
             ],
             "portfolio_metrics": {
                 "strategy_return": 0.04,
-                "best_ticker": "XBI",
+                "best_ticker": "VRTX",
                 "worst_ticker": "MRNA",
                 "total_trades": 8,
                 "avg_active_signal_days": 6.5,
@@ -722,9 +722,11 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         "max_position_pct": 0.15,
         "slippage_pct": 0.002,
         "holding_period_days": 7,
+        "universe_id": "biotech_us_v1",
+        "as_of_date": "2025-03-31",
     }
     assert body["run_id"] == "portfolio-123"
-    assert body["universe_id"] == "biotech_four_v1"
+    assert body["universe_id"] == "biotech_us_v1"
     assert body["strategy"] == {"id": "multifactor_score"}
     assert body["focus_ticker"]["ticker"] == "LLY"
     assert body["portfolio_metrics"]["strategy_return"] == 0.04
@@ -818,14 +820,25 @@ def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
     assert response.get_json() == {"error": "LLY: no real OHLC data"}
 
 
-def test_backtest_portfolio_run_api_rejects_non_universe_focus_ticker(monkeypatch):
-    def fail_run_real_biotech_portfolio_backtest(**kwargs):
-        raise AssertionError("portfolio runner should not be called")
+def test_backtest_portfolio_run_api_allows_syntactically_valid_focus_ticker(
+    monkeypatch,
+):
+    captured_kwargs = {}
+
+    def fake_run_real_biotech_portfolio_backtest(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "run_id": "portfolio-pfe",
+            "universe_id": kwargs["universe_id"],
+            "focus_ticker": {"ticker": "BIIB"},
+            "portfolio_metrics": {},
+            "constituents": [],
+        }
 
     monkeypatch.setattr(
         kline_routes,
         "run_real_biotech_portfolio_backtest",
-        fail_run_real_biotech_portfolio_backtest,
+        fake_run_real_biotech_portfolio_backtest,
         raising=False,
     )
 
@@ -839,7 +852,7 @@ def test_backtest_portfolio_run_api_rejects_non_universe_focus_ticker(monkeypatc
         },
     )
 
-    assert response.status_code == 400
-    assert response.get_json() == {
-        "error": "portfolio backtest is only available for MRNA, JNJ, LLY, and XBI"
-    }
+    assert response.status_code == 200
+    assert captured_kwargs["focus_ticker"] == "PFE"
+    assert captured_kwargs["universe_id"] == "biotech_us_v1"
+    assert captured_kwargs["as_of_date"] == "2025-03-31"

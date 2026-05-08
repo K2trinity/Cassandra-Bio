@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 import uuid
 
 from src.backtest.runner import normalize_kline_ticker, run_kline_backtest
+from src.backtest.universe import load_universe_tickers
+from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
 
-BIOTECH_REAL_UNIVERSE_ID = "biotech_four_v1"
+BIOTECH_REAL_UNIVERSE_ID = BIOTECH_US_UNIVERSE_ID
 BIOTECH_MOCK_UNIVERSE_ID = "biotech_mock_v1"
-BIOTECH_REAL_TICKERS = ("MRNA", "JNJ", "LLY", "XBI")
 BIOTECH_MOCK_TICKERS = ("MRNA", "JNJ", "LLY", "ABBA")
 REAL_MULTIFACTOR_STRATEGY_ID = "multifactor_score"
 MOCK_MULTIFACTOR_STRATEGY_ID = "mock_multifactor_demo"
@@ -253,14 +255,40 @@ def run_real_biotech_portfolio_backtest(
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
     holding_period_days: int | None = None,
+    *,
+    db_path: str | Path | None = None,
+    universe_id: str = BIOTECH_REAL_UNIVERSE_ID,
+    as_of_date: str | None = None,
 ) -> dict:
-    """Run the real multifactor strategy across the four-ticker biotech universe."""
-    return _run_biotech_portfolio_backtest(
+    """Run the real multifactor strategy across the active biotech universe."""
+    resolved_as_of_date = as_of_date or end_date
+    tickers = load_universe_tickers(
+        db_path=db_path,
+        universe_id=universe_id,
+        as_of_date=resolved_as_of_date,
+    )
+    if not tickers:
+        return {
+            "error": (
+                f"no active tickers found for universe {universe_id} "
+                f"as of {resolved_as_of_date}"
+            ),
+            "universe_id": universe_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "data_credibility": {
+                "eligible_universe_count": 0,
+                "skipped_ticker_count": 0,
+                "survivorship_bias_warning": True,
+            },
+        }
+
+    payload = _run_biotech_portfolio_backtest(
         focus_ticker=focus_ticker,
         start_date=start_date,
         end_date=end_date,
-        universe_id=BIOTECH_REAL_UNIVERSE_ID,
-        tickers=BIOTECH_REAL_TICKERS,
+        universe_id=universe_id,
+        tickers=tickers,
         strategy_id=REAL_MULTIFACTOR_STRATEGY_ID,
         data_mode="real",
         stop_loss_pct=stop_loss_pct,
@@ -268,6 +296,13 @@ def run_real_biotech_portfolio_backtest(
         slippage_pct=slippage_pct,
         holding_period_days=holding_period_days,
     )
+    payload["data_credibility"] = {
+        "eligible_universe_count": len(tickers),
+        "skipped_ticker_count": 0,
+        "survivorship_bias_warning": True,
+        "universe_bias_status": "current_constituents_only",
+    }
+    return payload
 
 
 def run_mock_biotech_portfolio_backtest(
