@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -203,6 +204,108 @@ def test_write_fundamentals_rows_canonicalizes_dates_decimal_and_numpy_payloads(
         '"filed":"2026-05-01","fiscal_period":"2026-Q1","margin":0.25,'
         '"security_id":"FMP:MRNA","shares":7,"ticker":"mrna"}'
     )
+
+
+def test_write_fundamentals_rows_canonicalizes_pandas_missing_scalars_to_null(
+    tmp_path,
+):
+    from src.data_ingestion.fundamentals_store import write_fundamentals_rows
+
+    db_path = tmp_path / "research.duckdb"
+    write_fundamentals_rows(
+        [
+            {
+                "security_id": "FMP:MRNA",
+                "ticker": "MRNA",
+                "fiscal_period": "2026-Q1",
+                "filing_date": pd.NaT,
+                "cash_and_equivalents": pd.NA,
+                "notes": ["reported", pd.NA],
+            }
+        ],
+        source="fmp",
+        ticker="MRNA",
+        db_path=db_path,
+    )
+
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        stored = conn.execute(
+            """
+            SELECT CAST(filing_date AS VARCHAR), payload_json
+            FROM fundamentals_normalized
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert stored[0] is None
+    assert json.loads(stored[1]) == {
+        "cash_and_equivalents": None,
+        "filing_date": None,
+        "fiscal_period": "2026-Q1",
+        "notes": ["reported", None],
+        "security_id": "FMP:MRNA",
+        "ticker": "MRNA",
+    }
+    assert '"cash_and_equivalents":null' in stored[1]
+    assert '"filing_date":null' in stored[1]
+
+
+def test_write_fundamentals_rows_rejects_unserializable_payload_before_replacing_rows(
+    tmp_path,
+):
+    from src.data_ingestion.fundamentals_store import write_fundamentals_rows
+
+    db_path = tmp_path / "research.duckdb"
+    write_fundamentals_rows(
+        [
+            {
+                "security_id": "FMP:MRNA",
+                "ticker": "MRNA",
+                "fiscal_period": "2026-Q1",
+                "filing_date": "2026-05-01",
+                "cash_and_equivalents": 100.0,
+            }
+        ],
+        source="fmp",
+        ticker="MRNA",
+        db_path=db_path,
+    )
+
+    with pytest.raises(ValueError, match="row 0.*metadata.*JSON-serializable"):
+        write_fundamentals_rows(
+            [
+                {
+                    "security_id": "FMP:MRNA",
+                    "ticker": "MRNA",
+                    "fiscal_period": "2026-Q2",
+                    "metadata": object(),
+                }
+            ],
+            source="fmp",
+            ticker="MRNA",
+            db_path=db_path,
+        )
+
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        stored = conn.execute(
+            """
+            SELECT fiscal_period, payload_json
+            FROM fundamentals_normalized
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(stored) == 1
+    assert stored[0][0] == "2026-Q1"
+    assert json.loads(stored[0][1])["cash_and_equivalents"] == 100.0
 
 
 @pytest.mark.parametrize(

@@ -131,6 +131,8 @@ def _canonical_json_value(value: Any, *, row_index: int, field: str) -> Any:
             )
             for index, item in enumerate(value)
         ]
+    if _is_pandas_missing_scalar(value):
+        return None
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise ValueError(
@@ -156,7 +158,11 @@ def _canonical_json_value(value: Any, *, row_index: int, field: str) -> Any:
                 f"fundamentals row {row_index} field {field} must be finite."
             )
         return value
-    return value
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    raise ValueError(
+        f"fundamentals row {row_index} field {field} must be JSON-serializable."
+    )
 
 
 def _canonical_date_value(value: Any, *, row_index: int, field: str) -> str:
@@ -194,6 +200,21 @@ def _numpy_scalar_to_python(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     return value
+
+
+def _is_pandas_missing_scalar(value: Any) -> bool:
+    try:
+        import pandas as pd
+    except ImportError:
+        return False
+    if value is pd.NA or value is pd.NaT:
+        return True
+    if type(value).__module__.startswith("pandas."):
+        try:
+            return bool(pd.isna(value))
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def _normalize_source(source: str) -> str:
