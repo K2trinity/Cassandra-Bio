@@ -17,11 +17,12 @@
 
 画面元素：
 
-- PubMed 搜索结果或医学文献页面
-- ClinicalTrials 页面或 trial 表格
-- FDA/监管关键词素材
-- 公司管线表格
-- 价格/K-line 图
+- 准备好的 montage 素材，不要求现场实时搜索
+- PubMed 搜索结果或医学文献页面；默认示例：Alzheimer's disease therapeutic pipeline
+- ClinicalTrials 页面或 trial 表格；默认示例：Alzheimer disease Phase 3 trial
+- FDA/监管关键词素材；默认示例：FDA Alzheimer's drug approval label 或 advisory committee 页面
+- 公司管线表格；默认示例：Eli Lilly / donanemab pipeline 或 annual report pipeline 表格
+- 价格/K-line 图；默认示例：LLY K-line workspace
 - 手工表格或多窗口切换
 
 中文屏幕注释：
@@ -78,11 +79,15 @@
 - 辅助：实时运行状态或日志
 - 辅助：slot/contract 的文档或 UI 摘要
 
+准备说明：
+
+录制前准备 docs/competition/video/assets/agent-workflow.png 或同等架构图素材。
+
 中文屏幕注释：
 
 `结构化 Agent 工作流`
-`slot contract`
-`quality gate`
+`槽位契约`
+`质量门禁`
 
 ## Shot 5：从报告到假设，3:05-3:45
 
@@ -109,7 +114,7 @@
 1. 打开 LLY K-line workspace。
 2. 展示事件层。
 3. 展示 Backtest 面板。
-4. 若使用 mock/demo 曲线，角落固定显示：
+4. 只要画面中出现 mock/demo 曲线，角落全程固定显示：
    `模拟演示路径，不代表真实研究收益`
 
 中文屏幕注释：
@@ -137,6 +142,9 @@
 
 - 没有说 disease report 直接生成交易信号。
 - 没有说 Cassandra 预测市场。
+- 没有说 Cassandra 提供投资建议。
+- 没有说 Cassandra 保证收益或保证正收益。
+- 没有说 Cassandra 自动下单、自动交易或替代人工研究判断。
 - 没有说正收益曲线是真实研究结论。
 - K-line 部分出现 mock/demo 曲线时，画面标注了 `模拟演示路径，不代表真实研究收益`。
 - 字幕、注释和章节标题为中文。
