@@ -77,7 +77,7 @@
 - 首选：简化架构图
   `harvester -> disease_survey_intelligence -> extension_handoff -> evidence_synthesizer -> clinical_analyzer -> quality_assessor -> writer`
 - 辅助：实时运行状态或日志
-- 辅助：slot/contract 的文档或 UI 摘要
+- 辅助：槽位契约的文档或 UI 摘要
 
 准备说明：
 
