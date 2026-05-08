@@ -3,6 +3,11 @@
 
   var rangeContextRequestId = 0;
   var EVENT_LAYER_KINDS = ["catalysts", "news", "macro"];
+  var CHART_DISPLAY_MODES = [
+    ["candles_with_backtest", "Candles + Backtest"],
+    ["backtest_only", "Backtest Only"],
+    ["candles_only", "Candles Only"]
+  ];
 
   function byId(id) {
     return document.getElementById(id);
@@ -154,13 +159,19 @@
       return null;
     }
 
+    var chartMode = state.chartDisplayMode || "candles_with_backtest";
+    var showBacktestOverlay = state.showBacktest && chartMode !== "candles_only";
+    var showSignalOverlays = showBacktestOverlay && chartMode === "candles_with_backtest";
+    var showEventMarkers = chartMode !== "backtest_only";
+
     var cleanup = window.PokieChart.render(container, {
       ohlcData: (workspace.price && workspace.price.rows) || [],
-      events: activeEvents(workspace, state),
-      highlightedEventId: state.selectedEventId,
-      equityCurve: state.showBacktest ? state.equityCurve : [],
-      signals: state.showBacktest ? state.signals : [],
-      trades: state.showBacktest ? state.trades : [],
+      displayMode: chartMode,
+      events: showEventMarkers ? activeEvents(workspace, state) : [],
+      highlightedEventId: showEventMarkers ? state.selectedEventId : null,
+      equityCurve: showBacktestOverlay ? state.equityCurve : [],
+      signals: showSignalOverlays ? state.signals : [],
+      trades: showSignalOverlays ? state.trades : [],
       onEventClick: function (event) {
         state.selectedEventId = event && event.id;
         renderCatalysts(workspace, state);
@@ -418,6 +429,23 @@
     return input;
   }
 
+  function addSelect(form, labelText, name, options, value) {
+    var label = makeElement("label", { text: labelText });
+    var select = makeElement("select");
+    select.name = name;
+    (options || []).forEach(function (optionConfig) {
+      var optionValue = Array.isArray(optionConfig) ? optionConfig[0] : optionConfig.value;
+      var optionLabel = Array.isArray(optionConfig) ? optionConfig[1] : optionConfig.label;
+      var option = makeElement("option", { text: optionLabel || optionValue });
+      option.value = optionValue;
+      select.appendChild(option);
+    });
+    select.value = value;
+    label.appendChild(select);
+    form.appendChild(label);
+    return select;
+  }
+
   function renderMetrics(node, metrics) {
     node.replaceChildren();
     appendMetrics(node, metrics);
@@ -612,6 +640,13 @@
     addInput(form, "Max Position Fraction", "max_position_pct", "number", "0.2", "0.001");
     addInput(form, "Slippage Fraction", "slippage_pct", "number", "0.001", "0.0001");
     addInput(form, "Hold Days", "holding_period_days", "number", "5", "1");
+    var chartModeSelect = addSelect(
+      form,
+      "Chart Display Mode",
+      "chart_display_mode",
+      CHART_DISPLAY_MODES,
+      state.chartDisplayMode || "candles_with_backtest"
+    );
     form.appendChild(makeElement("button", { type: "submit", text: "Run Backtest" }));
     var universeButton = makeElement("button", {
       type: "button",
@@ -634,6 +669,11 @@
       renderMetrics(results, savedSummary.metrics || {});
       renderBacktestDiagnostics(results, savedSummary);
     }
+
+    chartModeSelect.addEventListener("change", function () {
+      state.chartDisplayMode = chartModeSelect.value || "candles_with_backtest";
+      renderChart(workspace, state);
+    });
 
     function requestPayload() {
       return {
@@ -779,6 +819,7 @@
       equityCurve: savedBacktest.series || [],
       signals: savedBacktestSummary.signals || [],
       trades: savedBacktestSummary.trades || [],
+      chartDisplayMode: "candles_with_backtest",
       backtestRequestId: 0,
       chartCleanup: null
     };

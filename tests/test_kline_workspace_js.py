@@ -274,6 +274,122 @@ def test_workspace_js_backtest_panel_renders_single_and_universe_buttons_without
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_backtest_panel_has_chart_mode_control():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        const select = form.elements.chart_display_mode;
+        if (!select) {
+          throw new Error('chart_display_mode select missing');
+        }
+        if (select.tagName !== 'SELECT') {
+          throw new Error('chart_display_mode is not a select: ' + select.tagName);
+        }
+        if (select.value !== 'candles_with_backtest') {
+          throw new Error('chart_display_mode default mismatch: ' + select.value);
+        }
+        const optionValues = select.children.map((option) => option.value).join(',');
+        if (optionValues !== 'candles_with_backtest,backtest_only,candles_only') {
+          throw new Error('chart_display_mode options mismatch: ' + optionValues);
+        }
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'candles_with_backtest') {
+          throw new Error('default displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_only_mode_passes_display_mode_and_hides_events():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          panels: { selected_event_id: 'evt-1' },
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{ id: 'evt-1', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical' }]
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: true,
+            series: [{ date: '2026-04-20', equity: 1.03 }],
+            summary: {
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 0.8 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-21', pnl_pct: 0.04 }]
+            }
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.chart_display_mode.value = 'backtest_only';
+        form.elements.chart_display_mode.dispatchEvent({ type: 'change' });
+
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'backtest_only') {
+          throw new Error('backtest_only displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        if ((latestConfig.events || []).length) {
+          throw new Error('backtest_only mode should hide event markers');
+        }
+        if (latestConfig.highlightedEventId !== null) {
+          throw new Error('backtest_only mode should hide highlighted event id: ' + latestConfig.highlightedEventId);
+        }
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
+          throw new Error('backtest_only mode should keep equity curve overlays');
+        }
+        if ((latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('backtest_only mode should hide signal and trade overlays');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_candles_only_mode_hides_backtest_overlays():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{ id: 'evt-1', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical' }]
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: true,
+            series: [{ date: '2026-04-20', equity: 1.03 }],
+            summary: {
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 0.8 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-21', pnl_pct: 0.04 }]
+            }
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.chart_display_mode.value = 'candles_only';
+        form.elements.chart_display_mode.dispatchEvent({ type: 'change' });
+
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'candles_only') {
+          throw new Error('candles_only displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        if (!latestConfig.events || latestConfig.events.length !== 1) {
+          throw new Error('candles_only mode should keep event markers');
+        }
+        if ((latestConfig.equityCurve || []).length || (latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('candles_only mode should hide backtest overlays');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_without_disclosure():
     result = _run_workspace_script(r"""
         let requestUrl = null;
