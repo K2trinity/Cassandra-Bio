@@ -13,7 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from src.backtest.data_loader import DATA_DIR
-from src.backtest.data_sources import YFINANCE_PROFILE
+from src.backtest.data_sources import TIINGO_PROFILE, YFINANCE_PROFILE, SourceProfile
 from src.backtest.events_db import DB_PATH as EVENTS_DB_PATH
 from src.backtest.migrations import apply_sqlite_migrations
 from src.backtest.price_snapshot import import_ohlc_cache_to_prices_daily
@@ -27,6 +27,7 @@ from src.backtest.snapshot_builder import (
     build_data_snapshot_id,
     insert_data_snapshot,
 )
+from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
 
 EVENT_HASH_TABLES = (
     "schema_migrations",
@@ -35,6 +36,10 @@ EVENT_HASH_TABLES = (
     "event_extraction_runs",
     "event_quality_issues",
 )
+PRICE_SOURCE_PROFILES = {
+    TIINGO_PROFILE.source_id: TIINGO_PROFILE,
+    YFINANCE_PROFILE.source_id: YFINANCE_PROFILE,
+}
 
 
 def bootstrap_snapshot(
@@ -44,8 +49,10 @@ def bootstrap_snapshot(
     db_path: str | Path | None = None,
     event_db_path: str | Path = EVENTS_DB_PATH,
     snapshot_date: str,
-    universe_id: str,
+    universe_id: str = BIOTECH_US_UNIVERSE_ID,
+    price_source: str = TIINGO_PROFILE.source_id,
 ) -> dict:
+    profile = _provider_profile(price_source)
     research_root = Path(research_dir)
     resolved_db_path = (
         Path(db_path) if db_path is not None else research_root / RESEARCH_DB_PATH.name
@@ -57,7 +64,7 @@ def bootstrap_snapshot(
     event_snapshot_hash = compute_event_source_hash(resolved_event_db_path)
     snapshot_id = build_data_snapshot_id(
         snapshot_date=snapshot_date,
-        price_source=YFINANCE_PROFILE.source_id,
+        price_source=profile.source_id,
         universe_id=universe_id,
         security_master_hash=security_master_hash,
         event_snapshot_hash=event_snapshot_hash,
@@ -68,16 +75,16 @@ def bootstrap_snapshot(
         ohlc_dir=ohlc_dir,
         output_root=price_root,
         data_snapshot_id=snapshot_id,
-        source=YFINANCE_PROFILE.source_id,
+        source=profile.source_id,
     )
     insert_data_snapshot(
         DataSnapshot(
             data_snapshot_id=snapshot_id,
             snapshot_date=snapshot_date,
-            price_source=YFINANCE_PROFILE.source_id,
+            price_source=profile.source_id,
             event_source_db=str(resolved_event_db_path),
             universe_id=universe_id,
-            bias_profile=YFINANCE_PROFILE.bias_profile.value,
+            bias_profile=profile.bias_profile.value,
             price_partition_root=str(price_root),
             event_snapshot_hash=event_snapshot_hash,
             security_master_hash=security_master_hash,
@@ -86,6 +93,13 @@ def bootstrap_snapshot(
         db_path=resolved_db_path,
     )
     return {"data_snapshot_id": snapshot_id, "coverage": coverage}
+
+
+def _provider_profile(price_source: str) -> SourceProfile:
+    try:
+        return PRICE_SOURCE_PROFILES[price_source]
+    except KeyError as exc:
+        raise ValueError(f"unsupported price source: {price_source}") from exc
 
 
 def compute_ohlc_manifest_hash(ohlc_dir: str | Path) -> str:
@@ -187,14 +201,25 @@ def _canonical_hash(value: Any) -> str:
     return sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-date", required=True)
-    parser.add_argument("--universe-id", default="biotech_four_v1")
+    parser.add_argument("--universe-id", default=BIOTECH_US_UNIVERSE_ID)
+    parser.add_argument(
+        "--price-source",
+        default=TIINGO_PROFILE.source_id,
+        choices=sorted(PRICE_SOURCE_PROFILES),
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_arg_parser()
     args = parser.parse_args()
     result = bootstrap_snapshot(
         snapshot_date=args.snapshot_date,
         universe_id=args.universe_id,
+        price_source=args.price_source,
     )
     print(result)
     return 0

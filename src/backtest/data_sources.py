@@ -49,6 +49,15 @@ YFINANCE_PROFILE = SourceProfile(
     supports_delisting_returns=False,
 )
 
+TIINGO_PROFILE = SourceProfile(
+    source_id="tiingo",
+    display_name="Tiingo End-of-Day",
+    bias_profile=BiasProfile.UNKNOWN_BIAS,
+    supports_delisted=False,
+    supports_point_in_time_universe=False,
+    supports_delisting_returns=False,
+)
+
 MOCK_PROFILE = SourceProfile(
     source_id=MOCK_SOURCE_ID,
     display_name="Controlled mock dataset",

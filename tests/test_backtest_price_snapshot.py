@@ -48,12 +48,17 @@ def test_import_ohlc_cache_writes_prices_daily_schema(tmp_path):
         "low",
         "close",
         "adj_close",
+        "adj_open",
+        "adj_high",
+        "adj_low",
+        "adj_volume",
         "volume",
         "vwap",
         "split_factor",
         "dividend",
         "delisting_return",
         "adjustment_mode",
+        "adjustment_quality",
         "source",
         "source_symbol",
         "data_snapshot_id",
@@ -62,6 +67,13 @@ def test_import_ohlc_cache_writes_prices_daily_schema(tmp_path):
     assert prices.iloc[0]["security_id"] == "YFINANCE:MRNA"
     assert prices.iloc[0]["source"] == "yfinance"
     assert prices.iloc[0]["data_snapshot_id"] == "snap-test"
+    assert pd.isna(prices.iloc[0]["adj_close"])
+    assert pd.isna(prices.iloc[0]["adj_open"])
+    assert pd.isna(prices.iloc[0]["adj_high"])
+    assert pd.isna(prices.iloc[0]["adj_low"])
+    assert pd.isna(prices.iloc[0]["adj_volume"])
+    assert prices.iloc[0]["adjustment_mode"] == "raw_ohlc_cache"
+    assert prices.iloc[0]["adjustment_quality"] == "raw_only"
     ingested_at = prices.iloc[0]["ingested_at"]
     assert ingested_at.endswith("Z")
     parsed_ingested_at = datetime.fromisoformat(
@@ -354,6 +366,10 @@ def test_import_ohlc_cache_drops_invalid_numeric_rows_and_writes_numeric_dtypes(
         "low",
         "close",
         "adj_close",
+        "adj_open",
+        "adj_high",
+        "adj_low",
+        "adj_volume",
         "volume",
         "vwap",
         "split_factor",
@@ -487,6 +503,10 @@ def test_normalize_ohlc_frame_empty_result_has_stable_dtypes():
         "low",
         "close",
         "adj_close",
+        "adj_open",
+        "adj_high",
+        "adj_low",
+        "adj_volume",
         "volume",
         "vwap",
         "split_factor",

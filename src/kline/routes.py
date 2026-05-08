@@ -7,13 +7,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.backtest.portfolio_runner import (
-    BIOTECH_MOCK_TICKERS,
-    BIOTECH_REAL_TICKERS,
-    DISCLOSURE_KEYS,
-    run_mock_biotech_portfolio_backtest,
-    run_real_biotech_portfolio_backtest,
-)
+from src.backtest.portfolio_runner import run_real_biotech_portfolio_backtest
 from src.backtest.runner import (
     load_saved_run,
     normalize_kline_ticker,
@@ -25,11 +19,6 @@ from src.kline.workspace_service import KlineWorkspaceService
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
 resolver = TickerResolver()
-PORTFOLIO_RESPONSE_DISCLOSURE_KEYS = set(DISCLOSURE_KEYS) | {
-    "strategy",
-    "strategy_id",
-    "universe_id",
-}
 
 __all__ = ["kline_bp"]
 
@@ -157,6 +146,12 @@ def _parse_backtest_run_request():
     )
     if not data_snapshot_id:
         data_snapshot_id = None
+    raw_universe_id = data.get("universe_id")
+    universe_id = (
+        str(raw_universe_id).strip() if raw_universe_id is not None else "biotech_us_v1"
+    )
+    if not universe_id:
+        universe_id = "biotech_us_v1"
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return None, (
@@ -294,29 +289,8 @@ def _parse_backtest_run_request():
         "backtest_mode": backtest_mode,
         "price_source": price_source,
         "data_snapshot_id": data_snapshot_id,
+        "universe_id": universe_id,
     }, None
-
-
-def _without_disclosure_keys(value):
-    if isinstance(value, dict):
-        return {
-            key: _without_disclosure_keys(child)
-            for key, child in value.items()
-            if not _is_portfolio_disclosure_key(key)
-        }
-    if isinstance(value, list):
-        return [_without_disclosure_keys(child) for child in value]
-    if isinstance(value, str) and any(
-        disclosure in value.lower()
-        for disclosure in PORTFOLIO_RESPONSE_DISCLOSURE_KEYS
-    ):
-        return None
-    return value
-
-
-def _is_portfolio_disclosure_key(key: object) -> bool:
-    normalized = str(key).lower()
-    return "mock" in normalized or normalized in PORTFOLIO_RESPONSE_DISCLOSURE_KEYS
 
 
 @kline_bp.post("/api/backtest/run")
@@ -357,16 +331,6 @@ def api_backtest_portfolio_run():
         return error_response
 
     assert parsed is not None
-    if parsed["ticker"] not in BIOTECH_REAL_TICKERS:
-        return (
-            jsonify(
-                {
-                    "error": "portfolio backtest is only available for MRNA, JNJ, LLY, and XBI",
-                }
-            ),
-            400,
-        )
-
     result = run_real_biotech_portfolio_backtest(
         focus_ticker=parsed["ticker"],
         start_date=parsed["start_date"],
@@ -375,47 +339,15 @@ def api_backtest_portfolio_run():
         max_position_pct=parsed["max_position_pct"],
         slippage_pct=parsed["slippage_pct"],
         holding_period_days=parsed["holding_period_days"],
+        universe_id=parsed["universe_id"],
+        as_of_date=parsed["end_date"],
+        data_snapshot_id=parsed["data_snapshot_id"],
     )
 
     if isinstance(result, dict) and result.get("error"):
-        return jsonify({"error": str(result.get("error"))}), 400
+        return jsonify(result), 400
 
     return jsonify(result)
-
-
-@kline_bp.post("/api/backtest/portfolio/demo/run")
-def api_backtest_portfolio_demo_run():
-    """Run the explicit demo biotech universe backtest for the K-line workflow."""
-    parsed, error_response = _parse_backtest_run_request()
-    if error_response is not None:
-        return error_response
-
-    assert parsed is not None
-    if parsed["ticker"] not in BIOTECH_MOCK_TICKERS:
-        return (
-            jsonify(
-                {
-                    "error": "demo portfolio backtest is only available for MRNA, JNJ, LLY, and ABBA",
-                }
-            ),
-            400,
-        )
-
-    result = run_mock_biotech_portfolio_backtest(
-        focus_ticker=parsed["ticker"],
-        start_date=parsed["start_date"],
-        end_date=parsed["end_date"],
-        stop_loss_pct=parsed["stop_loss_pct"],
-        max_position_pct=parsed["max_position_pct"],
-        slippage_pct=parsed["slippage_pct"],
-        holding_period_days=parsed["holding_period_days"],
-    )
-
-    if isinstance(result, dict) and result.get("error"):
-        public_error = _without_disclosure_keys(str(result.get("error")))
-        return jsonify({"error": public_error or "portfolio backtest failed"}), 400
-
-    return jsonify(_without_disclosure_keys(result))
 
 
 @kline_bp.get("/api/backtest/results/<run_id>")

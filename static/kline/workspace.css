@@ -27,7 +27,8 @@
 }
 
 .kline-workspace button,
-.kline-workspace input {
+.kline-workspace input,
+.kline-workspace select {
   font: inherit;
 }
 
@@ -75,7 +76,8 @@
 }
 
 .ticker-form input,
-.backtest-form input {
+.backtest-form input,
+.kline-workspace select {
   background: #0d1016;
   border: 1px solid var(--kline-border);
   border-radius: 6px;
@@ -86,7 +88,8 @@
 }
 
 .ticker-form input:focus,
-.backtest-form input:focus {
+.backtest-form input:focus,
+.kline-workspace select:focus {
   border-color: var(--kline-cyan);
   box-shadow: 0 0 0 2px rgba(50, 199, 217, 0.18);
 }
@@ -452,6 +455,10 @@
   gap: 5px;
 }
 
+.backtest-form select {
+  color-scheme: dark;
+}
+
 .backtest-form button {
   background: rgba(49, 196, 141, 0.12);
   border-color: rgba(49, 196, 141, 0.55);
@@ -460,13 +467,20 @@
 }
 
 .backtest-status {
-  border-top: 1px solid var(--kline-border-soft);
+  background: #11161d;
+  border: 1px solid var(--kline-border-soft);
+  border-radius: 6px;
   margin-top: 12px;
-  padding-top: 10px;
+  padding: 9px 10px;
 }
 
 .backtest-results {
+  background: #11161d;
+  border: 1px solid var(--kline-border-soft);
+  border-radius: 6px;
   margin-top: 10px;
+  min-height: 42px;
+  padding: 10px;
 }
 
 .portfolio-summary,

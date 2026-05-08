@@ -138,16 +138,42 @@ def test_mock_biotech_portfolio_runner_aggregates_universe_and_focus_payload(
     _assert_no_portfolio_disclosure_text(payload["focus_ticker"])
 
 
-def test_real_biotech_portfolio_runner_uses_real_multifactor_strategy(
-    monkeypatch,
-):
+def test_real_portfolio_backtest_uses_duckdb_universe(tmp_path, monkeypatch):
     from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
 
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.executemany(
+            """
+            INSERT INTO universe_membership (
+                universe_id,
+                security_id,
+                ticker,
+                member_from,
+                member_to,
+                weight,
+                membership_source,
+                as_of_date
+            )
+            VALUES ('biotech_us_v1', ?, ?, ?, ?, NULL, 'test', '2026-05-08')
+            """,
+            [
+                ("BIO:VRTX", "vrtx", "2024-01-01", None),
+                ("BIO:MRNA", "MRNA", "2024-01-01", None),
+                ("BIO:BIIB", "biib", "2024-01-01", "2026-05-08"),
+                ("BIO:SGEN", "SGEN", "2026-05-09", None),
+            ],
+        )
+    finally:
+        conn.close()
     single_runs = {
         "MRNA": _portfolio_runner_payload("MRNA", [1.0, 1.01, 1.03], 0.03, 3, 2),
-        "JNJ": _portfolio_runner_payload("JNJ", [1.0, 0.99, 1.01], 0.01, 2, 1),
-        "LLY": _portfolio_runner_payload("LLY", [1.0, 1.02, 1.04], 0.04, 4, 3),
-        "XBI": _portfolio_runner_payload("XBI", [1.0, 0.98, 0.99], -0.01, 1, 1),
+        "BIIB": _portfolio_runner_payload("BIIB", [1.0, 0.99, 1.01], 0.01, 2, 1),
+        "VRTX": _portfolio_runner_payload("VRTX", [1.0, 1.02, 1.04], 0.04, 4, 3),
     }
     calls = []
 
@@ -167,16 +193,19 @@ def test_real_biotech_portfolio_runner_uses_real_multifactor_strategy(
     )
 
     payload = portfolio_runner.run_real_biotech_portfolio_backtest(
-        focus_ticker="jnj",
+        focus_ticker="mrna",
         start_date="2025-01-02",
         end_date="2025-01-06",
         stop_loss_pct=-0.07,
         max_position_pct=0.15,
         slippage_pct=0.002,
         holding_period_days=7,
+        db_path=db_path,
+        as_of_date="2026-05-08",
+        data_snapshot_id="snap_20260507_tiingo",
     )
 
-    assert [call["ticker"] for call in calls] == ["MRNA", "JNJ", "LLY", "XBI"]
+    assert [call["ticker"] for call in calls] == ["BIIB", "MRNA", "VRTX"]
     assert all(
         call["strategy_id"] == "multifactor_score"
         and call["data_mode"] == "real"
@@ -188,18 +217,26 @@ def test_real_biotech_portfolio_runner_uses_real_multifactor_strategy(
         and call["holding_period_days"] == 7
         for call in calls
     )
-    assert payload["universe_id"] == "biotech_four_v1"
+    assert payload["universe_id"] == "biotech_us_v1"
+    assert payload["data_snapshot_id"] == "snap_20260507_tiingo"
+    assert payload["tickers"] == ["BIIB", "MRNA", "VRTX"]
     assert payload["strategy"] == {"id": "multifactor_score"}
-    assert payload["focus_ticker"]["ticker"] == "JNJ"
+    assert payload["focus_ticker"]["ticker"] == "MRNA"
+    assert payload["data_credibility"] == {
+        "eligible_universe_count": 3,
+        "skipped_ticker_count": 0,
+        "survivorship_bias_warning": True,
+        "universe_bias_status": "current_constituents_only",
+    }
     assert payload["portfolio_equity_curve"] == [
         {"date": "2025-01-02", "equity": 1.0},
-        {"date": "2025-01-03", "equity": 1.0},
-        {"date": "2025-01-06", "equity": 1.0175},
+        {"date": "2025-01-03", "equity": 1.006667},
+        {"date": "2025-01-06", "equity": 1.026667},
     ]
-    assert payload["portfolio_metrics"]["strategy_return"] == 0.0175
-    assert payload["portfolio_metrics"]["best_ticker"] == "LLY"
-    assert payload["portfolio_metrics"]["worst_ticker"] == "XBI"
-    assert payload["portfolio_metrics"]["total_trades"] == 7
+    assert payload["portfolio_metrics"]["strategy_return"] == 0.026667
+    assert payload["portfolio_metrics"]["best_ticker"] == "VRTX"
+    assert payload["portfolio_metrics"]["worst_ticker"] == "BIIB"
+    assert payload["portfolio_metrics"]["total_trades"] == 6
     _assert_no_portfolio_disclosure_text(payload["constituents"])
     _assert_no_portfolio_disclosure_text(payload["focus_ticker"])
 
@@ -227,6 +264,73 @@ def test_mock_biotech_portfolio_runner_falls_back_to_mrna_for_unknown_focus(
     )
 
     assert payload["focus_ticker"]["ticker"] == "MRNA"
+
+
+def test_real_portfolio_backtest_returns_credibility_for_empty_universe(tmp_path):
+    from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="PFE",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+        db_path=db_path,
+        as_of_date="2026-05-08",
+        data_snapshot_id="snap_empty",
+    )
+
+    assert payload == {
+        "error": "no active tickers found for universe biotech_us_v1 as of 2026-05-08",
+        "universe_id": "biotech_us_v1",
+        "data_snapshot_id": "snap_empty",
+        "as_of_date": "2026-05-08",
+        "start_date": "2025-01-02",
+        "end_date": "2025-01-06",
+        "data_credibility": {
+            "eligible_universe_count": 0,
+            "skipped_ticker_count": 0,
+            "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+            "coverage_status": "no_active_members",
+        },
+    }
+
+
+def test_real_portfolio_backtest_returns_structured_error_for_unsupported_universe(
+    tmp_path,
+):
+    from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="MRNA",
+        start_date="2025-01-02",
+        end_date="2025-01-06",
+        db_path=db_path,
+        universe_id="biotech_mock_v1",
+        as_of_date="2026-05-08",
+        data_snapshot_id="snap_unsupported",
+    )
+
+    assert payload == {
+        "error": "Unsupported production universe: biotech_mock_v1",
+        "universe_id": "biotech_mock_v1",
+        "data_snapshot_id": "snap_unsupported",
+        "as_of_date": "2026-05-08",
+        "start_date": "2025-01-02",
+        "end_date": "2025-01-06",
+        "data_credibility": {
+            "eligible_universe_count": 0,
+            "skipped_ticker_count": 0,
+            "survivorship_bias_warning": True,
+            "universe_bias_status": "current_constituents_only",
+            "coverage_status": "unsupported_universe",
+        },
+    }
 
 
 def test_mock_biotech_portfolio_runner_returns_ticker_prefixed_error(monkeypatch):

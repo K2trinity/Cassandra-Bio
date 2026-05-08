@@ -54,6 +54,20 @@ CATALOG_SQL: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS universe_snapshots (
+        universe_snapshot_id TEXT PRIMARY KEY,
+        universe_id TEXT,
+        as_of_date DATE,
+        bias_status TEXT,
+        survivorship_bias_warning BOOLEAN,
+        member_count INTEGER,
+        benchmark_tickers_json TEXT,
+        source_payload_json TEXT,
+        coverage_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS data_snapshots (
         data_snapshot_id TEXT PRIMARY KEY,
         snapshot_date DATE,
@@ -83,6 +97,48 @@ CATALOG_SQL: tuple[str, ...] = (
         bias_warnings_json TEXT,
         created_at TIMESTAMP,
         completed_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS provider_fetch_log (
+        fetch_id TEXT PRIMARY KEY,
+        provider TEXT,
+        endpoint TEXT,
+        request_hash TEXT,
+        status TEXT,
+        retry_count INTEGER,
+        message TEXT,
+        metadata_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS fundamentals_normalized (
+        security_id TEXT,
+        ticker TEXT,
+        fiscal_period TEXT,
+        filing_date DATE,
+        source TEXT,
+        payload_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sec_companyfacts_normalized (
+        security_id TEXT,
+        ticker TEXT,
+        cik TEXT,
+        taxonomy TEXT,
+        concept TEXT,
+        unit TEXT,
+        fiscal_year INTEGER,
+        fiscal_period TEXT,
+        form TEXT,
+        filed DATE,
+        period_end DATE,
+        value DOUBLE,
+        source TEXT,
+        created_at TIMESTAMP
     )
     """,
 )

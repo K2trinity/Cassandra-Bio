@@ -87,9 +87,12 @@ export interface TradeMarker {
   pnl_pct: number;
 }
 
+export type ChartDisplayMode = 'candles_with_backtest' | 'backtest_only' | 'candles_only';
+
 export interface ChartConfig {
   ohlcData: OHLCRow[];
   events: BiotechEvent[];
+  displayMode?: ChartDisplayMode;
   onEventClick?: (event: BiotechEvent) => void;
   onAnomalyDetected?: (signal: AnomalySignal) => void;
   onHover?: (date: string | null, ohlc?: HoverData) => void;

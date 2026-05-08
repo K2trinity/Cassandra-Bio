@@ -35,6 +35,28 @@ def test_yfinance_blocked_for_research_grade_mode():
     )
 
 
+def test_tiingo_profile_is_formal_exploratory_source_with_unknown_survivorship_bias():
+    from src.backtest.data_sources import BacktestMode, BiasProfile, SourcePolicyError
+    from src.backtest.data_sources import TIINGO_PROFILE, validate_source_for_mode
+
+    assert TIINGO_PROFILE.source_id == "tiingo"
+    assert TIINGO_PROFILE.display_name == "Tiingo End-of-Day"
+    assert TIINGO_PROFILE.bias_profile == BiasProfile.UNKNOWN_BIAS
+    assert TIINGO_PROFILE.supports_delisted is False
+    assert TIINGO_PROFILE.supports_point_in_time_universe is False
+    assert TIINGO_PROFILE.supports_delisting_returns is False
+
+    exploratory = validate_source_for_mode(TIINGO_PROFILE, BacktestMode.EXPLORATORY)
+    assert exploratory.allowed is True
+    assert exploratory.bias_profile == BiasProfile.UNKNOWN_BIAS
+    assert exploratory.bias_warnings == (
+        "Source tiingo has unknown survivorship-bias coverage.",
+    )
+
+    with pytest.raises(SourcePolicyError, match="research-grade"):
+        validate_source_for_mode(TIINGO_PROFILE, BacktestMode.RESEARCH_GRADE)
+
+
 def test_yfinance_blocked_for_mock_mode():
     from src.backtest.data_sources import BacktestMode, SourcePolicyError, YFINANCE_PROFILE
     from src.backtest.data_sources import validate_source_for_mode

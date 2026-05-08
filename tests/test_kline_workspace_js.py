@@ -250,7 +250,7 @@ def test_workspace_js_backtest_error_clears_previous_overlays():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_workspace_js_backtest_panel_renders_single_and_universe_buttons():
+def test_workspace_js_backtest_panel_renders_single_and_universe_buttons_without_demo():
     result = _run_workspace_script(r"""
         installWorkspace(makeWorkspace());
         runWorkspace();
@@ -266,8 +266,125 @@ def test_workspace_js_backtest_panel_renders_single_and_universe_buttons():
         if (!buttonText.includes('Run Universe')) {
           throw new Error('universe backtest button missing: ' + buttonText.join(','));
         }
-        if (!buttonText.includes('Run Demo Universe')) {
-          throw new Error('demo universe backtest button missing: ' + buttonText.join(','));
+        const removedDemoLabel = ['Run', 'Demo', 'Universe'].join(' ');
+        if (buttonText.includes(removedDemoLabel)) {
+          throw new Error('demo universe backtest button should not render: ' + buttonText.join(','));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_panel_has_chart_mode_control():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        const select = form.elements.chart_display_mode;
+        if (!select) {
+          throw new Error('chart_display_mode select missing');
+        }
+        if (select.tagName !== 'SELECT') {
+          throw new Error('chart_display_mode is not a select: ' + select.tagName);
+        }
+        if (select.value !== 'candles_with_backtest') {
+          throw new Error('chart_display_mode default mismatch: ' + select.value);
+        }
+        const optionValues = select.children.map((option) => option.value).join(',');
+        if (optionValues !== 'candles_with_backtest,backtest_only,candles_only') {
+          throw new Error('chart_display_mode options mismatch: ' + optionValues);
+        }
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'candles_with_backtest') {
+          throw new Error('default displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_backtest_only_mode_passes_display_mode_and_hides_events():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          panels: { selected_event_id: 'evt-1' },
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{ id: 'evt-1', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical' }]
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: true,
+            series: [{ date: '2026-04-20', equity: 1.03 }],
+            summary: {
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 0.8 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-21', pnl_pct: 0.04 }]
+            }
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.chart_display_mode.value = 'backtest_only';
+        form.elements.chart_display_mode.dispatchEvent({ type: 'change' });
+
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'backtest_only') {
+          throw new Error('backtest_only displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        if ((latestConfig.events || []).length) {
+          throw new Error('backtest_only mode should hide event markers');
+        }
+        if (latestConfig.highlightedEventId !== null) {
+          throw new Error('backtest_only mode should hide highlighted event id: ' + latestConfig.highlightedEventId);
+        }
+        if (!latestConfig.equityCurve || latestConfig.equityCurve.length !== 1) {
+          throw new Error('backtest_only mode should keep equity curve overlays');
+        }
+        if ((latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('backtest_only mode should hide signal and trade overlays');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_candles_only_mode_hides_backtest_overlays():
+    result = _run_workspace_script(r"""
+        installWorkspace(makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{ id: 'evt-1', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical' }]
+          }, {
+            kind: 'backtest',
+            label: 'Backtest',
+            visible_by_default: true,
+            series: [{ date: '2026-04-20', equity: 1.03 }],
+            summary: {
+              signals: [{ date: '2026-04-20', signal: 1, signal_strength: 0.8 }],
+              trades: [{ entry_date: '2026-04-20', exit_date: '2026-04-21', pnl_pct: 0.04 }]
+            }
+          }]
+        }));
+        runWorkspace();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.chart_display_mode.value = 'candles_only';
+        form.elements.chart_display_mode.dispatchEvent({ type: 'change' });
+
+        const latestConfig = chartConfigs[chartConfigs.length - 1];
+        if (latestConfig.displayMode !== 'candles_only') {
+          throw new Error('candles_only displayMode was not passed to chart: ' + latestConfig.displayMode);
+        }
+        if (!latestConfig.events || latestConfig.events.length !== 1) {
+          throw new Error('candles_only mode should keep event markers');
+        }
+        if ((latestConfig.equityCurve || []).length || (latestConfig.signals || []).length || (latestConfig.trades || []).length) {
+          throw new Error('candles_only mode should hide backtest overlays');
         }
         """)
 
@@ -344,12 +461,19 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         runWorkspace();
 
         const form = document.getElementById('backtest-form');
+        if (!form.elements.universe_id || form.elements.universe_id.value !== 'biotech_us_v1') {
+          throw new Error('universe_id control missing or wrong default');
+        }
+        if (!form.elements.data_snapshot_id || form.elements.data_snapshot_id.value !== '') {
+          throw new Error('data_snapshot_id control missing or should default blank');
+        }
         form.elements.start_date.value = '2026-04-20';
         form.elements.end_date.value = '2026-04-21';
         form.elements.stop_loss_pct.value = '-0.07';
         form.elements.max_position_pct.value = '0.25';
         form.elements.slippage_pct.value = '0.002';
         form.elements.holding_period_days.value = '7';
+        form.elements.data_snapshot_id.value = 'snap_20260507_tiingo';
 
         const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
         if (!universeButton) {
@@ -363,6 +487,9 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         }
         if (requestBody.ticker !== 'MRNA' || requestBody.start_date !== '2026-04-20' || requestBody.stop_loss_pct !== -0.07 || requestBody.max_position_pct !== 0.25 || requestBody.slippage_pct !== 0.002 || requestBody.holding_period_days !== 7) {
           throw new Error('universe request did not preserve current form values: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.universe_id !== 'biotech_us_v1' || requestBody.data_snapshot_id !== 'snap_20260507_tiingo') {
+          throw new Error('universe request did not preserve snapshot fields: ' + JSON.stringify(requestBody));
         }
 
         const latestConfig = chartConfigs[chartConfigs.length - 1];
@@ -394,22 +521,19 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_workspace_js_demo_universe_button_uses_explicit_demo_endpoint():
+def test_workspace_js_single_backtest_preserves_snapshot_fields_when_populated():
     result = _run_workspace_script(r"""
         let requestUrl = null;
-        fetch = function (url) {
+        let requestBody = null;
+        fetch = function (url, options) {
           requestUrl = url;
+          requestBody = JSON.parse(options.body);
           return Promise.resolve(jsonResponse({
-            run_id: 'demo-portfolio-run',
-            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
-            portfolio_metrics: { strategy_return: 1.25 },
-            constituents: [],
-            focus_ticker: {
-              ticker: 'MRNA',
-              equity_curve: [{ date: '2026-04-20', equity: 1.00 }],
-              signals: [],
-              trades: []
-            }
+            run_id: 'single-run',
+            metrics: {},
+            equity_curve: [],
+            signals: [],
+            trades: []
           }));
         };
 
@@ -417,15 +541,16 @@ def test_workspace_js_demo_universe_button_uses_explicit_demo_endpoint():
         runWorkspace();
 
         const form = document.getElementById('backtest-form');
-        const demoButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Demo Universe');
-        if (!demoButton) {
-          throw new Error('demo universe button missing');
-        }
-        demoButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        form.elements.universe_id.value = 'biotech_custom_v2';
+        form.elements.data_snapshot_id.value = 'snap_custom_123';
+        form.dispatchEvent({ type: 'submit', preventDefault() {} });
         await settle();
 
-        if (requestUrl !== '/api/backtest/portfolio/demo/run') {
-          throw new Error('unexpected demo universe endpoint: ' + requestUrl);
+        if (requestUrl !== '/api/backtest/run') {
+          throw new Error('unexpected single endpoint: ' + requestUrl);
+        }
+        if (requestBody.universe_id !== 'biotech_custom_v2' || requestBody.data_snapshot_id !== 'snap_custom_123') {
+          throw new Error('single request did not preserve snapshot fields: ' + JSON.stringify(requestBody));
         }
         """)
 
