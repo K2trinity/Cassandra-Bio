@@ -99,6 +99,19 @@ CATALOG_SQL: tuple[str, ...] = (
         completed_at TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS provider_fetch_log (
+        fetch_id TEXT PRIMARY KEY,
+        provider TEXT,
+        endpoint TEXT,
+        request_hash TEXT,
+        status TEXT,
+        retry_count INTEGER,
+        message TEXT,
+        metadata_json TEXT,
+        created_at TIMESTAMP
+    )
+    """,
 )
 
 
