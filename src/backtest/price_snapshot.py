@@ -36,6 +36,7 @@ PRICE_COLUMNS = [
     "data_snapshot_id",
     "ingested_at",
 ]
+OHLC_OUTPUT_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 
 REQUIRED_COLUMNS = {"date", "open", "high", "low", "close", "volume"}
 OHLC_COLUMNS = ["open", "high", "low", "close"]
@@ -256,6 +257,56 @@ def append_prices_daily_frame(
     _write_planned_partitions(pending_writes)
 
 
+def load_prices_daily_ohlc(
+    ticker: str,
+    *,
+    data_snapshot_id: str,
+    output_root: str | Path | None = None,
+    source: str = TIINGO_PROFILE.source_id,
+) -> pd.DataFrame:
+    """Load a ticker OHLC frame from a completed research price snapshot.
+
+    Tiingo snapshots expose both raw and adjusted columns; backtests should use
+    adjusted OHLCV when available because the formal snapshot path is built for
+    adjusted daily bars.
+    """
+    safe_ticker = _safe_partition_token("ticker", str(ticker).strip().upper())
+    safe_snapshot_id = _safe_partition_token("data_snapshot_id", data_snapshot_id)
+    safe_source = _validate_source(source)
+    root = (
+        Path(output_root) if output_root is not None else RESEARCH_DIR / "prices_daily"
+    )
+    source_root = root / f"data_snapshot_id={safe_snapshot_id}" / f"source={safe_source}"
+    if not source_root.exists():
+        return _empty_ohlc_frame()
+
+    frames: list[pd.DataFrame] = []
+    for path in sorted(source_root.glob("year=*/*.parquet")):
+        frame = pd.read_parquet(path)
+        missing = [column for column in PRICE_COLUMNS if column not in frame.columns]
+        if missing:
+            raise ValueError(f"Price partition {path} missing columns: {missing}")
+        ticker_rows = frame[frame["ticker"].astype(str).str.upper() == safe_ticker]
+        if not ticker_rows.empty:
+            frames.append(ticker_rows[PRICE_COLUMNS])
+
+    if not frames:
+        return _empty_ohlc_frame()
+
+    prices = pd.concat(frames, ignore_index=True)
+    key_frame = _price_key_frame(prices)
+    duplicates = key_frame.duplicated(keep=False)
+    if duplicates.any():
+        duplicate_keys = key_frame.loc[duplicates].drop_duplicates().to_dict("records")
+        raise ValueError(f"Duplicate price rows for logical keys: {duplicate_keys}")
+
+    return (
+        _prices_daily_to_ohlc(prices, source=safe_source)
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+
 def _write_partition(
     frame: pd.DataFrame,
     root: Path,
@@ -443,3 +494,46 @@ def _empty_price_frame() -> pd.DataFrame:
             for column in PRICE_COLUMNS
         }
     )
+
+
+def _empty_ohlc_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": pd.Series(dtype="datetime64[ns]"),
+            "open": pd.Series(dtype="float64"),
+            "high": pd.Series(dtype="float64"),
+            "low": pd.Series(dtype="float64"),
+            "close": pd.Series(dtype="float64"),
+            "volume": pd.Series(dtype="float64"),
+        }
+    )
+
+
+def _prices_daily_to_ohlc(prices: pd.DataFrame, *, source: str) -> pd.DataFrame:
+    adjusted = source == TIINGO_PROFILE.source_id
+    output = pd.DataFrame()
+    output["date"] = pd.to_datetime(prices["date"], errors="coerce")
+    if adjusted:
+        output["open"] = _adjusted_or_raw(prices, "adj_open", "open")
+        output["high"] = _adjusted_or_raw(prices, "adj_high", "high")
+        output["low"] = _adjusted_or_raw(prices, "adj_low", "low")
+        output["close"] = _adjusted_or_raw(prices, "adj_close", "close")
+        output["volume"] = _adjusted_or_raw(prices, "adj_volume", "volume")
+    else:
+        for column in OHLC_OUTPUT_COLUMNS[1:]:
+            output[column] = pd.to_numeric(prices[column], errors="coerce")
+
+    output = output.dropna(subset=OHLC_OUTPUT_COLUMNS)
+    for column in OHLC_OUTPUT_COLUMNS[1:]:
+        output[column] = output[column].astype("float64")
+    return output[OHLC_OUTPUT_COLUMNS]
+
+
+def _adjusted_or_raw(
+    prices: pd.DataFrame,
+    adjusted_column: str,
+    raw_column: str,
+) -> pd.Series:
+    adjusted = pd.to_numeric(prices[adjusted_column], errors="coerce")
+    raw = pd.to_numeric(prices[raw_column], errors="coerce")
+    return adjusted.where(adjusted.notna(), raw)

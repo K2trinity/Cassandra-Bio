@@ -10,7 +10,7 @@ from src.data_ingestion.http_client import (
 )
 from src.data_ingestion.provider_result import ProviderResult
 
-FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 
 
 class FmpClient:
@@ -19,7 +19,7 @@ class FmpClient:
         self.http_client = http_client or RequestsHttpClient()
 
     def fetch_profile(self, ticker: str) -> ProviderResult:
-        return self._fetch(f"profile/{_ticker(ticker)}", params={})
+        return self._fetch("profile", params={"symbol": _ticker(ticker)})
 
     def fetch_income_statement(
         self,
@@ -27,8 +27,8 @@ class FmpClient:
         period: str = "quarter",
     ) -> ProviderResult:
         return self._fetch(
-            f"income-statement/{_ticker(ticker)}",
-            params={"period": period},
+            "income-statement",
+            params={"symbol": _ticker(ticker), "period": period},
         )
 
     def fetch_balance_sheet(
@@ -37,8 +37,8 @@ class FmpClient:
         period: str = "quarter",
     ) -> ProviderResult:
         return self._fetch(
-            f"balance-sheet-statement/{_ticker(ticker)}",
-            params={"period": period},
+            "balance-sheet-statement",
+            params={"symbol": _ticker(ticker), "period": period},
         )
 
     def fetch_cash_flow(
@@ -47,8 +47,8 @@ class FmpClient:
         period: str = "quarter",
     ) -> ProviderResult:
         return self._fetch(
-            f"cash-flow-statement/{_ticker(ticker)}",
-            params={"period": period},
+            "cash-flow-statement",
+            params={"symbol": _ticker(ticker), "period": period},
         )
 
     def _fetch(self, path: str, *, params: dict[str, Any]) -> ProviderResult:

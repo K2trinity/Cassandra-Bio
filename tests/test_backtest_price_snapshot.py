@@ -580,3 +580,90 @@ def test_import_ohlc_cache_rejects_unsupported_source_before_writing(tmp_path):
         )
 
     assert list(output_root.rglob("*.parquet")) == []
+
+
+def test_load_prices_daily_ohlc_reads_adjusted_tiingo_snapshot(tmp_path):
+    from src.backtest.price_snapshot import (
+        append_prices_daily_frame,
+        load_prices_daily_ohlc,
+    )
+    from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+
+    output_root = tmp_path / "prices_daily"
+    frame = normalize_tiingo_eod_prices(
+        [
+            {
+                "date": "2026-05-01T00:00:00.000Z",
+                "open": 100.0,
+                "high": 106.0,
+                "low": 98.0,
+                "close": 104.0,
+                "volume": 1000,
+                "adjOpen": 50.0,
+                "adjHigh": 53.0,
+                "adjLow": 49.0,
+                "adjClose": 52.0,
+                "adjVolume": 2000,
+                "divCash": 0.0,
+                "splitFactor": 2.0,
+            },
+            {
+                "date": "2026-05-04T00:00:00.000Z",
+                "open": 104.0,
+                "high": 110.0,
+                "low": 103.0,
+                "close": 108.0,
+                "volume": 1200,
+                "adjOpen": 52.0,
+                "adjHigh": 55.0,
+                "adjLow": 51.5,
+                "adjClose": 54.0,
+                "adjVolume": 2400,
+                "divCash": 0.0,
+                "splitFactor": 2.0,
+            },
+        ],
+        ticker="mrna",
+        data_snapshot_id="snap-tiingo",
+    )
+    append_prices_daily_frame(frame, output_root=output_root)
+
+    loaded = load_prices_daily_ohlc(
+        "mrna",
+        data_snapshot_id="snap-tiingo",
+        output_root=output_root,
+        source="tiingo",
+    )
+
+    assert loaded.to_dict("records") == [
+        {
+            "date": pd.Timestamp("2026-05-01"),
+            "open": 50.0,
+            "high": 53.0,
+            "low": 49.0,
+            "close": 52.0,
+            "volume": 2000.0,
+        },
+        {
+            "date": pd.Timestamp("2026-05-04"),
+            "open": 52.0,
+            "high": 55.0,
+            "low": 51.5,
+            "close": 54.0,
+            "volume": 2400.0,
+        },
+    ]
+
+
+def test_load_prices_daily_ohlc_returns_empty_frame_for_missing_snapshot(tmp_path):
+    from src.backtest.price_snapshot import load_prices_daily_ohlc
+
+    loaded = load_prices_daily_ohlc(
+        "MRNA",
+        data_snapshot_id="snap-missing",
+        output_root=tmp_path / "prices_daily",
+        source="tiingo",
+    )
+
+    assert loaded.empty
+    assert list(loaded.columns) == ["date", "open", "high", "low", "close", "volume"]

@@ -8,6 +8,14 @@
     ["backtest_only", "Backtest Only"],
     ["candles_only", "Candles Only"]
   ];
+  var BACKTEST_STRATEGY_OPTIONS = [
+    ["multifactor_score", "Multifactor Score"],
+    ["event_baseline", "Event Baseline"]
+  ];
+  var BACKTEST_PRICE_SOURCE_OPTIONS = [
+    ["yfinance", "Visible Chart Cache"],
+    ["tiingo", "Research Snapshot"]
+  ];
 
   function byId(id) {
     return document.getElementById(id);
@@ -446,6 +454,23 @@
     return select;
   }
 
+  function replaceSelectOptions(select, options, value) {
+    if (!select || !Array.isArray(options) || !options.length) {
+      return;
+    }
+    select.replaceChildren();
+    options.forEach(function (optionConfig) {
+      var optionValue = Array.isArray(optionConfig) ? optionConfig[0] : optionConfig.id || optionConfig.value;
+      var optionLabel = Array.isArray(optionConfig) ? optionConfig[1] : optionConfig.label || optionValue;
+      var option = makeElement("option", { text: optionLabel || optionValue });
+      option.value = optionValue;
+      select.appendChild(option);
+    });
+    if (value && Array.prototype.some.call(select.options, function (option) { return option.value === value; })) {
+      select.value = value;
+    }
+  }
+
   function renderMetrics(node, metrics) {
     node.replaceChildren();
     appendMetrics(node, metrics);
@@ -636,12 +661,26 @@
     var range = (workspace.price && workspace.price.date_range) || {};
     addInput(form, "Start", "start_date", "date", range.start || "");
     addInput(form, "End", "end_date", "date", range.end || "");
+    var strategySelect = addSelect(
+      form,
+      "Strategy",
+      "strategy_id",
+      BACKTEST_STRATEGY_OPTIONS,
+      "multifactor_score"
+    );
+    var priceSourceSelect = addSelect(
+      form,
+      "Price Source",
+      "price_source",
+      BACKTEST_PRICE_SOURCE_OPTIONS,
+      "yfinance"
+    );
+    var dataSnapshotInput = addInput(form, "Data Snapshot ID", "data_snapshot_id", "text", "");
     addInput(form, "Stop Loss Fraction", "stop_loss_pct", "number", "-0.08", "0.001");
     addInput(form, "Max Position Fraction", "max_position_pct", "number", "0.2", "0.001");
     addInput(form, "Slippage Fraction", "slippage_pct", "number", "0.001", "0.0001");
     addInput(form, "Hold Days", "holding_period_days", "number", "5", "1");
     addInput(form, "Universe ID", "universe_id", "text", "biotech_us_v1");
-    addInput(form, "Data Snapshot ID", "data_snapshot_id", "text", "");
     var chartModeSelect = addSelect(
       form,
       "Chart Display Mode",
@@ -665,6 +704,49 @@
     panel.appendChild(status);
     panel.appendChild(results);
 
+    function syncSnapshotControl() {
+      dataSnapshotInput.disabled = priceSourceSelect.value !== "tiingo";
+    }
+
+    function applyBacktestOptions(options) {
+      options = options || {};
+      replaceSelectOptions(
+        strategySelect,
+        options.strategies || BACKTEST_STRATEGY_OPTIONS,
+        options.default_strategy_id || strategySelect.value || "multifactor_score"
+      );
+      replaceSelectOptions(
+        priceSourceSelect,
+        options.price_sources || BACKTEST_PRICE_SOURCE_OPTIONS,
+        options.default_price_source || priceSourceSelect.value || "tiingo"
+      );
+      if (options.default_data_snapshot_id && !dataSnapshotInput.value) {
+        dataSnapshotInput.value = options.default_data_snapshot_id;
+      }
+      syncSnapshotControl();
+    }
+
+    function loadBacktestOptions() {
+      var optionsFetch = window.fetch;
+      if (typeof optionsFetch !== "function") {
+        syncSnapshotControl();
+        return;
+      }
+      Promise.resolve().then(function () {
+        return optionsFetch.call(window, "/api/backtest/options");
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, body: body };
+        });
+      }).then(function (result) {
+        if (result.ok) {
+          applyBacktestOptions(result.body);
+        }
+      }).catch(function () {
+        syncSnapshotControl();
+      });
+    }
+
     var savedSummary = (backtestLayer(workspace).summary || {});
     if (savedSummary.run_id || savedSummary.metrics || savedSummary.event_filter || savedSummary.signal_summary || savedSummary.exposure_summary || savedSummary.risk_parameters || savedSummary.baseline || savedSummary.factor_attribution || savedSummary.event_attribution) {
       status.textContent = "Run " + (savedSummary.run_id || "complete") + " complete.";
@@ -676,12 +758,20 @@
       state.chartDisplayMode = chartModeSelect.value || "candles_with_backtest";
       renderChart(workspace, state);
     });
+    priceSourceSelect.addEventListener("change", syncSnapshotControl);
+    syncSnapshotControl();
+    loadBacktestOptions();
 
     function requestPayload() {
+      var priceSource = String(form.elements.price_source.value || "tiingo").trim();
       var payload = {
         ticker: workspace.ticker,
         start_date: form.elements.start_date.value,
         end_date: form.elements.end_date.value,
+        strategy_id: String(form.elements.strategy_id.value || "multifactor_score").trim(),
+        data_mode: "real",
+        backtest_mode: "exploratory",
+        price_source: priceSource,
         stop_loss_pct: Number(form.elements.stop_loss_pct.value),
         max_position_pct: Number(form.elements.max_position_pct.value),
         slippage_pct: Number(form.elements.slippage_pct.value),
@@ -692,7 +782,7 @@
       if (universeId) {
         payload.universe_id = universeId;
       }
-      if (dataSnapshotId) {
+      if (priceSource === "tiingo" && dataSnapshotId) {
         payload.data_snapshot_id = dataSnapshotId;
       }
       return payload;
@@ -702,6 +792,11 @@
       options = options || {};
       state.backtestRequestId = (state.backtestRequestId || 0) + 1;
       var requestId = state.backtestRequestId;
+      var payload = requestPayload();
+      if (payload.price_source === "tiingo" && !payload.data_snapshot_id) {
+        status.textContent = "Select a data snapshot.";
+        return;
+      }
       status.textContent = options.runningText || "Running backtest.";
       results.replaceChildren();
       clearBacktestOverlays(workspace, state);
@@ -709,7 +804,7 @@
       fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestPayload())
+        body: JSON.stringify(payload)
       }).then(function (response) {
         return response.json().then(function (body) {
           return { ok: response.ok, body: body };

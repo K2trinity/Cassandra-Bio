@@ -8,17 +8,28 @@ from datetime import datetime
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
 from src.backtest.portfolio_runner import run_real_biotech_portfolio_backtest
+from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_database
 from src.backtest.runner import (
     load_saved_run,
     normalize_kline_ticker,
     run_kline_backtest,
 )
+from src.backtest.strategy_registry import EVENT_BASELINE, MULTIFACTOR_SCORE
 from src.kline.ticker_resolver import TickerResolver
 from src.kline.workspace_service import KlineWorkspaceService
 
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
 resolver = TickerResolver()
+
+BACKTEST_STRATEGY_OPTIONS = (
+    {"id": MULTIFACTOR_SCORE, "label": "Multifactor Score"},
+    {"id": EVENT_BASELINE, "label": "Event Baseline"},
+)
+BACKTEST_PRICE_SOURCE_OPTIONS = (
+    {"id": "tiingo", "label": "Research Snapshot"},
+    {"id": "yfinance", "label": "Visible Chart Cache"},
+)
 
 __all__ = ["kline_bp"]
 
@@ -100,6 +111,77 @@ def api_kline_range_context(symbol: str):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(context.to_dict())
+
+
+def _list_recent_data_snapshots(limit: int = 10) -> list[dict[str, str | None]]:
+    try:
+        safe_limit = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        safe_limit = 10
+
+    path = initialize_research_database(RESEARCH_DB_PATH)
+    import duckdb
+
+    conn = duckdb.connect(str(path), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                CAST(data_snapshot_id AS VARCHAR),
+                CAST(snapshot_date AS VARCHAR),
+                CAST(price_source AS VARCHAR),
+                CAST(universe_id AS VARCHAR),
+                CAST(bias_profile AS VARCHAR),
+                CAST(created_at AS VARCHAR)
+            FROM data_snapshots
+            ORDER BY snapshot_date DESC NULLS LAST, created_at DESC NULLS LAST
+            LIMIT ?
+            """,
+            [safe_limit],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "data_snapshot_id": row[0],
+            "snapshot_date": row[1],
+            "price_source": row[2],
+            "universe_id": row[3],
+            "bias_profile": row[4],
+            "created_at": row[5],
+        }
+        for row in rows
+    ]
+
+
+@kline_bp.get("/api/backtest/options")
+def api_backtest_options():
+    """Return real backtest strategy and data snapshot controls for K-line UI."""
+    snapshots = _list_recent_data_snapshots()
+    default_snapshot = snapshots[0] if snapshots else None
+    default_price_source = (
+        default_snapshot.get("price_source")
+        if default_snapshot and default_snapshot.get("price_source")
+        else "yfinance"
+    )
+    if default_price_source not in {"tiingo", "yfinance"}:
+        default_price_source = "tiingo"
+
+    return jsonify(
+        {
+            "strategies": list(BACKTEST_STRATEGY_OPTIONS),
+            "default_strategy_id": MULTIFACTOR_SCORE,
+            "data_mode": "real",
+            "backtest_mode": "exploratory",
+            "price_sources": list(BACKTEST_PRICE_SOURCE_OPTIONS),
+            "default_price_source": default_price_source,
+            "default_data_snapshot_id": (
+                default_snapshot.get("data_snapshot_id") if default_snapshot else None
+            ),
+            "snapshots": snapshots,
+        }
+    )
 
 
 def _parse_backtest_run_request():
@@ -340,8 +422,10 @@ def api_backtest_portfolio_run():
         slippage_pct=parsed["slippage_pct"],
         holding_period_days=parsed["holding_period_days"],
         universe_id=parsed["universe_id"],
-        as_of_date=parsed["end_date"],
+        strategy_id=parsed["strategy_id"],
+        as_of_date=None if parsed["data_snapshot_id"] else parsed["end_date"],
         data_snapshot_id=parsed["data_snapshot_id"],
+        price_source=parsed["price_source"],
     )
 
     if isinstance(result, dict) and result.get("error"):

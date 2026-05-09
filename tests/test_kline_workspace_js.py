@@ -473,6 +473,7 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         form.elements.max_position_pct.value = '0.25';
         form.elements.slippage_pct.value = '0.002';
         form.elements.holding_period_days.value = '7';
+        form.elements.price_source.value = 'tiingo';
         form.elements.data_snapshot_id.value = 'snap_20260507_tiingo';
 
         const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
@@ -542,6 +543,7 @@ def test_workspace_js_single_backtest_preserves_snapshot_fields_when_populated()
 
         const form = document.getElementById('backtest-form');
         form.elements.universe_id.value = 'biotech_custom_v2';
+        form.elements.price_source.value = 'tiingo';
         form.elements.data_snapshot_id.value = 'snap_custom_123';
         form.dispatchEvent({ type: 'submit', preventDefault() {} });
         await settle();

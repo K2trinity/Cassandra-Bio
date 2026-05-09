@@ -6,7 +6,9 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 
+from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_database
 from src.backtest.runner import normalize_kline_ticker, run_kline_backtest
+from src.backtest.strategy_registry import StrategyAccessError, validate_strategy_access
 from src.backtest.universe import UnsupportedUniverseError, load_universe_tickers
 from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
 
@@ -27,11 +29,12 @@ DISCLOSURE_KEYS = {
 def _data_credibility(
     *,
     eligible_universe_count: int,
+    skipped_ticker_count: int = 0,
     coverage_status: str | None = None,
 ) -> dict:
     payload = {
         "eligible_universe_count": eligible_universe_count,
-        "skipped_ticker_count": 0,
+        "skipped_ticker_count": skipped_ticker_count,
         "survivorship_bias_warning": True,
         "universe_bias_status": "current_constituents_only",
     }
@@ -223,6 +226,42 @@ def _portfolio_metrics(
     }
 
 
+def _data_snapshot_as_of_date(
+    data_snapshot_id: str | None,
+    *,
+    db_path: str | Path | None = None,
+) -> str | None:
+    if not data_snapshot_id:
+        return None
+
+    path = initialize_research_database(db_path or RESEARCH_DB_PATH)
+    import duckdb
+
+    conn = duckdb.connect(str(path), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT CAST(snapshot_date AS VARCHAR)
+            FROM data_snapshots
+            WHERE data_snapshot_id = ?
+            """,
+            [str(data_snapshot_id).strip()],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return row[0] if row is not None else None
+
+
+def _is_snapshot_price_gap(error: object) -> bool:
+    message = str(error or "").lower()
+    return (
+        "no ohlc data" in message
+        or "insufficient ohlc data" in message
+        or "failed to load ohlc snapshot" in message
+    )
+
+
 def _run_biotech_portfolio_backtest(
     focus_ticker: str,
     start_date: str,
@@ -232,7 +271,9 @@ def _run_biotech_portfolio_backtest(
     tickers: tuple[str, ...],
     strategy_id: str,
     data_mode: str,
+    as_of_date: str | None = None,
     data_snapshot_id: str | None = None,
+    price_source: str | None = None,
     stop_loss_pct: float = -0.08,
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
@@ -244,6 +285,7 @@ def _run_biotech_portfolio_backtest(
 
     resolved_holding_period_days = holding_period_days or 5
     runs = []
+    skipped_tickers = []
     for ticker in tickers:
         payload = run_kline_backtest(
             ticker=ticker,
@@ -255,14 +297,40 @@ def _run_biotech_portfolio_backtest(
             holding_period_days=resolved_holding_period_days,
             strategy_id=strategy_id,
             data_mode=data_mode,
+            price_source=price_source,
+            data_snapshot_id=data_snapshot_id,
         )
         if isinstance(payload, dict) and payload.get("error"):
+            if data_snapshot_id is not None and _is_snapshot_price_gap(payload.get("error")):
+                skipped_tickers.append(
+                    {
+                        "ticker": ticker,
+                        "reason": str(payload.get("error")),
+                    }
+                )
+                continue
             error_payload = {"error": f"{ticker}: {payload.get('error')}"}
             if data_snapshot_id is not None:
                 error_payload["universe_id"] = universe_id
                 error_payload["data_snapshot_id"] = data_snapshot_id
+                error_payload["skipped_tickers"] = skipped_tickers
             return error_payload
         runs.append(payload)
+
+    if not runs:
+        return {
+            "error": f"no tickers with price coverage for data snapshot {data_snapshot_id}",
+            "universe_id": universe_id,
+            "data_snapshot_id": data_snapshot_id,
+            "as_of_date": as_of_date,
+            "start_date": start_date,
+            "end_date": end_date,
+            "skipped_tickers": skipped_tickers,
+        }
+
+    completed_tickers = tuple(str(payload.get("ticker")) for payload in runs)
+    if normalized_focus_ticker not in completed_tickers:
+        normalized_focus_ticker = completed_tickers[0]
 
     portfolio_equity_curve = _portfolio_equity_curve(runs)
     constituents = [_constituent_row(payload) for payload in runs]
@@ -276,7 +344,10 @@ def _run_biotech_portfolio_backtest(
         "created_at": created_at.isoformat(timespec="seconds"),
         "universe_id": universe_id,
         "data_snapshot_id": data_snapshot_id,
-        "tickers": list(tickers),
+        "as_of_date": as_of_date,
+        "tickers": list(completed_tickers),
+        "eligible_tickers": list(tickers),
+        "skipped_tickers": skipped_tickers,
         "start_date": start_date,
         "end_date": end_date,
         "strategy": {"id": strategy_id},
@@ -306,9 +377,27 @@ def run_real_biotech_portfolio_backtest(
     universe_id: str = BIOTECH_REAL_UNIVERSE_ID,
     as_of_date: str | None = None,
     data_snapshot_id: str | None = None,
+    price_source: str | None = None,
+    strategy_id: str | None = None,
 ) -> dict:
     """Run the real multifactor strategy across the active biotech universe."""
-    resolved_as_of_date = as_of_date or end_date
+    resolved_strategy_id = str(strategy_id or REAL_MULTIFACTOR_STRATEGY_ID).strip()
+    if not resolved_strategy_id:
+        resolved_strategy_id = REAL_MULTIFACTOR_STRATEGY_ID
+    try:
+        validate_strategy_access(
+            strategy_id=resolved_strategy_id,
+            data_mode="real",
+            mock_scope=None,
+        )
+    except StrategyAccessError as exc:
+        return {"error": str(exc)}
+
+    resolved_as_of_date = (
+        as_of_date
+        or _data_snapshot_as_of_date(data_snapshot_id, db_path=db_path)
+        or end_date
+    )
     try:
         tickers = load_universe_tickers(
             db_path=db_path,
@@ -356,16 +445,26 @@ def run_real_biotech_portfolio_backtest(
         end_date=end_date,
         universe_id=universe_id,
         data_snapshot_id=data_snapshot_id,
+        price_source=price_source or ("tiingo" if data_snapshot_id else None),
         tickers=tickers,
-        strategy_id=REAL_MULTIFACTOR_STRATEGY_ID,
+        strategy_id=resolved_strategy_id,
         data_mode="real",
+        as_of_date=resolved_as_of_date,
         stop_loss_pct=stop_loss_pct,
         max_position_pct=max_position_pct,
         slippage_pct=slippage_pct,
         holding_period_days=holding_period_days,
     )
+    skipped_count = len(payload.get("skipped_tickers") or [])
+    coverage_status = (
+        "no_price_coverage"
+        if payload.get("error") and skipped_count
+        else "partial_price_coverage" if skipped_count else "complete"
+    )
     payload["data_credibility"] = _data_credibility(
         eligible_universe_count=len(tickers),
+        skipped_ticker_count=skipped_count,
+        coverage_status=coverage_status,
     )
     return payload
 

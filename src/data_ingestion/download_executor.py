@@ -566,6 +566,10 @@ def _execute_fmp_unit(
             metadata={"ticker": unit.ticker},
             fetch=fetch,
         )
+        if _is_fmp_statement_entitlement_failure(result):
+            message = f"optional_statements_unavailable: {result.message or result.status}"
+            _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "success", message)
+            return _UnitExecutionResult("success", message)
         early = _early_result_from_provider_status(
             result,
             unit,
@@ -607,6 +611,13 @@ def _execute_fmp_unit(
 
     _record_checkpoint(unit, run_id, data_snapshot_id, db_path, "success", None)
     return _UnitExecutionResult("success")
+
+
+def _is_fmp_statement_entitlement_failure(result: ProviderResult) -> bool:
+    return (
+        result.status == "fatal_error"
+        and str(result.message or "").strip() in {"HTTP 402", "HTTP 403"}
+    )
 
 
 def _skip_stubbed_unit(

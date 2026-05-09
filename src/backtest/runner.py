@@ -20,6 +20,7 @@ from src.backtest.data_sources import (
     BacktestMode,
     MOCK_PROFILE,
     SourcePolicyError,
+    TIINGO_PROFILE,
     YFINANCE_PROFILE,
     validate_source_for_mode,
 )
@@ -56,6 +57,7 @@ from src.backtest.strategy_registry import (
     validate_strategy_access,
 )
 from src.backtest.metrics import compute_metrics, compute_event_car
+from src.backtest.price_snapshot import load_prices_daily_ohlc
 from src.kline.event_filter import filter_backtest_events
 
 TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
@@ -70,6 +72,10 @@ POOLS = {
         "description": "XBI/IBB components (30-50 tickers)",
         "tickers": [],
     },
+}
+REAL_PRICE_SOURCE_PROFILES = {
+    YFINANCE_PROFILE.source_id: YFINANCE_PROFILE,
+    TIINGO_PROFILE.source_id: TIINGO_PROFILE,
 }
 
 
@@ -224,6 +230,14 @@ def _trust_summary(events: pd.DataFrame) -> dict:
         "by_source": _count_event_values(events, "source"),
         "by_ownership_status": _count_event_values(events, "ownership_status"),
     }
+
+
+def _price_basis(*, use_mock_ohlc: bool, source_id: str) -> str:
+    if use_mock_ohlc:
+        return "demo_ohlc"
+    if source_id == TIINGO_PROFILE.source_id:
+        return "research_snapshot_adjusted_ohlc"
+    return "visible_ohlc"
 
 
 def _serialize_signals(signals: pd.DataFrame, events: pd.DataFrame) -> list[dict]:
@@ -500,16 +514,28 @@ def run_kline_backtest(
     )
 
     mode_text = str(backtest_mode).strip() if backtest_mode else "exploratory"
-    source_profile = MOCK_PROFILE if use_mock_ohlc else YFINANCE_PROFILE
     requested_price_source = str(price_source).strip() if price_source else None
     if (
         use_mock_ohlc
         and requested_price_source == YFINANCE_PROFILE.source_id
     ):
         requested_price_source = None
-    resolved_price_source = requested_price_source or source_profile.source_id
-    if resolved_price_source != source_profile.source_id:
+    if not use_mock_ohlc and requested_price_source is None and data_snapshot_id:
+        requested_price_source = TIINGO_PROFILE.source_id
+    source_profile = (
+        MOCK_PROFILE
+        if use_mock_ohlc
+        else REAL_PRICE_SOURCE_PROFILES.get(
+            requested_price_source or YFINANCE_PROFILE.source_id
+        )
+    )
+    resolved_price_source = requested_price_source or (
+        source_profile.source_id if source_profile is not None else None
+    )
+    if source_profile is None or resolved_price_source != source_profile.source_id:
         return {"error": f"unsupported price_source: {resolved_price_source}"}
+    if source_profile.source_id == TIINGO_PROFILE.source_id and not data_snapshot_id:
+        return {"error": "data_snapshot_id is required for tiingo price_source"}
 
     try:
         resolved_mode = BacktestMode.MOCK if use_mock_ohlc else BacktestMode(mode_text)
@@ -520,6 +546,16 @@ def run_kline_backtest(
     if use_mock_ohlc:
         ohlc = build_mock_ohlc_frame(ticker, start_date, end_date)
         cache_path = None
+    elif source_profile.source_id == TIINGO_PROFILE.source_id:
+        cache_path = None
+        try:
+            ohlc = load_prices_daily_ohlc(
+                ticker=ticker,
+                data_snapshot_id=str(data_snapshot_id),
+                source=source_profile.source_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"failed to load OHLC snapshot: {exc}"}
     else:
         cache_path = _ohlc_cache_path(ticker)
         try:
@@ -657,7 +693,10 @@ def run_kline_backtest(
             "id": resolved_strategy_id,
             "data_mode": resolved_data_mode,
             "holding_period_days": effective_holding_period_days,
-            "price_basis": "demo_ohlc" if use_mock_ohlc else "visible_ohlc",
+            "price_basis": _price_basis(
+                use_mock_ohlc=use_mock_ohlc,
+                source_id=source_profile.source_id,
+            ),
         },
         "risk_parameters": {
             "stop_loss_pct": stop_loss_pct,

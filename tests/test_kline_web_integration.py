@@ -179,6 +179,24 @@ def test_kline_workspace_static_js_uses_phase1_contracts_only():
     assert "Socket.IO" not in workspace_js
 
 
+def test_kline_workspace_static_js_exposes_real_backtest_strategy_controls():
+    workspace_js = (Path(PROJECT_ROOT) / "static" / "kline" / "workspace.js").read_text(
+        encoding="utf-8",
+    )
+
+    for expected in [
+        "/api/backtest/options",
+        "strategy_id",
+        "multifactor_score",
+        "event_baseline",
+        "price_source",
+        "data_mode: \"real\"",
+        "data_snapshot_id",
+    ]:
+        assert expected in workspace_js
+    assert "mock_multifactor_demo" not in workspace_js
+
+
 def test_kline_workspace_template_omits_legacy_report_bridge_references():
     template_source = (
         Path(PROJECT_ROOT) / "templates" / "kline_workspace.html"
@@ -361,6 +379,38 @@ def test_backtest_run_api_returns_runner_payload(monkeypatch):
     assert body["run_id"] == "run-123"
     assert body["ticker"] == "BIIB"
     assert body["equity_curve"][0]["date"] == "2026-04-20"
+
+
+def test_backtest_options_api_returns_real_strategy_and_snapshot_options(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "_list_recent_data_snapshots",
+        lambda limit=10: [
+            {
+                "data_snapshot_id": "snap_20260509_df843b255a1e",
+                "snapshot_date": "2026-05-09",
+                "price_source": "tiingo",
+                "universe_id": "biotech_us_v1",
+                "bias_profile": "current_constituents_only",
+                "created_at": "2026-05-09 10:36:50",
+            }
+        ],
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.get("/api/backtest/options")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["default_strategy_id"] == "multifactor_score"
+    assert [item["id"] for item in body["strategies"]] == [
+        "multifactor_score",
+        "event_baseline",
+    ]
+    assert body["default_price_source"] == "tiingo"
+    assert body["default_data_snapshot_id"] == "snap_20260509_df843b255a1e"
+    assert body["snapshots"][0]["snapshot_date"] == "2026-05-09"
 
 
 def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
@@ -710,6 +760,8 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
             "slippage_pct": 0.002,
             "holding_period_days": 7,
             "universe_id": "biotech_custom_v2",
+            "strategy_id": "event_baseline",
+            "price_source": "tiingo",
             "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
@@ -725,8 +777,10 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         "slippage_pct": 0.002,
         "holding_period_days": 7,
         "universe_id": "biotech_custom_v2",
-        "as_of_date": "2025-03-31",
+        "strategy_id": "event_baseline",
+        "as_of_date": None,
         "data_snapshot_id": "snap_20260507_tiingo",
+        "price_source": "tiingo",
     }
     assert body["run_id"] == "portfolio-123"
     assert body["universe_id"] == "biotech_custom_v2"

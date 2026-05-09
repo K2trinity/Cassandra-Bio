@@ -153,6 +153,24 @@ class FakeFmpClient:
         )
 
 
+class FakeFmpProfileOnlyClient(FakeFmpClient):
+    def fetch_income_statement(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("income", ticker))
+        return ProviderResult(
+            status="fatal_error",
+            request_hash="req_fmp_income_entitlement",
+            message="HTTP 402",
+        )
+
+    def fetch_balance_sheet(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("balance", ticker))
+        raise AssertionError("balance sheet should not be fetched after entitlement failure")
+
+    def fetch_cash_flow(self, ticker: str, period: str = "quarter"):
+        self.calls.append(("cash_flow", ticker))
+        raise AssertionError("cash flow should not be fetched after entitlement failure")
+
+
 class FakeLimiter:
     def __init__(self, allowed_requests: int | None = None) -> None:
         self.allowed_requests = allowed_requests
@@ -870,6 +888,86 @@ def test_executor_downloads_fmp_profile_and_statements_then_writes_logs(
     assert payload["cash_and_short_term_investments"] == 40.0
     assert payload["operating_cash_flow"] == -8.0
     assert payload["cash_runway_quarters"] == 5.0
+
+
+def test_executor_treats_fmp_statement_entitlement_as_profile_only_success(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_provider_env(monkeypatch)
+
+    from src.data_ingestion.checkpoints import get_checkpoint
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    fmp_client = FakeFmpProfileOnlyClient()
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("fmp",),
+            dry_run=False,
+            limit_tickers=1,
+            daily_fmp_budget=10,
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        fmp_client=fmp_client,
+        rate_limiters={"fmp": FakeLimiter()},
+    )
+
+    assert summary.completed_units == 1
+    assert summary.failed_units == 0
+    assert fmp_client.calls == [
+        ("profile", "ABBA"),
+        ("income", "ABBA"),
+    ]
+
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "cassandra_research.duckdb"))
+    try:
+        logs = conn.execute(
+            """
+            SELECT endpoint, request_hash, status, message
+            FROM provider_fetch_log
+            WHERE provider = 'fmp'
+            ORDER BY endpoint
+            """
+        ).fetchall()
+        fundamentals_count = conn.execute(
+            """
+            SELECT count(*)
+            FROM fundamentals_normalized
+            WHERE source = 'fmp'
+            """
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    checkpoint = get_checkpoint(
+        db_path=tmp_path / "cassandra_research.duckdb",
+        run_id=summary.run_id,
+        provider="fmp",
+        phase="profile",
+        ticker="ABBA",
+        endpoint="/fmp/profile/ABBA",
+        period_start="2026-05-01",
+        period_end="2026-05-08",
+    )
+    assert checkpoint is not None
+    assert checkpoint.status == "success"
+    assert checkpoint.last_error == "optional_statements_unavailable: HTTP 402"
+    assert logs == [
+        (
+            "/fmp/income-statement/ABBA",
+            "req_fmp_income_entitlement",
+            "fatal_error",
+            "HTTP 402",
+        ),
+        ("/fmp/profile/ABBA", "req_fmp_profile", "success", None),
+    ]
+    assert fundamentals_count == 0
 
 
 def test_executor_marks_provider_runtime_budget_exhaustion_rate_limited(

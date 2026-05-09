@@ -35,8 +35,8 @@ def test_fmp_client_uses_apikey_param_but_request_hash_excludes_secret():
 
     assert result.status == "success"
     assert result.payload == [{"symbol": "MRNA", "industry": "Biotechnology"}]
-    assert fake.calls[0][0].endswith("/profile/MRNA")
-    assert fake.calls[0][1] == {"apikey": "unit-test-fmp-key"}
+    assert fake.calls[0][0] == "https://financialmodelingprep.com/stable/profile"
+    assert fake.calls[0][1] == {"symbol": "MRNA", "apikey": "unit-test-fmp-key"}
     assert "unit-test-fmp-key" not in result.request_hash
 
 
@@ -54,12 +54,12 @@ def test_fmp_statement_methods_use_quarter_period_by_default():
     assert balance.status == "success"
     assert cash_flow.status == "success"
     assert [call[0] for call in fake.calls] == [
-        "https://financialmodelingprep.com/api/v3/income-statement/MRNA",
-        "https://financialmodelingprep.com/api/v3/balance-sheet-statement/MRNA",
-        "https://financialmodelingprep.com/api/v3/cash-flow-statement/MRNA",
+        "https://financialmodelingprep.com/stable/income-statement",
+        "https://financialmodelingprep.com/stable/balance-sheet-statement",
+        "https://financialmodelingprep.com/stable/cash-flow-statement",
     ]
     assert all(
-        params == {"period": "quarter", "apikey": "unit-test-fmp-key"}
+        params == {"symbol": "MRNA", "period": "quarter", "apikey": "unit-test-fmp-key"}
         for _, params, _ in fake.calls
     )
 
