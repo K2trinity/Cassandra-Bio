@@ -406,8 +406,8 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
             ],
             portfolio_metrics: {
               strategy_return: 14.25,
-              best_ticker: 'LLY',
-              worst_ticker: 'ABBA',
+              best_ticker: 'VRTX',
+              worst_ticker: 'ALNY',
               total_trades: 9,
               avg_active_signal_days: 4.5,
               universe_id: 'internal-universe',
@@ -428,7 +428,7 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
                 synthetic: true
               }
             }, {
-              ticker: 'ABBA',
+              ticker: 'ALNY',
               strategy_return: -1.2,
               active_signal_days: 1,
               trade_count: 0
@@ -505,7 +505,7 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         }
 
         const text = document.getElementById('backtest-results').textContent;
-        ['strategy_return', '14.25', 'best_ticker', 'LLY', 'worst_ticker', 'ABBA', 'total_trades', '9', 'MRNA', '12.5', 'trade_count', 'active_factor_days', 'mean_event_factor'].forEach((expected) => {
+        ['strategy_return', '14.25', 'best_ticker', 'VRTX', 'worst_ticker', 'ALNY', 'total_trades', '9', 'MRNA', '12.5', 'trade_count', 'active_factor_days', 'mean_event_factor'].forEach((expected) => {
           if (!text.includes(expected)) {
             throw new Error('portfolio diagnostics missing ' + expected + ': ' + text);
           }

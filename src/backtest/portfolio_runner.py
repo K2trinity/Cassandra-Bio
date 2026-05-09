@@ -19,10 +19,7 @@ from src.backtest.universe import UnsupportedUniverseError, load_universe_ticker
 from src.backtest.universe_builder import BIOTECH_US_UNIVERSE_ID
 
 BIOTECH_REAL_UNIVERSE_ID = BIOTECH_US_UNIVERSE_ID
-BIOTECH_MOCK_UNIVERSE_ID = "biotech_mock_v1"
-BIOTECH_MOCK_TICKERS = ("MRNA", "JNJ", "LLY", "ABBA")
 REAL_MULTIFACTOR_STRATEGY_ID = "multifactor_score"
-MOCK_MULTIFACTOR_STRATEGY_ID = "mock_multifactor_demo"
 REAL_PORTFOLIO_DATA_MODE = "real"
 DISCLOSURE_KEYS = {
     "mock_metadata",
@@ -619,28 +616,3 @@ def run_real_biotech_portfolio_backtest(
         focus_ticker=focus_ticker,
     )
     return payload
-
-
-def run_mock_biotech_portfolio_backtest(
-    focus_ticker: str,
-    start_date: str,
-    end_date: str,
-    stop_loss_pct: float = -0.08,
-    max_position_pct: float = 0.2,
-    slippage_pct: float = 0.001,
-    holding_period_days: int | None = None,
-) -> dict:
-    """Run and aggregate the guarded mock strategy across the biotech demo universe."""
-    return _run_biotech_portfolio_backtest(
-        focus_ticker=focus_ticker,
-        start_date=start_date,
-        end_date=end_date,
-        universe_id=BIOTECH_MOCK_UNIVERSE_ID,
-        tickers=BIOTECH_MOCK_TICKERS,
-        strategy_id=MOCK_MULTIFACTOR_STRATEGY_ID,
-        data_mode="mock",
-        stop_loss_pct=stop_loss_pct,
-        max_position_pct=max_position_pct,
-        slippage_pct=slippage_pct,
-        holding_period_days=holding_period_days,
-    )
