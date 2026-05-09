@@ -304,13 +304,22 @@ The final video is successful if a judge can repeat these points after watching:
   separate trusted event layer.
 - Any positive demo curve is demo/mock-only and not a real research claim.
 
-## Open Production Choices
+## Resolved Production Choices
 
-The script and capture plan should still decide:
+The production package resolves the remaining choices as follows:
 
-- exact disease query used in the video
-- exact ticker used for the K-line transition
-- whether the K-line curve is real event validation, mock demo, or both
-- whether to keep any short English anchor words as visual accents alongside
-  Chinese subtitles
-- whether to include a short architecture diagram or only UI footage
+- Disease query:
+  `Alzheimer's disease therapeutic landscape and pipeline competition`
+- K-line transition ticker:
+  `LLY`
+- K-line/backtest visual:
+  ticker-level trusted event validation may be shown; any positive or polished
+  curve is labeled as mock/demo-only and not real research performance.
+- Language:
+  Chinese is the production language for subtitles, explanatory screen text,
+  and voiceover. Short English terms such as `Evidence`, `Hypothesis`,
+  `Validation`, `K-line`, and `ticker-level trusted events` may remain as
+  visual or product terms when surrounded by Chinese explanation.
+- Architecture visual:
+  include a short architecture diagram or equivalent UI footage of the
+  structured workflow before transitioning to K-line validation.

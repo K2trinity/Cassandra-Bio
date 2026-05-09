@@ -40,7 +40,7 @@ Cassandra 是生物医药 evidence-to-decision workbench，不是黑盒聊天。
 展示 disease survey 报告：pipeline assets、trial landscape、literature review、company technical routes、quality assessment、evidence registry。
 
 旁白：
-在 evidence 阶段，Cassandra 把分散来源整理成 disease-level 的结构化输出。它不是只生成一段好看的文字，而是把资产、公司、靶点、临床阶段、文献范围、风险标签和证据引用组织到同一个报告边界里。评委看到的不是一次聊天回复，而是一条可以复核的数据链。
+在 evidence 阶段，Cassandra 把分散来源整理成 disease-level 的结构化输出。它不是只生成一段好看的文字，而是把资产、公司、靶点、临床阶段、文献范围、风险标签和证据引用组织到同一个报告边界里。用户看到的不是一次聊天回复，而是一条可以复核的数据链。
 
 字幕：
 Evidence：把疾病、资产、试验、文献和公司路线组织成可追溯报告。
