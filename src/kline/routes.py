@@ -413,6 +413,13 @@ def api_backtest_portfolio_run():
         return error_response
 
     assert parsed is not None
+    if not parsed["data_snapshot_id"]:
+        return jsonify({"error": "data_snapshot_id is required for portfolio backtests"}), 400
+
+    portfolio_price_source = parsed["price_source"] or "tiingo"
+    if portfolio_price_source != "tiingo":
+        return jsonify({"error": "portfolio backtests require tiingo snapshot prices"}), 400
+
     result = run_real_biotech_portfolio_backtest(
         focus_ticker=parsed["ticker"],
         start_date=parsed["start_date"],
@@ -425,7 +432,7 @@ def api_backtest_portfolio_run():
         strategy_id=parsed["strategy_id"],
         as_of_date=None if parsed["data_snapshot_id"] else parsed["end_date"],
         data_snapshot_id=parsed["data_snapshot_id"],
-        price_source=parsed["price_source"],
+        price_source=portfolio_price_source,
     )
 
     if isinstance(result, dict) and result.get("error"):

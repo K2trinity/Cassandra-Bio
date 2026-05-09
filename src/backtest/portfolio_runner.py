@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 import uuid
 
+from src.backtest.data_sources import (
+    BacktestMode,
+    TIINGO_PROFILE,
+    validate_source_for_mode,
+)
 from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_database
 from src.backtest.runner import normalize_kline_ticker, run_kline_backtest
 from src.backtest.strategy_registry import StrategyAccessError, validate_strategy_access
@@ -17,6 +23,7 @@ BIOTECH_MOCK_UNIVERSE_ID = "biotech_mock_v1"
 BIOTECH_MOCK_TICKERS = ("MRNA", "JNJ", "LLY", "ABBA")
 REAL_MULTIFACTOR_STRATEGY_ID = "multifactor_score"
 MOCK_MULTIFACTOR_STRATEGY_ID = "mock_multifactor_demo"
+REAL_PORTFOLIO_DATA_MODE = "real"
 DISCLOSURE_KEYS = {
     "mock_metadata",
     "synthetic",
@@ -226,11 +233,11 @@ def _portfolio_metrics(
     }
 
 
-def _data_snapshot_as_of_date(
+def _data_snapshot_metadata(
     data_snapshot_id: str | None,
     *,
     db_path: str | Path | None = None,
-) -> str | None:
+) -> dict[str, str | None] | None:
     if not data_snapshot_id:
         return None
 
@@ -241,7 +248,11 @@ def _data_snapshot_as_of_date(
     try:
         row = conn.execute(
             """
-            SELECT CAST(snapshot_date AS VARCHAR)
+            SELECT
+                CAST(snapshot_date AS VARCHAR),
+                CAST(price_source AS VARCHAR),
+                CAST(universe_id AS VARCHAR),
+                CAST(bias_profile AS VARCHAR)
             FROM data_snapshots
             WHERE data_snapshot_id = ?
             """,
@@ -250,7 +261,14 @@ def _data_snapshot_as_of_date(
     finally:
         conn.close()
 
-    return row[0] if row is not None else None
+    if row is None:
+        return None
+    return {
+        "snapshot_date": row[0],
+        "price_source": row[1],
+        "universe_id": row[2],
+        "bias_profile": row[3],
+    }
 
 
 def _is_snapshot_price_gap(error: object) -> bool:
@@ -260,6 +278,90 @@ def _is_snapshot_price_gap(error: object) -> bool:
         or "insufficient ohlc data" in message
         or "failed to load ohlc snapshot" in message
     )
+
+
+def _json_payload(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _persist_portfolio_backtest_run(
+    payload: dict,
+    *,
+    db_path: str | Path | None,
+    data_snapshot_id: str,
+    universe_id: str,
+    strategy_id: str,
+    bias_profile: str,
+    bias_warnings: tuple[str, ...],
+    start_date: str,
+    end_date: str,
+    as_of_date: str,
+    price_source: str,
+    focus_ticker: str,
+) -> None:
+    if payload.get("error"):
+        return
+
+    path = initialize_research_database(db_path or RESEARCH_DB_PATH)
+    parameters = {
+        "focus_ticker": normalize_kline_ticker(focus_ticker),
+        "start_date": start_date,
+        "end_date": end_date,
+        "as_of_date": as_of_date,
+        "price_source": price_source,
+        "risk_parameters": payload.get("risk_parameters", {}),
+        "eligible_tickers": payload.get("eligible_tickers", []),
+        "completed_tickers": payload.get("tickers", []),
+        "skipped_tickers": payload.get("skipped_tickers", []),
+    }
+    coverage = {
+        **(payload.get("data_credibility") or {}),
+        "completed_ticker_count": len(payload.get("tickers") or []),
+        "skipped_tickers": payload.get("skipped_tickers", []),
+    }
+
+    import duckdb
+
+    conn = duckdb.connect(str(path))
+    try:
+        conn.execute("DELETE FROM backtest_runs WHERE run_id = ?", [payload["run_id"]])
+        conn.execute(
+            """
+            INSERT INTO backtest_runs (
+                run_id,
+                data_snapshot_id,
+                universe_id,
+                split_id,
+                strategy_id,
+                data_mode,
+                bias_profile,
+                parameters_json,
+                metrics_json,
+                coverage_json,
+                bias_warnings_json,
+                created_at,
+                completed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                payload["run_id"],
+                data_snapshot_id,
+                universe_id,
+                None,
+                strategy_id,
+                REAL_PORTFOLIO_DATA_MODE,
+                bias_profile,
+                _json_payload(parameters),
+                _json_payload(payload.get("portfolio_metrics", {})),
+                _json_payload(coverage),
+                _json_payload(list(bias_warnings)),
+                payload.get("created_at"),
+                datetime.now().isoformat(timespec="seconds"),
+            ],
+        )
+    finally:
+        conn.close()
 
 
 def _run_biotech_portfolio_backtest(
@@ -381,6 +483,29 @@ def run_real_biotech_portfolio_backtest(
     strategy_id: str | None = None,
 ) -> dict:
     """Run the real multifactor strategy across the active biotech universe."""
+    if not data_snapshot_id:
+        return _real_universe_error_payload(
+            error="data_snapshot_id is required for portfolio backtests",
+            universe_id=universe_id,
+            data_snapshot_id=None,
+            as_of_date=as_of_date or end_date,
+            start_date=start_date,
+            end_date=end_date,
+            coverage_status="missing_data_snapshot",
+        )
+
+    resolved_price_source = str(price_source or TIINGO_PROFILE.source_id).strip()
+    if resolved_price_source != TIINGO_PROFILE.source_id:
+        return _real_universe_error_payload(
+            error="portfolio backtests require tiingo snapshot prices",
+            universe_id=universe_id,
+            data_snapshot_id=data_snapshot_id,
+            as_of_date=as_of_date or end_date,
+            start_date=start_date,
+            end_date=end_date,
+            coverage_status="invalid_price_source",
+        )
+
     resolved_strategy_id = str(strategy_id or REAL_MULTIFACTOR_STRATEGY_ID).strip()
     if not resolved_strategy_id:
         resolved_strategy_id = REAL_MULTIFACTOR_STRATEGY_ID
@@ -393,9 +518,18 @@ def run_real_biotech_portfolio_backtest(
     except StrategyAccessError as exc:
         return {"error": str(exc)}
 
+    snapshot_metadata = _data_snapshot_metadata(data_snapshot_id, db_path=db_path)
+    source_validation = validate_source_for_mode(
+        TIINGO_PROFILE,
+        BacktestMode.EXPLORATORY,
+    )
     resolved_as_of_date = (
         as_of_date
-        or _data_snapshot_as_of_date(data_snapshot_id, db_path=db_path)
+        or (
+            snapshot_metadata.get("snapshot_date")
+            if snapshot_metadata is not None
+            else None
+        )
         or end_date
     )
     try:
@@ -445,10 +579,10 @@ def run_real_biotech_portfolio_backtest(
         end_date=end_date,
         universe_id=universe_id,
         data_snapshot_id=data_snapshot_id,
-        price_source=price_source or ("tiingo" if data_snapshot_id else None),
+        price_source=resolved_price_source,
         tickers=tickers,
         strategy_id=resolved_strategy_id,
-        data_mode="real",
+        data_mode=REAL_PORTFOLIO_DATA_MODE,
         as_of_date=resolved_as_of_date,
         stop_loss_pct=stop_loss_pct,
         max_position_pct=max_position_pct,
@@ -465,6 +599,24 @@ def run_real_biotech_portfolio_backtest(
         eligible_universe_count=len(tickers),
         skipped_ticker_count=skipped_count,
         coverage_status=coverage_status,
+    )
+    _persist_portfolio_backtest_run(
+        payload,
+        db_path=db_path,
+        data_snapshot_id=data_snapshot_id,
+        universe_id=universe_id,
+        strategy_id=resolved_strategy_id,
+        bias_profile=(
+            str(snapshot_metadata.get("bias_profile"))
+            if snapshot_metadata and snapshot_metadata.get("bias_profile")
+            else str(source_validation.bias_profile.value)
+        ),
+        bias_warnings=source_validation.bias_warnings,
+        start_date=start_date,
+        end_date=end_date,
+        as_of_date=resolved_as_of_date,
+        price_source=resolved_price_source,
+        focus_ticker=focus_ticker,
     )
     return payload
 

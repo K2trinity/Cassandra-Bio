@@ -340,6 +340,194 @@ def test_real_portfolio_backtest_uses_data_snapshot_date_for_universe(
     assert payload["data_credibility"]["coverage_status"] == "complete"
 
 
+def test_real_portfolio_backtest_requires_snapshot_boundary(monkeypatch):
+    from src.backtest import portfolio_runner
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("portfolio backtest must reject before single-ticker runs")
+        ),
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="ALNY",
+        start_date="2025-01-02",
+        end_date="2025-01-31",
+        as_of_date="2026-05-09",
+    )
+
+    assert payload["error"] == "data_snapshot_id is required for portfolio backtests"
+    assert payload["data_credibility"]["coverage_status"] == "missing_data_snapshot"
+
+
+def test_real_portfolio_backtest_rejects_visible_cache_price_source(monkeypatch):
+    from src.backtest import portfolio_runner
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("portfolio backtest must not fall back to visible chart cache")
+        ),
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="ALNY",
+        start_date="2025-01-02",
+        end_date="2025-01-31",
+        data_snapshot_id="snap_current_tiingo",
+        price_source="yfinance",
+    )
+
+    assert payload["error"] == "portfolio backtests require tiingo snapshot prices"
+    assert payload["data_credibility"]["coverage_status"] == "invalid_price_source"
+
+
+def test_real_portfolio_backtest_records_run_metadata_in_duckdb(
+    tmp_path,
+    monkeypatch,
+):
+    from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO data_snapshots (
+                data_snapshot_id,
+                snapshot_date,
+                price_source,
+                event_source_db,
+                universe_id,
+                bias_profile,
+                price_partition_root,
+                event_snapshot_hash,
+                security_master_hash,
+                coverage_json,
+                created_at
+            )
+            VALUES (
+                'snap_persist_tiingo',
+                '2026-05-09',
+                'tiingo',
+                'events.db',
+                'biotech_us_v1',
+                'current_constituents_only',
+                'prices_daily',
+                'events',
+                'security',
+                '{"price_rows": 6}',
+                CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO universe_membership (
+                universe_id,
+                security_id,
+                ticker,
+                member_from,
+                member_to,
+                weight,
+                membership_source,
+                as_of_date
+            )
+            VALUES ('biotech_us_v1', ?, ?, '2026-05-09', NULL, NULL, 'test', '2026-05-09')
+            """,
+            [
+                ("BIO:ALNY", "ALNY"),
+                ("BIO:AMGN", "AMGN"),
+            ],
+        )
+    finally:
+        conn.close()
+
+    def fake_run_kline_backtest(**kwargs):
+        return _portfolio_runner_payload(
+            kwargs["ticker"],
+            [1.0, 1.01, 1.02],
+            0.02,
+            2,
+            1,
+        )
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        fake_run_kline_backtest,
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="ALNY",
+        start_date="2025-01-02",
+        end_date="2025-01-31",
+        db_path=db_path,
+        data_snapshot_id="snap_persist_tiingo",
+        strategy_id="event_baseline",
+        stop_loss_pct=-0.07,
+        max_position_pct=0.15,
+        slippage_pct=0.002,
+        holding_period_days=7,
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                data_snapshot_id,
+                universe_id,
+                strategy_id,
+                data_mode,
+                bias_profile,
+                parameters_json,
+                metrics_json,
+                coverage_json,
+                bias_warnings_json
+            FROM backtest_runs
+            WHERE run_id = ?
+            """,
+            [payload["run_id"]],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert row[0:5] == (
+        "snap_persist_tiingo",
+        "biotech_us_v1",
+        "event_baseline",
+        "real",
+        "current_constituents_only",
+    )
+    parameters = json.loads(row[5])
+    assert parameters["start_date"] == "2025-01-02"
+    assert parameters["end_date"] == "2025-01-31"
+    assert parameters["as_of_date"] == "2026-05-09"
+    assert parameters["price_source"] == "tiingo"
+    assert parameters["risk_parameters"] == {
+        "stop_loss_pct": -0.07,
+        "max_position_pct": 0.15,
+        "slippage_pct": 0.002,
+        "holding_period_days": 7,
+    }
+    assert json.loads(row[6]) == payload["portfolio_metrics"]
+    coverage = json.loads(row[7])
+    assert coverage["eligible_universe_count"] == 2
+    assert coverage["completed_ticker_count"] == 2
+    assert coverage["coverage_status"] == "complete"
+    assert json.loads(row[8]) == [
+        "Source tiingo has unknown survivorship-bias coverage."
+    ]
+
+
 def test_real_portfolio_backtest_skips_snapshot_tickers_without_prices(
     tmp_path,
     monkeypatch,

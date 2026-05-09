@@ -793,6 +793,61 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         assert forbidden not in body_text
 
 
+def test_backtest_portfolio_run_api_requires_data_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("route must reject before invoking portfolio runner")
+        ),
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "lly",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "price_source": "tiingo",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "data_snapshot_id is required for portfolio backtests"
+    }
+
+
+def test_backtest_portfolio_run_api_rejects_visible_cache_price_source(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("route must reject before invoking portfolio runner")
+        ),
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "lly",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "price_source": "yfinance",
+            "data_snapshot_id": "snap_20260507_tiingo",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "portfolio backtests require tiingo snapshot prices"
+    }
+
+
 def test_demo_portfolio_endpoint_is_not_available(client):
     removed_demo_endpoint = "/api/backtest/portfolio/" + "demo/run"
     response = client.post(
@@ -801,6 +856,8 @@ def test_demo_portfolio_endpoint_is_not_available(client):
             "ticker": "MRNA",
             "start_date": "2025-01-02",
             "end_date": "2025-03-31",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
 
@@ -883,6 +940,8 @@ def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
             "ticker": "MRNA",
             "start_date": "2025-01-02",
             "end_date": "2025-03-31",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
 
@@ -890,7 +949,7 @@ def test_backtest_portfolio_run_api_returns_400_on_runner_error(monkeypatch):
     assert response.get_json() == {
         "error": "LLY: no real OHLC data",
         "universe_id": "biotech_us_v1",
-        "as_of_date": "2025-03-31",
+        "as_of_date": None,
         "start_date": "2025-01-02",
         "end_date": "2025-03-31",
         "data_credibility": {
@@ -911,6 +970,8 @@ def test_backtest_portfolio_run_api_returns_400_for_unsupported_universe():
             "start_date": "2025-01-02",
             "end_date": "2025-03-31",
             "universe_id": "biotech_mock_v1",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
 
@@ -918,7 +979,7 @@ def test_backtest_portfolio_run_api_returns_400_for_unsupported_universe():
     assert response.get_json() == {
         "error": "Unsupported production universe: biotech_mock_v1",
         "universe_id": "biotech_mock_v1",
-        "data_snapshot_id": None,
+        "data_snapshot_id": "snap_20260507_tiingo",
         "as_of_date": "2025-03-31",
         "start_date": "2025-01-02",
         "end_date": "2025-03-31",
@@ -961,10 +1022,14 @@ def test_backtest_portfolio_run_api_allows_syntactically_valid_focus_ticker(
             "ticker": "PFE",
             "start_date": "2025-01-02",
             "end_date": "2025-03-31",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
         },
     )
 
     assert response.status_code == 200
     assert captured_kwargs["focus_ticker"] == "PFE"
     assert captured_kwargs["universe_id"] == "biotech_us_v1"
-    assert captured_kwargs["as_of_date"] == "2025-03-31"
+    assert captured_kwargs["as_of_date"] is None
+    assert captured_kwargs["data_snapshot_id"] == "snap_20260507_tiingo"
+    assert captured_kwargs["price_source"] == "tiingo"
