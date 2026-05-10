@@ -78,6 +78,7 @@ active_analysis: Dict[str, Any] = {
     "running": False,
     "status": "idle",
     "query": None,
+    "analysis_target_type": "auto",
     "thread": None,
     "result": None,
     "result_payload": None,
@@ -107,6 +108,17 @@ _current_task_id: Optional[str] = None  # task_id of the currently running analy
 # Thread pool for parallel analysis sub-tasks
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cassandra-worker")
 
+VALID_ANALYSIS_TARGET_TYPES = {"auto", "disease", "company"}
+
+
+def _normalize_analysis_target_type(value: Any) -> str:
+    target_type = str(value or "auto").strip().lower()
+    if not target_type:
+        target_type = "auto"
+    if target_type not in VALID_ANALYSIS_TARGET_TYPES:
+        raise ValueError("Invalid analysis_target_type")
+    return target_type
+
 
 def _reset_active_analysis():
     """Reset global analysis state to idle. Call after crash, cancel, or completion."""
@@ -117,6 +129,7 @@ def _reset_active_analysis():
     active_analysis["error"] = active_analysis.get("error")  # preserve error
     active_analysis["progress"] = active_analysis.get("progress", 0)
     active_analysis["result_payload"] = None
+    active_analysis["analysis_target_type"] = "auto"
 
 
 def _start_thread_watchdog(thread: threading.Thread, task_id: Optional[str] = None, timeout: int = 3600) -> None:
@@ -254,6 +267,7 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
         "message": message,
         "task_id": active_analysis.get("task_id"),
         "query": active_analysis.get("query"),
+        "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
     })
     _emit_event("step", {
         "step": step,
@@ -261,6 +275,7 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
         "percentage": pct,
         "task_id": active_analysis.get("task_id"),
         "query": active_analysis.get("query"),
+        "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
     })
 
 
@@ -389,12 +404,14 @@ def analyze():
         query = data.get('query', '').strip()
         pdf_paths = data.get('pdfs', [])
         requested_narrative_language = data.get("narrative_language")
+        requested_target_type = data.get("analysis_target_type")
     else:
         # Handle FormData (multipart/form-data with file uploads)
         data = {}
         query = request.form.get('query', '').strip()
         pdf_files = request.files.getlist('files')
         requested_narrative_language = request.form.get("narrative_language")
+        requested_target_type = request.form.get("analysis_target_type")
         
         # Save uploaded PDFs temporarily
         pdf_paths = []
@@ -417,6 +434,14 @@ def analyze():
     ).strip().lower()
     if narrative_language not in {"zh", "en"}:
         narrative_language = "zh"
+
+    try:
+        analysis_target_type = _normalize_analysis_target_type(requested_target_type)
+    except ValueError as exc:
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 400
     
     # Validate query
     if not query:
@@ -434,6 +459,7 @@ def analyze():
         "running": True,
         "status": "running",
         "query": query,
+        "analysis_target_type": analysis_target_type,
         "thread": None,
         "result": None,
         "result_payload": None,
@@ -493,6 +519,7 @@ def analyze():
                             "message": "",
                             "task_id": active_analysis.get("task_id"),
                             "query": active_analysis.get("query"),
+                            "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
                         })
                     _ticker_stop.wait(timeout=3.0)  # tick every ~3s
 
@@ -506,6 +533,7 @@ def analyze():
                 thread_id=_this_task_id,
                 pdf_paths=pdf_paths if pdf_paths else None,
                 narrative_language=narrative_language,
+                analysis_target_type=analysis_target_type,
             ):
                 # Check for cancellation signal from /api/reset or page refresh.
                 # Guard with task_id to avoid cancelling a NEW analysis that
@@ -517,6 +545,7 @@ def analyze():
                         'message': 'Analysis was cancelled.',
                         'task_id': active_analysis.get("task_id"),
                         'query': active_analysis.get("query"),
+                        'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
                     })
                     active_analysis["running"] = False
                     active_analysis["status"] = "cancelled"
@@ -550,6 +579,7 @@ def analyze():
                     user_query=query,
                     pdf_paths=pdf_paths if pdf_paths else None,
                     narrative_language=narrative_language,
+                    analysis_target_type=analysis_target_type,
                 )
             
             # Store result
@@ -630,6 +660,7 @@ def analyze():
                 'success': True,
                 'task_id': active_analysis.get("task_id"),
                 'query': query,
+                'analysis_target_type': analysis_target_type,
                 'narrative_language': narrative_language,
                 'report_path': pdf_report_path_v2 or report_path,
                 'html_report_path': html_report_path,
@@ -698,6 +729,7 @@ def analyze():
                 'error': str(e),
                 'task_id': active_analysis.get("task_id"),
                 'query': active_analysis.get("query"),
+                'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
                 'step': active_analysis.get("current_step"),
                 'progress': active_analysis.get("progress", 0),
             })
@@ -712,6 +744,7 @@ def analyze():
         "status": "accepted",
         "message": "Analysis started. Monitor progress via WebSocket.",
         "query": query,
+        "analysis_target_type": analysis_target_type,
         "task_id": active_analysis.get("task_id"),
     }), 202
 
@@ -738,6 +771,7 @@ def reset_analysis():
     active_analysis["result"] = None
     active_analysis["result_payload"] = None
     active_analysis["task_id"] = None
+    active_analysis["analysis_target_type"] = "auto"
     active_analysis["progress"] = 0
     active_analysis["current_step"] = None
     active_analysis["step_status"] = {
@@ -767,6 +801,7 @@ def get_status():
         "running": active_analysis["running"],
         "status": active_analysis.get("status"),
         "query": active_analysis["query"],
+        "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
         "error": active_analysis["error"],
         "task_id": active_analysis.get("task_id"),
         "progress": active_analysis.get("progress", 0),
@@ -1418,7 +1453,7 @@ def test_gemini():
     Tests Google Gemini API connection via Vertex AI.
     
     Request Body:
-        {"project": "gen-lang-client-...", "location": "asia-northeast1"}
+        {"project": "gen-lang-client-...", "location": "global"}
         (Optional — defaults to env vars GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION)
     
     Response:
@@ -1427,7 +1462,7 @@ def test_gemini():
     try:
         data = request.json or {}
         project = data.get('project') or os.getenv('GOOGLE_CLOUD_PROJECT')
-        location = data.get('location') or os.getenv('GOOGLE_CLOUD_LOCATION', 'asia-northeast1')
+        location = data.get('location') or os.getenv('GOOGLE_CLOUD_LOCATION', 'global')
         
         if not project:
             return jsonify({
@@ -1443,8 +1478,8 @@ def test_gemini():
             location=location,
         )
         
-        # Use the configured model or fallback to gemini-2.5-flash (stable and fast)
-        model_name = getattr(config, 'REPORT_MODEL_NAME', 'gemini-2.5-flash')
+        # Use the configured report model or the latest verified Vertex global fallback.
+        model_name = getattr(config, 'REPORT_MODEL_NAME', 'gemini-3.1-pro-preview')
         response = client.models.generate_content(
             model=model_name,
             contents="Hello, test connection",
@@ -1552,8 +1587,8 @@ def get_system_config():
     try:
         return jsonify({
             "gemini": {
-                "model": getattr(config, 'REPORT_MODEL_NAME', 'gemini-2.5-pro'),
-                "temperature": getattr(config, 'REPORT_TEMPERATURE', 0.7),
+                "model": getattr(config, 'REPORT_MODEL_NAME', 'gemini-3.1-pro-preview'),
+                "temperature": getattr(config, 'REPORT_TEMPERATURE', 1.0),
                 "max_tokens": getattr(config, 'REPORT_MAX_TOKENS', 8192)
             },
             "redis": {
@@ -1593,6 +1628,7 @@ def handle_connect():
         'analysis_status': active_analysis.get("status"),
         'task_id': active_analysis.get("task_id"),
         'query': active_analysis.get("query"),
+        'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
         'progress': active_analysis.get("progress", 0),
         'current_step': active_analysis.get("current_step"),
         'step_status': active_analysis.get("step_status", {}),
@@ -1607,6 +1643,7 @@ def handle_connect():
             'message': 'Analysis in progress...',
             'task_id': active_analysis.get("task_id"),
             'query': active_analysis.get("query"),
+            'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
         })
 
 

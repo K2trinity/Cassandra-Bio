@@ -98,14 +98,14 @@ class Settings(BaseSettings):
         description="Google Cloud project ID for Vertex AI (e.g. 'gen-lang-client-0476183533')"
     )
     GOOGLE_CLOUD_LOCATION: str = Field(
-        "asia-northeast1",
-        description="Vertex AI region/location (e.g. 'us-central1', 'asia-northeast1')"
+        "global",
+        description="Vertex AI region/location (use 'global' for latest Gemini model availability)"
     )
     
     # BioHarvest Engine - PubMed/Clinical Trials Literature Search
     BIOHARVEST_MODEL_NAME: str = Field(
-        "gemini-2.5-flash",
-        description="BioHarvest engine model for fast literature retrieval (Fast & intelligent)"
+        "gemini-3.1-flash-lite",
+        description="BioHarvest engine model for fast literature retrieval and query shaping"
     )
     BIOHARVEST_TEMPERATURE: float = Field(
         0.3,
@@ -118,12 +118,12 @@ class Settings(BaseSettings):
     
     # Report Engine - Biomedical Research Report Generation
     REPORT_MODEL_NAME: str = Field(
-        "gemini-2.5-pro",
-        description="Report engine model for comprehensive report synthesis (stable default)"
+        "gemini-3.1-pro-preview",
+        description="Report engine model for comprehensive report synthesis"
     )
     REPORT_TEMPERATURE: float = Field(
-        0.7,
-        description="Report sampling temperature (higher for natural language generation)"
+        1.0,
+        description="Report sampling temperature; keep at 1.0 for current Gemini reasoning models"
     )
     REPORT_MAX_TOKENS: int = Field(
         8192,
@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     
     # Model Fallback Configuration - Auto-downgrade when quota exhausted
     MODEL_FALLBACK_CHAIN: str = Field(
-        "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash,gemini-1.5-pro,gemini-1.5-flash",
+        "gemini-3.1-pro-preview,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite",
         description="Comma-separated list of models to try in order when quota is exhausted (highest to lowest priority)"
     )
     

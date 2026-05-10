@@ -10,6 +10,9 @@ class DiseaseProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1)
+    target_type: Literal["disease", "company"] = "disease"
+    company_name: str | None = None
+    target_name: str | None = None
     disease_name: str = Field(..., min_length=1)
     canonical_condition: str = Field(..., min_length=1)
     condition_terms: list[str] = Field(default_factory=list)
@@ -90,6 +93,8 @@ class DiseaseChapterNarratives(BaseModel):
     executive_summary: str = ""
     clinical_trial_and_pipeline_landscape: str = ""
     pipeline_timeline_and_competition_risk: str = ""
+    disease_evidence_synthesis_summary: str = ""
+    company_catalyst_and_rd_summary: str = ""
     language: Literal["zh", "en"] = "zh"
 
 

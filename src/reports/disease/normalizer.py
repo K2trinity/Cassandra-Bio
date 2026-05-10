@@ -137,7 +137,7 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
         primary_stratum=_first_text(
             payload,
             metadata,
-            keys=("primary_stratum",),
+            keys=("primary_stratum", "primaryStratum"),
             default="unclassified",
         ) or "unclassified",
         source_url=_first_text(

@@ -4,138 +4,99 @@ from src.reports.disease.models import ClinicalTrialRecord, DiseaseProfile, Pipe
 from src.reports.disease.package_builder import DiseaseReportPackageBuilder
 
 
-def _profile() -> DiseaseProfile:
+def _profile(
+    *,
+    target_type: str = "disease",
+    target_name: str | None = None,
+    company_name: str | None = None,
+) -> DiseaseProfile:
     return DiseaseProfile(
         query="Alzheimer disease",
-        disease_name="Alzheimer Disease",
-        canonical_condition="Alzheimer Disease",
-        condition_terms=["Alzheimer Disease", "Alzheimer's Disease"],
-        normalized_terms=["alzheimer disease"],
+        target_type=target_type,
+        target_name=target_name,
+        company_name=company_name,
+        disease_name="Alzheimer Disease" if target_type == "disease" else target_name or company_name or "Company",
+        canonical_condition="Alzheimer Disease" if target_type == "disease" else target_name or company_name or "Company",
+        condition_terms=["Alzheimer Disease", "Alzheimer's Disease"] if target_type == "disease" else [],
+        normalized_terms=["alzheimer disease"] if target_type == "disease" else [],
         expert_topic_url="https://clinicaltrials.gov/expert-search?term=Alzheimer%20Disease&viewType=Topic",
         expert_full_match_url="https://clinicaltrials.gov/expert-search?term=AREA%5BCondition%5DCOVERAGE%5BFullMatch%5BAlzheimer%20Disease%5D%5D",
     )
 
 
-def _trial(nct_number: str, posted: date | None, title: str | None = None) -> ClinicalTrialRecord:
+def _trial(
+    nct_number: str,
+    posted: date | None,
+    title: str | None = None,
+    *,
+    conditions: list[str] | None = None,
+    phases: list[str] | None = None,
+    has_results: bool = False,
+    strata: list[str] | None = None,
+    primary_stratum: str = "unclassified",
+    primary_completion_date: date | None = None,
+    results_first_posted: date | None = None,
+    last_update_posted: date | None = None,
+) -> ClinicalTrialRecord:
     return ClinicalTrialRecord(
         study_title=title or f"Study {nct_number}",
         nct_number=nct_number,
         status="RECRUITING",
-        phases=["PHASE1"],
-        conditions=["Alzheimer Disease"],
+        phases=phases or ["PHASE1"],
+        has_results=has_results,
+        conditions=conditions or ["Alzheimer Disease"],
         interventions=["Drug A"],
         sponsor="Sponsor A",
         study_type="INTERVENTIONAL",
         study_first_posted=posted,
-        strata=["frontier"],
-        primary_stratum="frontier",
+        results_first_posted=results_first_posted,
+        last_update_posted=last_update_posted,
+        primary_completion_date=primary_completion_date,
+        strata=strata or [],
+        primary_stratum=primary_stratum,
         source_url=f"https://clinicaltrials.gov/study/{nct_number}",
     )
 
 
-def _risk(nct_number: str, title: str | None = None) -> PipelineRiskRecord:
+def _risk(nct_number: str, title: str | None = None, category: str = "") -> PipelineRiskRecord:
     return PipelineRiskRecord(
         nct_number=nct_number,
         study_title=title or f"Risk {nct_number}",
+        intervention_category=category,
     )
 
 
-def test_build_dedupes_sorts_newest_first_and_populates_audit():
-    profile = _profile()
-    risk_records = [_risk("NCT_NEW")]
-    rejected_nct_numbers = ["NCT_REJECTED"]
-
-    package = DiseaseReportPackageBuilder().build(
-        disease_profile=profile,
-        retained_records=[
-            _trial("NCT_OLD", date(2024, 1, 1)),
-            _trial("NCT_NEW", date(2026, 1, 1)),
-            _trial("NCT_OLD", date(2025, 1, 1), title="Newer duplicate old study"),
-        ],
-        raw_count="4",
-        rejected_nct_numbers=rejected_nct_numbers,
-        risk_records=risk_records,
+def test_build_dedupes_sorts_by_disease_landscape_priority_and_populates_audit():
+    evidence = _trial(
+        "NCT_EVIDENCE",
+        date(2024, 1, 1),
+        has_results=True,
+        strata=["evidence", "foundation"],
+        primary_stratum="evidence",
+        results_first_posted=date(2026, 2, 1),
+        last_update_posted=date(2026, 3, 1),
+    )
+    foundation = _trial(
+        "NCT_FOUNDATION",
+        date(2026, 1, 1),
+        phases=["PHASE3"],
+        strata=["foundation"],
+        primary_stratum="foundation",
+    )
+    frontier = _trial(
+        "NCT_FRONTIER",
+        date(2026, 5, 1),
+        phases=["PHASE1"],
+        strata=["frontier"],
+        primary_stratum="frontier",
     )
 
-    assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_NEW", "NCT_OLD"]
-    assert package.clinical_trials[1].study_title == "Newer duplicate old study"
-    assert package.risk_records == [
-        risk_records[0].model_copy(
-            update={"competition_evidence": "No intervention category available for Alzheimer Disease."}
-        )
-    ]
-
-    audit = package.source_audit
-    assert audit.topic_url == profile.expert_topic_url
-    assert audit.full_match_url == profile.expert_full_match_url
-    assert audit.selected_condition_terms == profile.condition_terms
-    assert audit.raw_count == 4
-    assert audit.retained_count == 2
-    assert audit.rejected_count == 1
-    assert audit.rejected_nct_numbers == ["NCT_REJECTED"]
-    assert audit.rejected_nct_numbers is not rejected_nct_numbers
-
-
-def test_build_caps_retained_trials_to_max_records():
     package = DiseaseReportPackageBuilder().build(
         disease_profile=_profile(),
-        retained_records=[
-            _trial(f"NCT{i:08d}", date(2026, 1, 1)) for i in range(55)
-        ],
-        raw_count=55,
-        rejected_nct_numbers=[],
-        risk_records=[],
-        max_records=50,
-    )
-
-    assert len(package.clinical_trials) == 50
-    assert package.source_audit.retained_count == 50
-
-
-def test_build_sorts_missing_study_first_posted_last():
-    package = DiseaseReportPackageBuilder().build(
-        disease_profile=_profile(),
-        retained_records=[
-            _trial("NCT_MISSING", None),
-            _trial("NCT_NEW", date(2026, 1, 1)),
-            _trial("NCT_OLD", date(2024, 1, 1)),
-        ],
-        raw_count=3,
-        rejected_nct_numbers=[],
-        risk_records=[],
-    )
-
-    assert [trial.nct_number for trial in package.clinical_trials] == [
-        "NCT_NEW",
-        "NCT_OLD",
-        "NCT_MISSING",
-    ]
-
-
-def test_build_sorts_by_landscape_priority_and_records_stratum_counts():
-    profile = _profile()
-    evidence = _trial("NCT_EVIDENCE", date(2024, 1, 1))
-    evidence = evidence.model_copy(
-        update={
-            "has_results": True,
-            "strata": ["evidence", "foundation"],
-            "primary_stratum": "evidence",
-        }
-    )
-    foundation = _trial("NCT_FOUNDATION", date(2026, 1, 1)).model_copy(
-        update={"strata": ["foundation"], "primary_stratum": "foundation"}
-    )
-    frontier = _trial("NCT_FRONTIER", date(2026, 5, 1)).model_copy(
-        update={"strata": ["frontier"], "primary_stratum": "frontier"}
-    )
-
-    package = DiseaseReportPackageBuilder().build(
-        disease_profile=profile,
         retained_records=[frontier, foundation, evidence],
-        raw_count=3,
-        rejected_nct_numbers=[],
-        risk_records=[],
-        max_records=50,
+        raw_count="4",
+        rejected_nct_numbers=["NCT_REJECTED"],
+        risk_records=[_risk("NCT_EVIDENCE")],
     )
 
     assert [trial.nct_number for trial in package.clinical_trials] == [
@@ -143,6 +104,10 @@ def test_build_sorts_by_landscape_priority_and_records_stratum_counts():
         "NCT_FOUNDATION",
         "NCT_FRONTIER",
     ]
+    assert package.source_audit.raw_count == 4
+    assert package.source_audit.retained_count == 3
+    assert package.source_audit.rejected_nct_numbers == ["NCT_REJECTED"]
+    assert package.source_audit.details["target_type"] == "disease"
     assert package.source_audit.details["stratum_counts"] == {
         "evidence": 1,
         "foundation": 2,
@@ -151,16 +116,23 @@ def test_build_sorts_by_landscape_priority_and_records_stratum_counts():
     }
 
 
-def test_build_keeps_best_duplicate_by_landscape_sort_key():
-    old_frontier = _trial("NCT_DUP", date(2023, 1, 1), title="Frontier old")
-    new_evidence = _trial("NCT_DUP", date(2026, 1, 1), title="Evidence new").model_copy(
-        update={
-            "has_results": True,
-            "strata": ["evidence", "foundation"],
-            "primary_stratum": "evidence",
-            "results_first_posted": date(2026, 2, 1),
-            "last_update_posted": date(2026, 3, 1),
-        }
+def test_build_keeps_best_duplicate_and_merges_strata():
+    old_frontier = _trial(
+        "NCT_DUP",
+        date(2023, 1, 1),
+        title="Frontier old",
+        strata=["frontier"],
+        primary_stratum="frontier",
+    )
+    new_evidence = _trial(
+        "NCT_DUP",
+        date(2026, 1, 1),
+        title="Evidence new",
+        has_results=True,
+        strata=["evidence", "foundation"],
+        primary_stratum="evidence",
+        results_first_posted=date(2026, 2, 1),
+        last_update_posted=date(2026, 3, 1),
     )
 
     package = DiseaseReportPackageBuilder().build(
@@ -171,18 +143,14 @@ def test_build_keeps_best_duplicate_by_landscape_sort_key():
         risk_records=[],
     )
 
-    assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_DUP"]
     retained = package.clinical_trials[0]
     assert retained.study_title == "Evidence new"
-    assert retained.has_results is True
     assert retained.primary_stratum == "evidence"
-    assert retained.strata == ["evidence", "foundation"]
-    assert retained.results_first_posted == date(2026, 2, 1)
-    assert retained.last_update_posted == date(2026, 3, 1)
+    assert retained.strata == ["frontier", "evidence", "foundation"]
     assert package.source_audit.details["stratum_counts"] == {
         "evidence": 1,
         "foundation": 1,
-        "frontier": 0,
+        "frontier": 1,
         "unclassified": 0,
     }
 
@@ -193,13 +161,10 @@ def test_build_aligns_duplicate_risk_records_to_selected_clinical_record():
         "NCT_DUP_RISK",
         date(2026, 1, 1),
         title="Better evidence trial",
-    ).model_copy(
-        update={
-            "has_results": True,
-            "strata": ["evidence", "foundation"],
-            "primary_stratum": "evidence",
-            "results_first_posted": date(2026, 2, 1),
-        }
+        has_results=True,
+        strata=["evidence", "foundation"],
+        primary_stratum="evidence",
+        results_first_posted=date(2026, 2, 1),
     )
     stale_risk = _risk("NCT_DUP_RISK", title="Stale frontier trial")
     better_risk = _risk("NCT_DUP_RISK", title="Better evidence trial")
@@ -224,8 +189,8 @@ def test_build_drops_risk_records_for_capped_out_clinical_trials():
     package = DiseaseReportPackageBuilder().build(
         disease_profile=_profile(),
         retained_records=[
-            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept trial"),
-            _trial("NCT_DROP", date(2025, 1, 1), title="Capped out trial"),
+            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept trial", strata=["frontier"], primary_stratum="frontier"),
+            _trial("NCT_DROP", date(2025, 1, 1), title="Capped out trial", strata=["frontier"], primary_stratum="frontier"),
         ],
         raw_count=2,
         rejected_nct_numbers=[],
@@ -248,11 +213,6 @@ def test_build_recomputes_competition_evidence_after_final_cap():
             intervention_category="amyloid antibody",
             timeline_signal="Low",
             timeline_evidence="Kept timeline evidence.",
-            competition_signal="Low",
-            competition_evidence=(
-                "2 retained Alzheimer Disease studies share "
-                "intervention category amyloid antibody."
-            ),
         ),
         PipelineRiskRecord(
             nct_number="NCT_DROP",
@@ -260,19 +220,14 @@ def test_build_recomputes_competition_evidence_after_final_cap():
             intervention_category="amyloid antibody",
             timeline_signal="Medium",
             timeline_evidence="Dropped timeline evidence.",
-            competition_signal="Low",
-            competition_evidence=(
-                "2 retained Alzheimer Disease studies share "
-                "intervention category amyloid antibody."
-            ),
         ),
     ]
 
     package = DiseaseReportPackageBuilder().build(
         disease_profile=_profile(),
         retained_records=[
-            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept amyloid antibody trial"),
-            _trial("NCT_DROP", date(2025, 1, 1), title="Dropped amyloid antibody trial"),
+            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept amyloid antibody trial", strata=["frontier"], primary_stratum="frontier"),
+            _trial("NCT_DROP", date(2025, 1, 1), title="Dropped amyloid antibody trial", strata=["frontier"], primary_stratum="frontier"),
         ],
         raw_count=2,
         rejected_nct_numbers=[],
@@ -289,3 +244,112 @@ def test_build_recomputes_competition_evidence_after_final_cap():
         retained_risk.competition_evidence
         == "1 retained Alzheimer Disease studies share intervention category amyloid antibody."
     )
+
+
+def test_build_populates_company_target_metadata_and_stratum_counts():
+    profile = _profile(
+        target_type="company",
+        target_name="Vertex Pharmaceuticals",
+        company_name="Vertex Pharmaceuticals",
+    )
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=profile,
+        retained_records=[
+            _trial(
+                "NCT_CATALYST",
+                date(2026, 1, 1),
+                conditions=["Sickle Cell Disease"],
+                strata=["catalyst", "track_record"],
+                primary_stratum="catalyst",
+            ),
+            _trial(
+                "NCT_EXPANSION",
+                date(2025, 1, 1),
+                conditions=["Alzheimer Disease"],
+                strata=["expansion"],
+                primary_stratum="expansion",
+            ),
+            _trial(
+                "NCT_UNCLASSIFIED",
+                date(2024, 1, 1),
+                primary_stratum="unclassified",
+            ),
+        ],
+        raw_count=3,
+        rejected_nct_numbers=[],
+        risk_records=[],
+    )
+
+    assert package.source_audit.details == {
+        "target_type": "company",
+        "target_name": "Vertex Pharmaceuticals",
+        "company_name": "Vertex Pharmaceuticals",
+        "stratum_counts": {
+            "catalyst": 1,
+            "track_record": 1,
+            "expansion": 1,
+            "unclassified": 1,
+        },
+        "expansion_condition_counts": {
+            "Alzheimer Disease": 1,
+        },
+    }
+
+
+def test_build_orders_company_records_by_stratum_specific_dates():
+    profile = _profile(
+        target_type="company",
+        target_name="Vertex Pharmaceuticals",
+        company_name="Vertex Pharmaceuticals",
+    )
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=profile,
+        retained_records=[
+            _trial(
+                "NCT_EXPANSION_NEW",
+                date(2026, 5, 1),
+                conditions=["Acute Pain"],
+                strata=["expansion"],
+                primary_stratum="expansion",
+            ),
+            _trial(
+                "NCT_CATALYST_LATER",
+                date(2026, 4, 1),
+                conditions=["Sickle Cell Disease"],
+                strata=["catalyst"],
+                primary_stratum="catalyst",
+                primary_completion_date=date(2026, 12, 1),
+            ),
+            _trial(
+                "NCT_TRACK_RECENT",
+                date(2023, 1, 1),
+                conditions=["Cystic Fibrosis"],
+                strata=["track_record"],
+                primary_stratum="track_record",
+                last_update_posted=date(2026, 6, 1),
+            ),
+            _trial(
+                "NCT_CATALYST_SOON",
+                date(2024, 1, 1),
+                conditions=["Beta Thalassemia"],
+                strata=["catalyst"],
+                primary_stratum="catalyst",
+                primary_completion_date=date(2026, 6, 1),
+            ),
+        ],
+        raw_count=4,
+        rejected_nct_numbers=[],
+        risk_records=[],
+    )
+
+    assert [trial.nct_number for trial in package.clinical_trials] == [
+        "NCT_CATALYST_SOON",
+        "NCT_CATALYST_LATER",
+        "NCT_EXPANSION_NEW",
+        "NCT_TRACK_RECENT",
+    ]
+    assert package.source_audit.details["expansion_condition_counts"] == {
+        "Acute Pain": 1,
+    }

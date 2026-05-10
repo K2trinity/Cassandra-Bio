@@ -106,12 +106,14 @@ class FakeOrchestrator:
         user_query: str,
         output_dir: str,
         narrative_language: str = "zh",
+        analysis_target_type: str = "auto",
     ) -> dict[str, Any]:
         self.run_calls.append(
             {
                 "user_query": user_query,
                 "output_dir": output_dir,
                 "narrative_language": narrative_language,
+                "analysis_target_type": analysis_target_type,
             }
         )
         return {
@@ -126,12 +128,14 @@ class FakeOrchestrator:
         user_query: str,
         output_dir: str,
         narrative_language: str = "zh",
+        analysis_target_type: str = "auto",
     ):
         self.stream_calls.append(
             {
                 "user_query": user_query,
                 "output_dir": output_dir,
                 "narrative_language": narrative_language,
+                "analysis_target_type": analysis_target_type,
             }
         )
         for node_name in ["harvester", "extension_handoff", "writer"]:
@@ -340,6 +344,26 @@ def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
             "user_query": "Alzheimer disease",
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
+            "analysis_target_type": "auto",
+        }
+    ]
+
+
+def test_workflow_service_run_forwards_target_mode(tmp_path):
+    orchestrator = FakeOrchestrator()
+    service = WorkflowService(
+        orchestrator_factory=lambda: orchestrator,
+        output_dir=tmp_path,
+    )
+
+    service.run("Vertex Pharmaceuticals", analysis_target_type="company")
+
+    assert orchestrator.run_calls == [
+        {
+            "user_query": "Vertex Pharmaceuticals",
+            "output_dir": str(tmp_path),
+            "narrative_language": "zh",
+            "analysis_target_type": "company",
         }
     ]
 
@@ -372,6 +396,7 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
             "user_query": "Alzheimer disease",
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
+            "analysis_target_type": "auto",
         }
     ]
     assert not {
@@ -380,6 +405,30 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
         "clinical" + "_analyzer",
         "quality" + "_assessor",
     }.intersection(node_names)
+
+
+def test_workflow_service_stream_forwards_target_mode(tmp_path):
+    orchestrator = FakeOrchestrator()
+    service = WorkflowService(
+        orchestrator_factory=lambda: orchestrator,
+        output_dir=tmp_path,
+    )
+
+    events = list(service.stream("Vertex Pharmaceuticals", analysis_target_type="company"))
+
+    assert [node_name for node_name, _state in events] == [
+        "harvester",
+        "extension_handoff",
+        "writer",
+    ]
+    assert orchestrator.stream_calls == [
+        {
+            "user_query": "Vertex Pharmaceuticals",
+            "output_dir": str(tmp_path),
+            "narrative_language": "zh",
+            "analysis_target_type": "company",
+        }
+    ]
 
 
 def test_orchestrator_passes_narrative_language_to_service(tmp_path):
@@ -416,6 +465,7 @@ def test_workflow_service_forwards_narrative_language(tmp_path):
             user_query: str,
             output_dir: str,
             narrative_language: str = "zh",
+            analysis_target_type: str = "auto",
         ) -> dict[str, Any]:
             return {
                 "status": "writer_complete",

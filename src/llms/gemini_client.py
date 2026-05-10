@@ -36,6 +36,19 @@ def _resolve_logger():
 logger = _resolve_logger()
 
 
+def _settings_value(name: str, default: Any = None) -> Any:
+    """Read repo settings first so .env overrides stale shell variables."""
+    try:
+        from config import settings
+
+        value = getattr(settings, name, None)
+        if value not in (None, ""):
+            return value
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+
 class GeminiClient:
     """
     Universal Google Gemini API client for active Cassandra engines.
@@ -68,7 +81,7 @@ class GeminiClient:
         project: Optional[str] = None,
         location: Optional[str] = None,
         # UPDATED: Strictly enforced default model as requested
-        model_name: str = "gemini-2.5-pro",
+        model_name: str = "gemini-3.1-pro-preview",
         temperature: float = 1.0,  # 🔥 Gemini 3: MUST keep at 1.0 (default), DO NOT change
         max_output_tokens: int = 8192,  # Gemini 3 supports up to 64k output
     ):
@@ -77,8 +90,8 @@ class GeminiClient:
 
         Args:
             project: Google Cloud project ID (defaults to GOOGLE_CLOUD_PROJECT env var)
-            location: Vertex AI region (defaults to GOOGLE_CLOUD_LOCATION env var, fallback 'asia-northeast1')
-            model_name: Model ID (e.g. gemini-2.5-pro)
+            location: Vertex AI region (defaults to GOOGLE_CLOUD_LOCATION env var, fallback 'global')
+            model_name: Model ID (e.g. gemini-3.1-pro-preview)
             temperature: Sampling temperature - KEEP AT 1.0 for Gemini 3 (changing may cause looping)
             max_output_tokens: Maximum response tokens (Gemini 3 supports up to 64k)
             
@@ -92,8 +105,8 @@ class GeminiClient:
             - Thinking Level: Use thinking_level parameter instead of temperature tuning for reasoning control.
             - Context Window: 1M input / 64k output (as of Jan 2025 knowledge cutoff).
         """
-        self.project = project or os.getenv("GOOGLE_CLOUD_PROJECT")
-        self.location = location or os.getenv("GOOGLE_CLOUD_LOCATION", "asia-northeast1")
+        self.project = project or _settings_value("GOOGLE_CLOUD_PROJECT")
+        self.location = location or _settings_value("GOOGLE_CLOUD_LOCATION", "global")
         if not self.project:
             raise ValueError(
                 "Google Cloud project ID required. Set GOOGLE_CLOUD_PROJECT environment variable "
@@ -105,9 +118,9 @@ class GeminiClient:
         self.max_output_tokens = max_output_tokens
         
         # 🔥 NEW: Model fallback chain for quota exhaustion
-        fallback_chain_str = os.getenv(
+        fallback_chain_str = _settings_value(
             "MODEL_FALLBACK_CHAIN",
-            "gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash"
+            "gemini-3.1-pro-preview,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite"
         )
         self.fallback_models = [m.strip() for m in fallback_chain_str.split(",")]
         
@@ -832,7 +845,7 @@ def create_report_client() -> GeminiClient:
     Uses default temperature (1.0) for optimal reasoning performance.
     """
     return GeminiClient(
-        model_name=os.getenv("REPORT_MODEL_NAME", "gemini-2.5-pro"),
-        temperature=float(os.getenv("REPORT_TEMPERATURE", "1.0")),  # ✅ Gemini 3 default
-        max_output_tokens=int(os.getenv("REPORT_MAX_TOKENS", "8192")),
+        model_name=str(_settings_value("REPORT_MODEL_NAME", "gemini-3.1-pro-preview")),
+        temperature=float(_settings_value("REPORT_TEMPERATURE", "1.0")),
+        max_output_tokens=int(_settings_value("REPORT_MAX_TOKENS", "8192")),
     )

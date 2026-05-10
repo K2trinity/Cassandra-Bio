@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
 from src.engines.report_engine.core import DocumentComposer
 
-from .landscape import stratum_counts
+from .landscape import stratum_counts as disease_stratum_counts
 from .models import (
     ClinicalTrialRecord,
     DiseaseChapterNarratives,
     DiseaseReportPackage,
     PipelineRiskRecord,
 )
+
+STRATUM_LABELS = {
+    "catalyst": "Catalyst Tracker",
+    "expansion": "Expansion Map",
+    "track_record": "Track Record",
+    "evidence": "Evidence",
+    "foundation": "Foundation",
+    "frontier": "Frontier",
+    "unclassified": "Unclassified",
+}
 
 LANDSCAPE_COLUMNS = [
     "Layer",
@@ -20,6 +31,7 @@ LANDSCAPE_COLUMNS = [
     "Phase",
     "Status",
     "Results",
+    "Conditions",
     "Interventions",
     "Sponsor",
     "Enrollment",
@@ -41,16 +53,17 @@ RISK_COLUMNS = [
 
 LANDSCAPE_COLGROUP = [
     {"key": "strata", "width": "8%"},
-    {"key": "study_title", "width": "18%"},
-    {"key": "nct_number", "width": "10%"},
-    {"key": "phases", "width": "8%"},
-    {"key": "status", "width": "9%"},
-    {"key": "study_results", "width": "9%"},
-    {"key": "interventions", "width": "12%"},
-    {"key": "sponsor", "width": "10%"},
-    {"key": "enrollment", "width": "6%"},
+    {"key": "study_title", "width": "16%"},
+    {"key": "nct_number", "width": "9%"},
+    {"key": "phases", "width": "7%"},
+    {"key": "status", "width": "8%"},
+    {"key": "study_results", "width": "8%"},
+    {"key": "conditions", "width": "10%"},
+    {"key": "interventions", "width": "10%"},
+    {"key": "sponsor", "width": "9%"},
+    {"key": "enrollment", "width": "5%"},
     {"key": "primary_outcome_measures", "width": "14%"},
-    {"key": "last_update_posted", "width": "8%"},
+    {"key": "last_update_posted", "width": "7%"},
 ]
 
 RISK_COLGROUP = [
@@ -73,15 +86,25 @@ class DiseaseReportIRBuilder:
         narratives: DiseaseChapterNarratives | None = None,
     ) -> dict:
         narratives = narratives or DiseaseChapterNarratives()
-        disease_name = package.disease_profile.disease_name
+        profile = package.disease_profile
+        disease_name = profile.disease_name
+        target_name = profile.target_name or profile.company_name or disease_name
+        is_company = profile.target_type == "company"
         metadata = {
-            "title": f"{disease_name} Disease Report",
-            "reportType": "single-disease-report",
+            "title": (
+                f"{target_name} ClinicalTrials Pipeline"
+                if is_company
+                else f"{disease_name} Disease Report"
+            ),
+            "reportType": "company-clinicaltrials-pipeline" if is_company else "single-disease-report",
             "disease": {
                 "name": disease_name,
-                "canonicalCondition": package.disease_profile.canonical_condition,
-                "query": package.disease_profile.query,
-                "conditionTerms": list(package.disease_profile.condition_terms),
+                "canonicalCondition": profile.canonical_condition,
+                "query": profile.query,
+                "conditionTerms": list(profile.condition_terms),
+                "targetType": profile.target_type,
+                "targetName": target_name,
+                "companyName": profile.company_name,
             },
             "generatedAt": _isoformat(package.generated_at),
             "sourceAudit": package.source_audit.model_dump(mode="json"),
@@ -98,15 +121,32 @@ class DiseaseReportIRBuilder:
                         "layout": "wide-risk-table",
                         "className": "pipeline-risk",
                         "columns": len(RISK_COLUMNS),
-                    }
+                    },
                 ]
             },
         }
+        if is_company:
+            audit_details = package.source_audit.details
+            metadata["companyPipeline"] = {
+                "stratumCounts": _int_mapping(audit_details.get("stratum_counts")),
+                "expansionConditionCounts": _int_mapping(
+                    audit_details.get("expansion_condition_counts")
+                ),
+            }
+        else:
+            metadata["diseaseLandscape"] = {
+                "stratumCounts": _stratum_counts(package),
+            }
+
         chapters = [
             self._executive_summary_chapter(package, narratives),
-            self._landscape_chapter(package.clinical_trials, narratives),
+            self._landscape_chapter(package, narratives),
             self._risk_chapter(package.risk_records, narratives),
         ]
+        if is_company:
+            chapters.append(self._company_summary_chapter(package, narratives))
+        else:
+            chapters.append(self._disease_summary_chapter(package, narratives))
 
         return DocumentComposer().build_document(
             report_id=f"single-disease-report-{_slug(disease_name)}",
@@ -151,17 +191,19 @@ class DiseaseReportIRBuilder:
 
     def _landscape_chapter(
         self,
-        trials: list[ClinicalTrialRecord],
+        package: DiseaseReportPackage,
         narratives: DiseaseChapterNarratives,
     ) -> dict:
+        trials = package.clinical_trials
         rows = [
             [
-                _layer_memberships(trial),
+                _display_strata(trial),
                 trial.study_title,
                 trial.nct_number,
                 _join_list(trial.phases),
                 trial.status,
                 trial.study_results,
+                _join_list(trial.conditions),
                 _join_list(trial.interventions),
                 trial.sponsor,
                 trial.enrollment,
@@ -170,6 +212,7 @@ class DiseaseReportIRBuilder:
             ]
             for trial in trials
         ]
+        is_company = package.disease_profile.target_type == "company"
         return {
             "chapterId": "clinical_trial_and_pipeline_landscape",
             "title": "Clinical Trial And Pipeline Landscape",
@@ -186,7 +229,11 @@ class DiseaseReportIRBuilder:
                 ),
                 _table(
                     ["Layer", "Records", "Filter Meaning", "With Results", "Core Question"],
-                    _layer_summary_rows(trials),
+                    (
+                        _company_layer_summary_rows(trials)
+                        if is_company
+                        else _disease_layer_summary_rows(trials)
+                    ),
                     caption="ClinicalTrials landscape layer summary",
                     metadata={
                         "layout": "clinical-trial-layer-summary",
@@ -252,9 +299,92 @@ class DiseaseReportIRBuilder:
             ],
         }
 
+    def _company_summary_chapter(
+        self,
+        package: DiseaseReportPackage,
+        narratives: DiseaseChapterNarratives,
+    ) -> dict:
+        audit_details = package.source_audit.details
+        stratum_counts = _int_mapping(audit_details.get("stratum_counts"))
+        expansion_condition_counts = _int_mapping(
+            audit_details.get("expansion_condition_counts")
+        )
+        summary_text = (
+            narratives.company_catalyst_and_rd_summary
+            or _company_summary_fallback(stratum_counts, expansion_condition_counts)
+        )
+        return {
+            "chapterId": "company_catalyst_and_rd_summary",
+            "title": "Company Catalyst And R&D Summary",
+            "anchor": "company-catalyst-and-rd-summary",
+            "order": 40,
+            "blocks": [
+                _heading(
+                    "Company Catalyst And R&D Summary",
+                    "company-catalyst-and-rd-summary",
+                ),
+                _paragraph(summary_text),
+                _labeled_paragraph(
+                    "Catalyst Tracker",
+                    f"{stratum_counts.get('catalyst', 0)} event-driven records prioritized by near-term readout timing.",
+                ),
+                _labeled_paragraph(
+                    "Expansion Map",
+                    _expansion_summary_text(
+                        stratum_counts.get("expansion", 0),
+                        expansion_condition_counts,
+                    ),
+                ),
+                _labeled_paragraph(
+                    "Track Record",
+                    f"{stratum_counts.get('track_record', 0)} result-bearing records provide historical evidence, not inferred success rate.",
+                ),
+            ],
+        }
 
-def _layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
-    counts = stratum_counts(trials)
+    def _disease_summary_chapter(
+        self,
+        package: DiseaseReportPackage,
+        narratives: DiseaseChapterNarratives,
+    ) -> dict:
+        counts = _stratum_counts(package)
+        summary_text = (
+            narratives.disease_evidence_synthesis_summary
+            or _disease_summary_fallback(package, counts)
+        )
+        return {
+            "chapterId": "disease_evidence_synthesis_summary",
+            "title": "Disease Evidence Synthesis Summary",
+            "anchor": "disease-evidence-synthesis-summary",
+            "order": 40,
+            "blocks": [
+                _heading(
+                    "Disease Evidence Synthesis Summary",
+                    "disease-evidence-synthesis-summary",
+                ),
+                _paragraph(summary_text),
+                _labeled_paragraph(
+                    "Evidence Base",
+                    (
+                        f"{counts.get('evidence', 0)} result-bearing records, "
+                        f"{counts.get('foundation', 0)} foundation records, and "
+                        f"{counts.get('frontier', 0)} frontier records summarize the disease landscape."
+                    ),
+                ),
+                _labeled_paragraph(
+                    "Risk Context",
+                    f"{len(package.risk_records)} deterministic risk records summarize the timeline and competition chapter.",
+                ),
+                _labeled_paragraph(
+                    "Boundary",
+                    "This chapter summarizes the first three disease chapters only and does not use company-mode sponsor framing.",
+                ),
+            ],
+        }
+
+
+def _disease_layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
+    counts = disease_stratum_counts(trials)
     result_counts = {
         stratum: sum(
             1
@@ -295,6 +425,48 @@ def _layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
     ]
 
 
+def _company_layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
+    counts = _generic_stratum_counts(trials)
+    result_counts = {
+        stratum: sum(
+            1
+            for trial in trials
+            if _trial_has_stratum(trial, stratum) and trial.has_results
+        )
+        for stratum in ("catalyst", "expansion", "track_record", "unclassified")
+    }
+    return [
+        [
+            "Catalyst Tracker",
+            counts.get("catalyst", 0),
+            "Phase 2/3 active-not-recruiting sponsor records",
+            result_counts["catalyst"],
+            "Event-driven near-term readout focus",
+        ],
+        [
+            "Expansion Map",
+            counts.get("expansion", 0),
+            "Recruiting sponsor records",
+            result_counts["expansion"],
+            "Current R&D allocation by condition",
+        ],
+        [
+            "Track Record",
+            counts.get("track_record", 0),
+            "Sponsor records with posted results",
+            result_counts["track_record"],
+            "Result-bearing historical evidence, not inferred success rate",
+        ],
+        [
+            "Unclassified",
+            counts.get("unclassified", 0),
+            "Records outside configured company layers",
+            result_counts["unclassified"],
+            "Retained sponsor records without configured layer assignment",
+        ],
+    ]
+
+
 def _trial_has_stratum(trial: ClinicalTrialRecord, stratum: str) -> bool:
     memberships = trial.strata or [trial.primary_stratum or "unclassified"]
     return stratum in memberships
@@ -306,6 +478,16 @@ def _heading(text: str, anchor: str) -> dict:
 
 def _paragraph(text: Any) -> dict:
     return {"type": "paragraph", "inlines": [{"text": _display_value(text)}]}
+
+
+def _labeled_paragraph(label: str, body: str) -> dict:
+    return {
+        "type": "paragraph",
+        "inlines": [
+            {"text": label, "marks": [{"type": "bold"}]},
+            {"text": f": {body}"},
+        ],
+    }
 
 
 def _table(
@@ -354,8 +536,10 @@ def _join_list(values: list[str]) -> str:
     return ", ".join(value for value in values if value) or "-"
 
 
-def _layer_memberships(trial: ClinicalTrialRecord) -> str:
-    return _join_list(trial.strata) if trial.strata else trial.primary_stratum
+def _display_strata(trial: ClinicalTrialRecord) -> str:
+    values = trial.strata or [trial.primary_stratum or "unclassified"]
+    labels = [STRATUM_LABELS.get(value, value) for value in values if value]
+    return _join_list(labels)
 
 
 def _display_value(value: Any) -> str:
@@ -364,6 +548,74 @@ def _display_value(value: Any) -> str:
     if isinstance(value, (date, datetime)):
         return _isoformat(value)
     return str(value)
+
+
+def _stratum_counts(package: DiseaseReportPackage) -> dict[str, int]:
+    counts = _int_mapping(package.source_audit.details.get("stratum_counts"))
+    if counts:
+        return counts
+    if package.disease_profile.target_type == "company":
+        return _generic_stratum_counts(package.clinical_trials)
+    return disease_stratum_counts(package.clinical_trials)
+
+
+def _generic_stratum_counts(trials: list[ClinicalTrialRecord]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for trial in trials:
+        memberships = trial.strata or [trial.primary_stratum or "unclassified"]
+        counter.update(stratum for stratum in memberships if stratum)
+    return dict(counter)
+
+
+def _int_mapping(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): int(count)
+        for key, count in value.items()
+        if isinstance(count, int)
+    }
+
+
+def _company_summary_fallback(
+    stratum_counts: dict[str, int],
+    expansion_condition_counts: dict[str, int],
+) -> str:
+    expansion_focus = _top_conditions_text(expansion_condition_counts)
+    return (
+        f"**Catalyst Tracker:** {stratum_counts.get('catalyst', 0)} event-driven records. "
+        f"**Expansion Map:** {stratum_counts.get('expansion', 0)} recruiting records; {expansion_focus}. "
+        f"**Track Record:** {stratum_counts.get('track_record', 0)} posted-results records as historical evidence."
+    )
+
+
+def _disease_summary_fallback(
+    package: DiseaseReportPackage,
+    stratum_counts: dict[str, int],
+) -> str:
+    return (
+        f"The first three chapters retain {package.source_audit.retained_count} clinical trial records "
+        f"for {package.disease_profile.disease_name}, including "
+        f"{stratum_counts.get('evidence', 0)} evidence, "
+        f"{stratum_counts.get('foundation', 0)} foundation, and "
+        f"{stratum_counts.get('frontier', 0)} frontier records. "
+        f"The risk chapter contributes {len(package.risk_records)} deterministic risk records; "
+        "interpretation remains source-grounded and disease-level."
+    )
+
+
+def _expansion_summary_text(
+    count: int,
+    expansion_condition_counts: dict[str, int],
+) -> str:
+    return f"{count} recruiting records show current R&D allocation; {_top_conditions_text(expansion_condition_counts)}."
+
+
+def _top_conditions_text(expansion_condition_counts: dict[str, int]) -> str:
+    if not expansion_condition_counts:
+        return "top conditions unavailable"
+    top_items = list(expansion_condition_counts.items())[:3]
+    return "top conditions: " + ", ".join(f"{name} ({count})" for name, count in top_items)
 
 
 def _isoformat(value: date | datetime) -> str:

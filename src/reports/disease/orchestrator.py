@@ -6,10 +6,11 @@ from datetime import date
 from typing import Any, Callable, Iterator
 
 from .clinicaltrials_harvester import (
+    ClinicalTrialsCompanyHarvester,
     ClinicalTrialsConditionDiscovery,
     ClinicalTrialsDiseaseHarvester,
 )
-from .company_routes import NoopCompanyRouteProvider
+from .company_routes import NoopCompanyRouteProvider, resolve_analysis_target
 from .ir_builder import DiseaseReportIRBuilder
 from .landscape import assign_landscape_strata
 from .models import ClinicalTrialRecord
@@ -23,6 +24,8 @@ from .risk_engine import RuleBasedRiskEngine
 
 
 ANALYSIS_FOCUS = "DISEASE_REPORT_PIPELINE"
+COMPANY_ANALYSIS_FOCUS = "COMPANY_CLINICALTRIALS_PIPELINE"
+DEFAULT_COMPANY_MAX_TRIALS = 100
 
 
 class DiseaseReportOrchestrator:
@@ -45,6 +48,9 @@ class DiseaseReportOrchestrator:
         self.harvester = ClinicalTrialsDiseaseHarvester(
             get_json=clinicaltrials_get_json,
         )
+        self.company_harvester = ClinicalTrialsCompanyHarvester(
+            get_json=clinicaltrials_get_json,
+        )
         current_date = date.fromisoformat(current_date_for_tests) if current_date_for_tests else None
         self.risk_engine = RuleBasedRiskEngine(current_date=current_date)
         self.package_builder = DiseaseReportPackageBuilder()
@@ -60,6 +66,7 @@ class DiseaseReportOrchestrator:
         output_dir: str = "final_reports",
         max_trials: int = 50,
         narrative_language: str = "zh",
+        analysis_target_type: str = "auto",
     ) -> dict[str, Any]:
         final_state: dict[str, Any] | None = None
         for _node_name, state in self.stream(
@@ -67,6 +74,7 @@ class DiseaseReportOrchestrator:
             output_dir=output_dir,
             max_trials=max_trials,
             narrative_language=narrative_language,
+            analysis_target_type=analysis_target_type,
         ):
             final_state = state
         if final_state is None:
@@ -84,27 +92,42 @@ class DiseaseReportOrchestrator:
         output_dir: str = "final_reports",
         max_trials: int = 50,
         narrative_language: str = "zh",
+        analysis_target_type: str = "auto",
     ) -> Iterator[tuple[str, dict[str, Any]]]:
-        profile = self.condition_discovery.discover(self.resolver.resolve(user_query))
-        raw_result = self.harvester.fetch_raw_studies(profile, max_records=None)
-        normalized_records = self._normalize_records(raw_result.studies)
-        relevance_result = self.relevance_gate.filter_records(normalized_records, profile)
-        rejected_nct_numbers = _unique_values(
-            list(raw_result.rejected_nct_numbers) + list(relevance_result.rejected_nct_numbers)
+        profile = resolve_analysis_target(
+            user_query,
+            requested_target_type=analysis_target_type,
+            disease_resolver=self.resolver,
         )
-        stratified_records = [
-            assign_landscape_strata(record)
-            for record in relevance_result.retained
-        ]
+
+        record_limit = max_trials
+        if profile.target_type == "company":
+            record_limit = _company_record_limit(max_trials)
+            raw_result = self.company_harvester.fetch_raw_studies(profile, max_records=record_limit)
+            normalized_records = self._normalize_records(raw_result.studies)
+            retained_records = normalized_records
+            rejected_nct_numbers = list(raw_result.rejected_nct_numbers)
+        else:
+            profile = self.condition_discovery.discover(profile)
+            raw_result = self.harvester.fetch_raw_studies(profile, max_records=None)
+            normalized_records = self._normalize_records(raw_result.studies)
+            relevance_result = self.relevance_gate.filter_records(normalized_records, profile)
+            retained_records = [
+                assign_landscape_strata(record)
+                for record in relevance_result.retained
+            ]
+            rejected_nct_numbers = _unique_values(
+                list(raw_result.rejected_nct_numbers) + list(relevance_result.rejected_nct_numbers)
+            )
         risk_records = self.risk_engine.build(
-            stratified_records,
+            retained_records,
             disease_name=profile.disease_name,
         )
 
         harvest_state = self._build_harvest_state(
             user_query=user_query,
             profile=profile,
-            retained_records=stratified_records,
+            retained_records=retained_records,
             raw_records=raw_result.studies,
             rejected_nct_numbers=rejected_nct_numbers,
         )
@@ -112,11 +135,11 @@ class DiseaseReportOrchestrator:
 
         package = self.package_builder.build(
             disease_profile=profile,
-            retained_records=stratified_records,
+            retained_records=retained_records,
             raw_count=raw_result.raw_count,
             rejected_nct_numbers=rejected_nct_numbers,
             risk_records=risk_records,
-            max_records=max_trials,
+            max_records=record_limit,
         )
         package = self.company_route_provider.enrich(package)
         package_state = self._build_package_state(
@@ -172,13 +195,39 @@ class DiseaseReportOrchestrator:
         rejected_nct_numbers: list[str],
     ) -> dict[str, Any]:
         trial_records = [record.model_dump(mode="json") for record in retained_records]
+        analysis_focus = COMPANY_ANALYSIS_FOCUS if profile.target_type == "company" else ANALYSIS_FOCUS
+        target_name = profile.target_name or profile.company_name or profile.disease_name
+        biomedical_profile = {
+            "analysis_focus": analysis_focus,
+            "target_type": profile.target_type,
+            "target_name": target_name,
+            "disease_areas": [profile.disease_name] if profile.target_type == "disease" else [],
+            "company_entities": (
+                [{"name": profile.company_name, "role": "sponsor"}]
+                if profile.company_name
+                else []
+            ),
+            "clinical_data": {
+                "trial_records": len(trial_records),
+                "raw_records": len(raw_records),
+                "rejected_records": len(rejected_nct_numbers),
+            },
+            "evidence_stats": {
+                "clinical_trial_records": len(retained_records),
+            },
+        }
+        if profile.company_name:
+            biomedical_profile["company_name"] = profile.company_name
+
         return {
             "user_query": user_query,
-            "project_name": profile.disease_name,
+            "project_name": target_name,
             "status": "harvest_complete",
-            "analysis_focus": ANALYSIS_FOCUS,
+            "analysis_focus": analysis_focus,
             "harvested_data": [_harvested_data_item(record) for record in retained_records],
-            "disease_areas": [profile.disease_name],
+            "biomedical_profile": biomedical_profile,
+            "disease_areas": biomedical_profile["disease_areas"],
+            "company_entities": biomedical_profile["company_entities"],
             "clinical_data": {
                 "trial_records": len(trial_records),
                 "raw_records": len(raw_records),
@@ -269,6 +318,10 @@ def _unique_values(values: list[str]) -> list[str]:
         unique.append(text)
         seen.add(text)
     return unique
+
+
+def _company_record_limit(max_trials: int) -> int:
+    return max(DEFAULT_COMPANY_MAX_TRIALS, int(max_trials))
 
 
 __all__ = ["ANALYSIS_FOCUS", "DiseaseReportOrchestrator"]

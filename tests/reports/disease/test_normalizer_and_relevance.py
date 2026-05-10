@@ -36,6 +36,74 @@ def test_normalizer_reads_status_from_nested_clinicaltrials_payload():
     assert record.primary_completion_date == date(2028, 1, 1)
 
 
+def test_normalizer_preserves_clinicaltrials_v2_results_phase_outcomes_and_strata():
+    payload = {
+        "hasResults": True,
+        "metadata": {
+            "strata": ["track_record", "catalyst"],
+            "primary_stratum": "catalyst",
+        },
+        "protocolSection": {
+            "identificationModule": {
+                "nctId": "NCT06500004",
+                "briefTitle": "Phase 2 sponsor trial",
+            },
+            "statusModule": {
+                "overallStatus": "ACTIVE_NOT_RECRUITING",
+                "resultsFirstPostDateStruct": {"date": "2026-03-15"},
+            },
+            "conditionsModule": {"conditions": ["Cystic Fibrosis"]},
+            "sponsorCollaboratorsModule": {
+                "leadSponsor": {"name": "Vertex Pharmaceuticals"}
+            },
+            "designModule": {
+                "studyType": "INTERVENTIONAL",
+                "phases": ["PHASE2", "PHASE3"],
+                "enrollmentInfo": {"count": 480},
+            },
+            "outcomesModule": {
+                "primaryOutcomes": [
+                    {"measure": "Change in ppFEV1"},
+                    {"measure": "Pulmonary exacerbation rate"},
+                ],
+                "secondaryOutcomes": [{"measure": "Safety and tolerability"}],
+            },
+        },
+    }
+
+    record = normalize_trial_payload(payload)
+
+    assert record.phases == ["PHASE2", "PHASE3"]
+    assert record.has_results is True
+    assert record.study_results == "Results available"
+    assert record.results_url == "https://clinicaltrials.gov/study/NCT06500004/results"
+    assert record.results_first_posted == date(2026, 3, 15)
+    assert record.enrollment == 480
+    assert record.primary_outcome_measures == [
+        "Change in ppFEV1",
+        "Pulmonary exacerbation rate",
+    ]
+    assert record.secondary_outcome_measures == ["Safety and tolerability"]
+    assert record.strata == ["track_record", "catalyst"]
+    assert record.primary_stratum == "catalyst"
+
+
+def test_normalizer_marks_absent_clinicaltrials_results_without_results_url():
+    record = normalize_trial_payload(
+        {
+            "hasResults": False,
+            "protocolSection": {
+                "identificationModule": {"nctId": "NCT06500005", "briefTitle": "No results trial"},
+                "statusModule": {"overallStatus": "RECRUITING"},
+            },
+        }
+    )
+
+    assert record.has_results is False
+    assert record.study_results == "No posted results"
+    assert record.results_url == ""
+
+
 def test_normalizer_reads_status_aliases_without_losing_source_field():
     base = {
         "nct_id": "NCT06500002",

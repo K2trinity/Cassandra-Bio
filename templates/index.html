@@ -278,6 +278,16 @@
                     class="min-h-36 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
                     required
                 ></textarea>
+                <div data-testid="analysis-target-mode" class="mt-4 grid grid-cols-2 overflow-hidden rounded-lg border border-slate-700 bg-slate-950 p-1 text-sm">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="analysis_target_type" value="disease" class="peer sr-only" checked>
+                        <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-cyan-500 peer-checked:text-slate-950">Disease landscape</span>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="analysis_target_type" value="company" class="peer sr-only">
+                        <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-cyan-500 peer-checked:text-slate-950">Company pipeline</span>
+                    </label>
+                </div>
                 <div class="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
                     <button
                         type="submit"
@@ -318,8 +328,8 @@
                     <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Evaluate CRISPR off-target effects in clinical trials">
                         CRISPR safety profile
                     </button>
-                    <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Analyze mRNA vaccine long-term immunogenicity">
-                        mRNA vaccine efficacy
+                    <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Company pipeline for Vertex Pharmaceuticals" data-target-type="company">
+                        Vertex pipeline
                     </button>
                 </div>
             </section>
@@ -690,13 +700,13 @@
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-300 mb-2">Model</label>
-                                <input type="text" name="gemini_model" value="${config.gemini?.model || 'gemini-1.5-pro'}" 
+                                <input type="text" name="gemini_model" value="${config.gemini?.model || 'gemini-3.1-pro-preview'}"
                                        class="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
                             </div>
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-300 mb-2">Temperature</label>
-                                    <input type="number" name="gemini_temperature" value="${config.gemini?.temperature || 0.7}" step="0.1" min="0" max="1"
+                                    <input type="number" name="gemini_temperature" value="${config.gemini?.temperature || 1.0}" step="0.1" min="0" max="1"
                                            class="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
                                 </div>
                                 <div>
@@ -928,6 +938,13 @@
     document.querySelectorAll('.quick-query').forEach(btn => {
         btn.addEventListener('click', () => {
             document.getElementById('queryInput').value = btn.dataset.query;
+            const targetType = btn.dataset.targetType;
+            if (targetType) {
+                const targetMode = document.querySelector(`input[name="analysis_target_type"][value="${targetType}"]`);
+                if (targetMode) {
+                    targetMode.checked = true;
+                }
+            }
         });
     });
     
@@ -1096,6 +1113,9 @@
         try {
             const formData = new FormData();
             formData.append('query', query);
+            const targetModeInput = document.querySelector('input[name="analysis_target_type"]:checked');
+            const analysisTargetType = targetModeInput ? targetModeInput.value : 'auto';
+            formData.append('analysis_target_type', analysisTargetType);
             uploadedFiles.forEach(file => formData.append('files', file));
             
             const response = await fetch('/api/analyze', {

@@ -2,8 +2,10 @@ from datetime import date, timedelta
 
 from src.reports.disease.clinicaltrials_harvester import (
     ClinicalTrialsConditionDiscovery,
+    ClinicalTrialsCompanyHarvester,
     ClinicalTrialsDiseaseHarvester,
 )
+from src.reports.disease.models import DiseaseProfile
 from src.reports.disease.resolver import DiseaseResolver
 
 
@@ -25,6 +27,21 @@ def _api_study(nct, title, conditions, first_posted, status="RECRUITING"):
 
 def _nct_ids(studies):
     return [study["protocolSection"]["identificationModule"]["nctId"] for study in studies]
+
+
+def _company_profile(company_name="Vertex Pharmaceuticals"):
+    return DiseaseProfile(
+        query=f"Analyze {company_name} clinical pipeline",
+        target_type="company",
+        company_name=company_name,
+        target_name=company_name,
+        disease_name=company_name,
+        canonical_condition=company_name,
+        condition_terms=[],
+        normalized_terms=[],
+        expert_topic_url="https://clinicaltrials.gov/search?viewType=Topic",
+        expert_full_match_url="https://clinicaltrials.gov/search",
+    )
 
 
 def test_condition_discovery_prefers_full_match_condition_link():
@@ -84,6 +101,139 @@ def test_harvester_uses_condition_query_and_filters_full_match_locally():
     assert result.raw_count == 3
     assert _nct_ids(result.studies) == ["NCT00000001", "NCT00000003"]
     assert result.rejected_nct_numbers == ["NCT00000002"]
+
+
+def test_company_harvester_issues_exact_sponsor_layer_queries():
+    profile = _company_profile()
+    calls = []
+
+    def get_json(url, params):
+        calls.append((url, dict(params)))
+        return {"studies": []}
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=80,
+    )
+
+    assert [call[0] for call in calls] == [
+        "https://clinicaltrials.gov/api/v2/studies",
+        "https://clinicaltrials.gov/api/v2/studies",
+        "https://clinicaltrials.gov/api/v2/studies",
+    ]
+    assert [call[1] for call in calls] == [
+        {
+            "query.spons": "Vertex Pharmaceuticals",
+            "filter.overallStatus": "ACTIVE_NOT_RECRUITING",
+            "filter.advanced": "AREA[Phase](PHASE2 OR PHASE3)",
+            "sort": "PrimaryCompletionDate:asc",
+            "pageSize": 30,
+            "format": "json",
+        },
+        {
+            "query.spons": "Vertex Pharmaceuticals",
+            "filter.overallStatus": "RECRUITING",
+            "sort": "StudyFirstPostDate:desc",
+            "pageSize": 50,
+            "format": "json",
+        },
+        {
+            "query.spons": "Vertex Pharmaceuticals",
+            "filter.advanced": "AREA[HasResults]true",
+            "sort": "LastUpdatePostDate:desc",
+            "pageSize": 30,
+            "format": "json",
+        },
+    ]
+    assert result.raw_count == 0
+
+
+def test_company_harvester_deduplicates_across_layers_and_preserves_strata():
+    profile = _company_profile()
+
+    def get_json(url, params):
+        if params["sort"] == "PrimaryCompletionDate:asc":
+            return {
+                "studies": [
+                    _api_study("NCT77777771", "Catalyst duplicate", ["Cancer"], "2026-01-01"),
+                    _api_study("NCT77777772", "Catalyst only", ["Cancer"], "2026-01-02"),
+                ]
+            }
+        if params["sort"] == "StudyFirstPostDate:desc":
+            return {
+                "studies": [
+                    _api_study("NCT77777771", "Expansion duplicate", ["Rare Disease"], "2026-01-03"),
+                    _api_study("NCT77777773", "Expansion only", ["Rare Disease"], "2026-01-04"),
+                ]
+            }
+        if params["sort"] == "LastUpdatePostDate:desc":
+            return {
+                "studies": [
+                    _api_study("NCT77777771", "Track duplicate", ["Cancer"], "2026-01-05"),
+                    _api_study("NCT77777773", "Track expansion duplicate", ["Rare Disease"], "2026-01-06"),
+                ]
+            }
+        raise AssertionError(f"unexpected params: {params}")
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=80,
+    )
+
+    assert result.raw_count == 6
+    assert _nct_ids(result.studies) == ["NCT77777771", "NCT77777772", "NCT77777773"]
+
+    metadata_by_nct = {
+        study["protocolSection"]["identificationModule"]["nctId"]: study["metadata"]
+        for study in result.studies
+    }
+    assert metadata_by_nct["NCT77777771"]["strata"] == [
+        "catalyst",
+        "track_record",
+        "expansion",
+    ]
+    assert metadata_by_nct["NCT77777771"]["primary_stratum"] == "catalyst"
+    assert metadata_by_nct["NCT77777771"]["analysis_target_type"] == "company"
+    assert metadata_by_nct["NCT77777771"]["company_name"] == "Vertex Pharmaceuticals"
+    assert metadata_by_nct["NCT77777772"]["strata"] == ["catalyst"]
+    assert metadata_by_nct["NCT77777772"]["primary_stratum"] == "catalyst"
+    assert metadata_by_nct["NCT77777773"]["strata"] == ["track_record", "expansion"]
+    assert metadata_by_nct["NCT77777773"]["primary_stratum"] == "track_record"
+
+
+def test_company_harvester_balances_large_layers_before_capping_to_100():
+    profile = _company_profile()
+
+    def make_many(prefix, count):
+        return [
+            _api_study(
+                f"NCT{prefix}{index:05d}",
+                f"{prefix} study {index}",
+                [f"{prefix} Condition"],
+                f"2026-01-{(index % 28) + 1:02d}",
+            )
+            for index in range(count)
+        ]
+
+    def get_json(url, params):
+        if params["sort"] == "PrimaryCompletionDate:asc":
+            return {"studies": make_many("CAT", 120)}
+        if params["sort"] == "StudyFirstPostDate:desc":
+            return {"studies": make_many("EXP", 70)}
+        if params["sort"] == "LastUpdatePostDate:desc":
+            return {"studies": make_many("TRK", 60)}
+        raise AssertionError(f"unexpected params: {params}")
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=100,
+    )
+
+    nct_ids = _nct_ids(result.studies)
+    assert len(nct_ids) == 100
+    assert sum(nct_id.startswith("NCTCAT") for nct_id in nct_ids) == 30
+    assert sum(nct_id.startswith("NCTEXP") for nct_id in nct_ids) == 50
+    assert sum(nct_id.startswith("NCTTRK") for nct_id in nct_ids) == 20
 
 
 def test_harvester_queries_each_literal_condition_term_and_deduplicates_retained_ncts():
