@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from .landscape import landscape_sort_key, stratum_counts
 from .models import (
     ClinicalTrialRecord,
@@ -33,6 +35,10 @@ class DiseaseReportPackageBuilder:
         )
         capped_records = sorted_records[:max_records]
         aligned_risk_records = _align_risk_records_to_trials(risk_records, capped_records)
+        aligned_risk_records = _refresh_competition_evidence(
+            risk_records=aligned_risk_records,
+            disease_name=disease_profile.disease_name,
+        )
 
         audit = SourceAudit(
             topic_url=disease_profile.expert_topic_url,
@@ -74,3 +80,50 @@ def _align_risk_records_to_trials(
         )
         aligned.append(title_match or candidates[0])
     return aligned
+
+
+def _refresh_competition_evidence(
+    *,
+    risk_records: list[PipelineRiskRecord],
+    disease_name: str,
+) -> list[PipelineRiskRecord]:
+    category_counts = Counter(
+        record.intervention_category
+        for record in risk_records
+        if record.intervention_category
+    )
+    return [
+        record.model_copy(
+            update={
+                "competition_signal": _competition_signal(
+                    category=record.intervention_category,
+                    category_count=category_counts.get(record.intervention_category, 0),
+                ),
+                "competition_evidence": _competition_evidence(
+                    category=record.intervention_category,
+                    category_count=category_counts.get(record.intervention_category, 0),
+                    disease_name=disease_name,
+                ),
+            }
+        )
+        for record in risk_records
+    ]
+
+
+def _competition_signal(*, category: str, category_count: int) -> str:
+    if not category:
+        return "Data insufficient"
+    if category_count >= 8:
+        return "High"
+    if 3 <= category_count <= 7:
+        return "Medium"
+    return "Low"
+
+
+def _competition_evidence(*, category: str, category_count: int, disease_name: str) -> str:
+    if not category:
+        return f"No intervention category available for {disease_name}."
+    return (
+        f"{category_count} retained {disease_name} studies share "
+        f"intervention category {category}."
+    )

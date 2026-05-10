@@ -59,7 +59,11 @@ def test_build_dedupes_sorts_newest_first_and_populates_audit():
 
     assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_NEW", "NCT_OLD"]
     assert package.clinical_trials[1].study_title == "Newer duplicate old study"
-    assert package.risk_records == risk_records
+    assert package.risk_records == [
+        risk_records[0].model_copy(
+            update={"competition_evidence": "No intervention category available for Alzheimer Disease."}
+        )
+    ]
 
     audit = package.source_audit
     assert audit.topic_url == profile.expert_topic_url
@@ -209,7 +213,11 @@ def test_build_aligns_duplicate_risk_records_to_selected_clinical_record():
     )
 
     assert [trial.study_title for trial in package.clinical_trials] == ["Better evidence trial"]
-    assert package.risk_records == [better_risk]
+    assert package.risk_records == [
+        better_risk.model_copy(
+            update={"competition_evidence": "No intervention category available for Alzheimer Disease."}
+        )
+    ]
 
 
 def test_build_drops_risk_records_for_capped_out_clinical_trials():
@@ -230,3 +238,54 @@ def test_build_drops_risk_records_for_capped_out_clinical_trials():
 
     assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_KEEP"]
     assert [record.nct_number for record in package.risk_records] == ["NCT_KEEP"]
+
+
+def test_build_recomputes_competition_evidence_after_final_cap():
+    retained_risks = [
+        PipelineRiskRecord(
+            nct_number="NCT_KEEP",
+            study_title="Kept amyloid antibody trial",
+            intervention_category="amyloid antibody",
+            timeline_signal="Low",
+            timeline_evidence="Kept timeline evidence.",
+            competition_signal="Low",
+            competition_evidence=(
+                "2 retained Alzheimer Disease studies share "
+                "intervention category amyloid antibody."
+            ),
+        ),
+        PipelineRiskRecord(
+            nct_number="NCT_DROP",
+            study_title="Dropped amyloid antibody trial",
+            intervention_category="amyloid antibody",
+            timeline_signal="Medium",
+            timeline_evidence="Dropped timeline evidence.",
+            competition_signal="Low",
+            competition_evidence=(
+                "2 retained Alzheimer Disease studies share "
+                "intervention category amyloid antibody."
+            ),
+        ),
+    ]
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=_profile(),
+        retained_records=[
+            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept amyloid antibody trial"),
+            _trial("NCT_DROP", date(2025, 1, 1), title="Dropped amyloid antibody trial"),
+        ],
+        raw_count=2,
+        rejected_nct_numbers=[],
+        risk_records=retained_risks,
+        max_records=1,
+    )
+
+    assert [record.nct_number for record in package.risk_records] == ["NCT_KEEP"]
+    retained_risk = package.risk_records[0]
+    assert retained_risk.timeline_signal == "Low"
+    assert retained_risk.timeline_evidence == "Kept timeline evidence."
+    assert retained_risk.competition_signal == "Low"
+    assert (
+        retained_risk.competition_evidence
+        == "1 retained Alzheimer Disease studies share intervention category amyloid antibody."
+    )

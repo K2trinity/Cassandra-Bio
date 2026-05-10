@@ -86,7 +86,7 @@ class DiseaseReportOrchestrator:
         narrative_language: str = "zh",
     ) -> Iterator[tuple[str, dict[str, Any]]]:
         profile = self.condition_discovery.discover(self.resolver.resolve(user_query))
-        raw_result = self.harvester.fetch_raw_studies(profile, max_records=max_trials)
+        raw_result = self.harvester.fetch_raw_studies(profile, max_records=None)
         normalized_records = self._normalize_records(raw_result.studies)
         relevance_result = self.relevance_gate.filter_records(normalized_records, profile)
         rejected_nct_numbers = _unique_values(

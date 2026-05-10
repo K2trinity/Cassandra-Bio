@@ -97,7 +97,7 @@ class ClinicalTrialsDiseaseHarvester:
         self.page_size = page_size
         self.max_pages = max(1, int(max_pages))
 
-    def fetch_raw_studies(self, profile: DiseaseProfile, max_records: int = 50) -> RawClinicalTrialsResult:
+    def fetch_raw_studies(self, profile: DiseaseProfile, max_records: int | None = 50) -> RawClinicalTrialsResult:
         raw_count = 0
         retained_by_nct: dict[str, dict[str, Any]] = {}
         retained_without_nct: list[dict[str, Any]] = []
@@ -146,8 +146,9 @@ class ClinicalTrialsDiseaseHarvester:
 
         retained = list(retained_by_nct.values()) + retained_without_nct
         retained.sort(key=_sort_date_key, reverse=True)
+        capped_retained = retained if max_records is None else retained[: max(0, int(max_records))]
         return RawClinicalTrialsResult(
-            studies=retained[: max(0, int(max_records))],
+            studies=capped_retained,
             raw_count=raw_count,
             rejected_nct_numbers=[
                 nct_number for nct_number in rejected_nct_numbers if nct_number not in retained_by_nct

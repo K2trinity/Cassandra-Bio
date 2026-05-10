@@ -9,8 +9,17 @@ from src.reports.disease.orchestrator import DiseaseReportOrchestrator
 from src.services.workflow_service import WorkflowService
 
 
-def _study(nct: str, condition: str, status: str = "RECRUITING") -> dict[str, Any]:
+def _study(
+    nct: str,
+    condition: str,
+    status: str = "RECRUITING",
+    *,
+    phases: list[str] | None = None,
+    first_posted: str = "2024-01-15",
+    has_results: bool = False,
+) -> dict[str, Any]:
     return {
+        "hasResults": has_results,
         "protocolSection": {
             "identificationModule": {
                 "nctId": nct,
@@ -18,7 +27,7 @@ def _study(nct: str, condition: str, status: str = "RECRUITING") -> dict[str, An
             },
             "statusModule": {
                 "overallStatus": status,
-                "studyFirstPostDateStruct": {"date": "2024-01-15"},
+                "studyFirstPostDateStruct": {"date": first_posted},
                 "lastUpdatePostDateStruct": {"date": "2026-04-01"},
             },
             "conditionsModule": {"conditions": [condition]},
@@ -28,7 +37,10 @@ def _study(nct: str, condition: str, status: str = "RECRUITING") -> dict[str, An
             "sponsorCollaboratorsModule": {
                 "leadSponsor": {"name": f"Sponsor {nct}"},
             },
-            "designModule": {"studyType": "INTERVENTIONAL"},
+            "designModule": {
+                "studyType": "INTERVENTIONAL",
+                "phases": phases or [],
+            },
         }
     }
 
@@ -227,6 +239,50 @@ def test_orchestrator_stream_yields_harvest_handoff_writer_nodes(tmp_path):
     assert handoff_state["handoff_complete"] is True
     assert writer_state["handoff_complete"] is True
     assert writer_state["writer_complete"] is True
+
+
+def test_orchestrator_applies_max_trials_after_landscape_prioritization(tmp_path):
+    studies = [
+        _study(
+            "NCT_NEW_FRONTIER",
+            "Alzheimer Disease",
+            "RECRUITING",
+            phases=["PHASE1"],
+            first_posted="2026-01-15",
+            has_results=False,
+        ),
+        _study(
+            "NCT_OLD_EVIDENCE",
+            "Alzheimer Disease",
+            "COMPLETED",
+            phases=["PHASE3"],
+            first_posted="2024-01-15",
+            has_results=True,
+        ),
+    ]
+
+    def fake_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {"studies": studies}
+
+    orchestrator = DiseaseReportOrchestrator(
+        clinicaltrials_get_json=fake_get_json,
+        clinicaltrials_get_text=lambda url: "",
+        renderer_adapter=FakeRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
+        current_date_for_tests="2026-04-27",
+    )
+
+    state = orchestrator.run(
+        "Alzheimer disease",
+        output_dir=tmp_path,
+        max_trials=1,
+    )
+
+    package = state["disease_report_package"]
+    assert [trial["nct_number"] for trial in package["clinical_trials"]] == ["NCT_OLD_EVIDENCE"]
+    retained = package["clinical_trials"][0]
+    assert retained["primary_stratum"] == "evidence"
+    assert retained["strata"] == ["evidence", "foundation"]
 
 
 def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
