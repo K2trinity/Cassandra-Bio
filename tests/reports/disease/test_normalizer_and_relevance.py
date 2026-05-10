@@ -120,6 +120,40 @@ def test_normalizer_preserves_phase_results_outcomes_and_enrollment():
     assert record.secondary_outcome_measures == ["Change in ADCS-ADL"]
 
 
+def test_normalizer_preserves_flat_and_metadata_stratum_fields():
+    flat = normalize_trial_payload(
+        {
+            "nct_id": "NCT06500007",
+            "study_title": "Flat stratum study",
+            "status": "COMPLETED",
+            "conditions": ["Alzheimer Disease"],
+            "interventions": ["Drug E"],
+            "strata": ["evidence", {"label": "foundation"}],
+            "primary_stratum": "evidence",
+            "source_url": "https://clinicaltrials.gov/study/NCT06500007",
+        }
+    )
+    metadata = normalize_trial_payload(
+        {
+            "nct_id": "NCT06500008",
+            "study_title": "Metadata stratum study",
+            "status": "RECRUITING",
+            "conditions": ["Alzheimer Disease"],
+            "interventions": ["Drug F"],
+            "metadata": {
+                "strata": "frontier",
+                "primary_stratum": "frontier",
+            },
+            "source_url": "https://clinicaltrials.gov/study/NCT06500008",
+        }
+    )
+
+    assert flat.strata == ["evidence", "foundation"]
+    assert flat.primary_stratum == "evidence"
+    assert metadata.strata == ["frontier"]
+    assert metadata.primary_stratum == "frontier"
+
+
 def test_normalizer_preserves_flat_outcome_measure_aliases():
     record = normalize_trial_payload(
         {

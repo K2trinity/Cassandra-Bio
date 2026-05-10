@@ -144,7 +144,7 @@ def test_harvester_expands_candidate_queries_and_dedupes_before_stratification()
         "2026-04-01",
         status="RECRUITING",
     )
-    frontier["protocolSection"]["designModule"]["phases"] = ["PHASE1"]
+    frontier["protocolSection"]["designModule"]["phases"] = ["EARLY_PHASE1"]
 
     def get_json(url, params):
         calls.append(dict(params))
@@ -152,11 +152,11 @@ def test_harvester_expands_candidate_queries_and_dedupes_before_stratification()
             return {"studies": []}
         if params.get("aggFilters") == "phase:3 4,status:act com":
             return {"studies": [foundation]}
-        if params.get("aggFilters") == "phase:1 2,status:rec not":
+        if params.get("aggFilters") == "phase:0 1 2,status:rec not":
             return {"studies": [frontier]}
         if params.get("aggFilters") == "results:with":
             return {"studies": [foundation]}
-        return {"studies": [frontier, foundation]}
+        return {"studies": [foundation]}
 
     result = ClinicalTrialsDiseaseHarvester(get_json=get_json).fetch_raw_studies(
         profile,
@@ -166,11 +166,11 @@ def test_harvester_expands_candidate_queries_and_dedupes_before_stratification()
     assert [call.get("aggFilters", "broad") for call in calls[:4]] == [
         "broad",
         "phase:3 4,status:act com",
-        "phase:1 2,status:rec not",
+        "phase:0 1 2,status:rec not",
         "results:with",
     ]
     assert _nct_ids(result.studies) == ["NCTFRONTIER", "NCTFOUNDATION"]
-    assert result.raw_count == 5
+    assert result.raw_count == 4
 
 
 def test_harvester_counts_raw_rows_before_dedupe_and_keeps_rejected_ncts_unique():

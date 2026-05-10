@@ -21,7 +21,7 @@ LANDSCAPE_CANDIDATE_QUERIES: tuple[dict[str, Any], ...] = (
         "sort": "LastUpdatePostDate:desc",
     },
     {
-        "aggFilters": "phase:1 2,status:rec not",
+        "aggFilters": "phase:0 1 2,status:rec not",
         "sort": "StudyFirstPostDate:desc",
     },
     {

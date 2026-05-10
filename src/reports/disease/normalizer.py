@@ -135,6 +135,13 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
             "completionDate",
             "completionDateStruct",
         ),
+        strata=_list_text(payload.get("strata") or metadata.get("strata")),
+        primary_stratum=_first_text(
+            payload,
+            metadata,
+            keys=("primary_stratum",),
+            default="unclassified",
+        ) or "unclassified",
         source_url=_first_text(
             payload,
             metadata,
