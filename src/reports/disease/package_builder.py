@@ -32,6 +32,7 @@ class DiseaseReportPackageBuilder:
             key=landscape_sort_key,
         )
         capped_records = sorted_records[:max_records]
+        aligned_risk_records = _align_risk_records_to_trials(risk_records, capped_records)
 
         audit = SourceAudit(
             topic_url=disease_profile.expert_topic_url,
@@ -49,6 +50,27 @@ class DiseaseReportPackageBuilder:
         return DiseaseReportPackage(
             disease_profile=disease_profile,
             clinical_trials=capped_records,
-            risk_records=risk_records,
+            risk_records=aligned_risk_records,
             source_audit=audit,
         )
+
+
+def _align_risk_records_to_trials(
+    risk_records: list[PipelineRiskRecord],
+    trials: list[ClinicalTrialRecord],
+) -> list[PipelineRiskRecord]:
+    risks_by_nct: dict[str, list[PipelineRiskRecord]] = {}
+    for record in risk_records:
+        risks_by_nct.setdefault(record.nct_number, []).append(record)
+
+    aligned: list[PipelineRiskRecord] = []
+    for trial in trials:
+        candidates = risks_by_nct.get(trial.nct_number, [])
+        if not candidates:
+            continue
+        title_match = next(
+            (record for record in candidates if record.study_title == trial.study_title),
+            None,
+        )
+        aligned.append(title_match or candidates[0])
+    return aligned

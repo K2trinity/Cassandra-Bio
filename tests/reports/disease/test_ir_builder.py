@@ -105,6 +105,16 @@ def _find_table(ir: dict, chapter_id: str) -> dict:
     )
 
 
+def _table_rows(table: dict) -> list[list[str]]:
+    return [
+        [
+            cell["blocks"][0]["inlines"][0]["text"]
+            for cell in row["cells"]
+        ]
+        for row in table["rows"][1:]
+    ]
+
+
 def test_ir_has_exact_three_approved_chapters():
     ir = DiseaseReportIRBuilder().build(_package())
 
@@ -134,6 +144,45 @@ def test_landscape_table_uses_layer_phase_status_results_columns():
     assert "Layer" in LANDSCAPE_COLUMNS
     assert "Phase" in LANDSCAPE_COLUMNS
     assert "Results" in LANDSCAPE_COLUMNS
+
+
+def test_layer_summary_includes_unclassified_stratum_count():
+    package = _package()
+    unclassified = package.clinical_trials[0].model_copy(
+        update={
+            "nct_number": "NCT_UNCLASSIFIED",
+            "study_title": "Observational source record",
+            "phases": ["NA"],
+            "status": "UNKNOWN",
+            "strata": ["unclassified"],
+            "primary_stratum": "unclassified",
+            "has_results": True,
+        }
+    )
+    package = package.model_copy(update={"clinical_trials": [unclassified]})
+
+    ir = DiseaseReportIRBuilder().build(package)
+
+    chapter = next(
+        chapter
+        for chapter in ir["chapters"]
+        if chapter["chapterId"] == "clinical_trial_and_pipeline_landscape"
+    )
+    summary_table = next(
+        block
+        for block in chapter["blocks"]
+        if block["type"] == "table"
+        and block["caption"] == "ClinicalTrials landscape layer summary"
+    )
+    rows = _table_rows(summary_table)
+
+    assert [
+        "Unclassified",
+        "1",
+        "Records outside configured evidence/foundation/frontier filters",
+        "1",
+        "Retained source records without configured layer assignment",
+    ] in rows
 
 
 def test_landscape_table_renders_source_fields_without_llm_rewrite():

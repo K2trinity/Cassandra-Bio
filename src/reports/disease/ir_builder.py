@@ -256,15 +256,12 @@ class DiseaseReportIRBuilder:
 def _layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
     counts = stratum_counts(trials)
     result_counts = {
-        "evidence": sum(
-            1 for trial in trials if "evidence" in trial.strata and trial.has_results
-        ),
-        "foundation": sum(
-            1 for trial in trials if "foundation" in trial.strata and trial.has_results
-        ),
-        "frontier": sum(
-            1 for trial in trials if "frontier" in trial.strata and trial.has_results
-        ),
+        stratum: sum(
+            1
+            for trial in trials
+            if _trial_has_stratum(trial, stratum) and trial.has_results
+        )
+        for stratum in ("evidence", "foundation", "frontier", "unclassified")
     }
     return [
         [
@@ -288,7 +285,19 @@ def _layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
             result_counts["frontier"],
             "Early mechanism and target exploration",
         ],
+        [
+            "Unclassified",
+            counts["unclassified"],
+            "Records outside configured evidence/foundation/frontier filters",
+            result_counts["unclassified"],
+            "Retained source records without configured layer assignment",
+        ],
     ]
+
+
+def _trial_has_stratum(trial: ClinicalTrialRecord, stratum: str) -> bool:
+    memberships = trial.strata or [trial.primary_stratum or "unclassified"]
+    return stratum in memberships
 
 
 def _heading(text: str, anchor: str) -> dict:

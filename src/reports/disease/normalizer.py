@@ -212,10 +212,24 @@ def _split_phase_values(value: Any) -> list[str]:
     phases: list[str] = []
     for item in _list_text(value):
         for part in re.split(r"[,;/]", item):
-            text = part.strip().upper()
+            text = _canonical_phase_token(part)
             if text and text not in phases:
                 phases.append(text)
     return phases
+
+
+def _canonical_phase_token(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    normalized = re.sub(r"[\s_-]+", "_", text)
+    compact = normalized.replace("_", "")
+    if compact == "EARLYPHASE1":
+        return "EARLY_PHASE1"
+    phase_match = re.fullmatch(r"PHASE([1-4])", compact)
+    if phase_match:
+        return f"PHASE{phase_match.group(1)}"
+    return normalized
 
 
 def _bool_from_sources(

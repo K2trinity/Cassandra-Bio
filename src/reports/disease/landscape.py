@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 from .models import ClinicalTrialRecord
@@ -74,7 +75,17 @@ def landscape_sort_key(record: ClinicalTrialRecord) -> tuple[int, int, timedelta
 
 
 def _clean_token(value: str) -> str:
-    return str(value or "").strip().upper().replace(" ", "_")
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    normalized = re.sub(r"[\s_-]+", "_", text)
+    compact = normalized.replace("_", "")
+    if compact == "EARLYPHASE1":
+        return "EARLY_PHASE1"
+    phase_match = re.fullmatch(r"PHASE([1-4])", compact)
+    if phase_match:
+        return f"PHASE{phase_match.group(1)}"
+    return normalized
 
 
 __all__ = [

@@ -33,10 +33,10 @@ def _trial(nct_number: str, posted: date | None, title: str | None = None) -> Cl
     )
 
 
-def _risk(nct_number: str) -> PipelineRiskRecord:
+def _risk(nct_number: str, title: str | None = None) -> PipelineRiskRecord:
     return PipelineRiskRecord(
         nct_number=nct_number,
-        study_title=f"Risk {nct_number}",
+        study_title=title or f"Risk {nct_number}",
     )
 
 
@@ -181,3 +181,52 @@ def test_build_keeps_best_duplicate_by_landscape_sort_key():
         "frontier": 0,
         "unclassified": 0,
     }
+
+
+def test_build_aligns_duplicate_risk_records_to_selected_clinical_record():
+    stale_frontier = _trial("NCT_DUP_RISK", date(2023, 1, 1), title="Stale frontier trial")
+    better_evidence = _trial(
+        "NCT_DUP_RISK",
+        date(2026, 1, 1),
+        title="Better evidence trial",
+    ).model_copy(
+        update={
+            "has_results": True,
+            "strata": ["evidence", "foundation"],
+            "primary_stratum": "evidence",
+            "results_first_posted": date(2026, 2, 1),
+        }
+    )
+    stale_risk = _risk("NCT_DUP_RISK", title="Stale frontier trial")
+    better_risk = _risk("NCT_DUP_RISK", title="Better evidence trial")
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=_profile(),
+        retained_records=[stale_frontier, better_evidence],
+        raw_count=2,
+        rejected_nct_numbers=[],
+        risk_records=[stale_risk, better_risk],
+    )
+
+    assert [trial.study_title for trial in package.clinical_trials] == ["Better evidence trial"]
+    assert package.risk_records == [better_risk]
+
+
+def test_build_drops_risk_records_for_capped_out_clinical_trials():
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=_profile(),
+        retained_records=[
+            _trial("NCT_KEEP", date(2026, 1, 1), title="Kept trial"),
+            _trial("NCT_DROP", date(2025, 1, 1), title="Capped out trial"),
+        ],
+        raw_count=2,
+        rejected_nct_numbers=[],
+        risk_records=[
+            _risk("NCT_KEEP", title="Kept trial"),
+            _risk("NCT_DROP", title="Capped out trial"),
+        ],
+        max_records=1,
+    )
+
+    assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_KEEP"]
+    assert [record.nct_number for record in package.risk_records] == ["NCT_KEEP"]

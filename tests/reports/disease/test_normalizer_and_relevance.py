@@ -150,6 +150,34 @@ def test_normalizer_preserves_flat_outcome_measure_aliases():
     assert record.secondary_outcome_measures == ["ADCS-ADL", "NPI"]
 
 
+def test_normalizer_canonicalizes_human_readable_flat_phase_labels():
+    single_phase = normalize_trial_payload(
+        {
+            "nct_id": "NCT06500005",
+            "study_title": "Flat phase 3 study",
+            "status": "COMPLETED",
+            "phases": "Phase 3",
+            "conditions": ["Alzheimer Disease"],
+            "interventions": ["Drug C"],
+            "source_url": "https://clinicaltrials.gov/study/NCT06500005",
+        }
+    )
+    multi_phase = normalize_trial_payload(
+        {
+            "nct_id": "NCT06500006",
+            "study_title": "Flat phase 1 and 2 study",
+            "status": "RECRUITING",
+            "phase": "Phase 1; Phase 2",
+            "conditions": ["Alzheimer Disease"],
+            "interventions": ["Drug D"],
+            "source_url": "https://clinicaltrials.gov/study/NCT06500006",
+        }
+    )
+
+    assert single_phase.phases == ["PHASE3"]
+    assert multi_phase.phases == ["PHASE1", "PHASE2"]
+
+
 def test_relevance_gate_keeps_only_condition_full_match_records():
     profile = DiseaseResolver().resolve("Alzheimer disease")
     records = [

@@ -56,6 +56,20 @@ def test_assign_landscape_strata_uses_source_fields_only():
     assert unclassified.primary_stratum == "unclassified"
 
 
+def test_assign_landscape_strata_canonicalizes_human_readable_phase_labels():
+    foundation = assign_landscape_strata(
+        _record("NCT_PHASE3", phases=["Phase 3"], status="COMPLETED")
+    )
+    frontier = assign_landscape_strata(
+        _record("NCT_EARLY_PHASE1", phases=["Early Phase 1"], status="RECRUITING")
+    )
+
+    assert foundation.strata == ["foundation"]
+    assert foundation.primary_stratum == "foundation"
+    assert frontier.strata == ["frontier"]
+    assert frontier.primary_stratum == "frontier"
+
+
 def test_stratum_counts_count_each_membership_once():
     records = [
         assign_landscape_strata(
