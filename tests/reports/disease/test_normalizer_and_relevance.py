@@ -120,6 +120,32 @@ def test_normalizer_preserves_phase_results_outcomes_and_enrollment():
     assert record.secondary_outcome_measures == ["Change in ADCS-ADL"]
 
 
+def test_normalizer_defaults_results_url_only_when_results_are_posted():
+    base = {
+        "nct_id": "NCT06500008",
+        "study_title": "Flat Alzheimer results link study",
+        "status": "COMPLETED",
+        "conditions": ["Alzheimer Disease"],
+        "interventions": ["Drug B"],
+        "sponsor": "Sponsor B",
+        "study_type": "INTERVENTIONAL",
+    }
+
+    without_results = normalize_trial_payload({**base, "has_results": False})
+    with_results = normalize_trial_payload({**base, "has_results": True})
+    explicit_url = normalize_trial_payload(
+        {
+            **base,
+            "has_results": False,
+            "results_url": "https://example.test/results/NCT06500008",
+        }
+    )
+
+    assert without_results.results_url == ""
+    assert with_results.results_url == "https://clinicaltrials.gov/study/NCT06500008/results"
+    assert explicit_url.results_url == "https://example.test/results/NCT06500008"
+
+
 def test_normalizer_preserves_flat_and_metadata_stratum_fields():
     flat = normalize_trial_payload(
         {

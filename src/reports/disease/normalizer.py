@@ -45,6 +45,9 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
     study_type = _first_text(payload, metadata, design_module, keys=("study_type", "studyType"), default="Unknown")
     has_results = _bool_from_sources(payload, metadata, "hasResults", "has_results")
     result_label = "Results available" if has_results else "No posted results"
+    results_url = _first_text(payload, metadata, keys=("results_url",))
+    if not results_url and has_results:
+        results_url = f"https://clinicaltrials.gov/study/{nct}/results"
 
     return ClinicalTrialRecord(
         study_title=title or "Untitled Clinical Trial",
@@ -64,12 +67,7 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
             keys=("study_results", "results_status"),
             default=result_label,
         ) or result_label,
-        results_url=_first_text(
-            payload,
-            metadata,
-            keys=("results_url",),
-            default=f"https://clinicaltrials.gov/study/{nct}/results",
-        ) or f"https://clinicaltrials.gov/study/{nct}/results",
+        results_url=results_url or "",
         conditions=conditions,
         interventions=interventions,
         sponsor=sponsor,
