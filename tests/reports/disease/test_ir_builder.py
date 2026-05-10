@@ -171,6 +171,25 @@ def test_landscape_table_renders_all_layer_memberships():
     assert layer_value == "evidence, foundation"
 
 
+def test_landscape_table_falls_back_to_primary_layer_when_strata_empty():
+    package = _package()
+    trial = package.clinical_trials[0].model_copy(
+        update={
+            "strata": [],
+            "primary_stratum": "frontier",
+        }
+    )
+    package = package.model_copy(update={"clinical_trials": [trial]})
+
+    ir = DiseaseReportIRBuilder().build(package)
+
+    table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
+    layer_cell = table["rows"][1]["cells"][0]
+    layer_value = layer_cell["blocks"][0]["inlines"][0]["text"]
+
+    assert layer_value == "frontier"
+
+
 def test_ir_excludes_removed_sections_and_removed_fields():
     ir = DiseaseReportIRBuilder().build(_package())
 

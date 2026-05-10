@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.engines.report_engine.renderers.markdown_renderer import MarkdownRenderer
 from src.reports.disease.models import DiseaseReportArtifacts
 from src.reports.disease.orchestrator import DiseaseReportOrchestrator
 
@@ -67,12 +68,7 @@ class CapturingRendererAdapter:
             for chapter in document_ir.get("chapters", [])
         ]
 
-        rendered_parts: list[str] = [f"# {project_name}"]
-        for chapter in document_ir.get("chapters", []):
-            rendered_parts.append(f"## {chapter.get('title', '')}")
-            for block in chapter.get("blocks", []):
-                rendered_parts.append(json.dumps(block, default=str, sort_keys=True))
-        markdown = "\n\n".join(rendered_parts) + "\n"
+        markdown = MarkdownRenderer().render(document_ir)
 
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -174,7 +170,6 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
     assert "PHASE3" in final_report
     assert "Results available" in final_report
     assert "No posted results" in final_report
-    assert "ClinicalTrials landscape layer summary" in final_report
 
     assert state["clinical_data"]["rejected_nct_numbers"] == [
         rejected_parkinson,
@@ -192,6 +187,17 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
     assert by_nct[retained_recruiting]["primary_stratum"] == "frontier"
     assert by_nct[retained_completed]["primary_stratum"] == "evidence"
     assert by_nct[retained_completed]["strata"] == ["evidence", "foundation"]
+
+    clinical_chapter = next(
+        chapter
+        for chapter in state["report_ir"]["chapters"]
+        if chapter["chapterId"] == "clinical_trial_and_pipeline_landscape"
+    )
+    assert any(
+        block.get("type") == "table"
+        and block.get("caption") == "ClinicalTrials landscape layer summary"
+        for block in clinical_chapter["blocks"]
+    )
 
     for old_section in [
         " ".join(["Drug", "Pipeline"]),
