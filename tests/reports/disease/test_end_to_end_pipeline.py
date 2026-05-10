@@ -16,8 +16,11 @@ def _study(
     status: str,
     intervention: str,
     first_posted: str,
+    phases: list[str] | None = None,
+    has_results: bool = False,
 ) -> dict[str, Any]:
     return {
+        "hasResults": has_results,
         "protocolSection": {
             "identificationModule": {
                 "nctId": nct,
@@ -35,7 +38,14 @@ def _study(
             "sponsorCollaboratorsModule": {
                 "leadSponsor": {"name": f"Sponsor {nct}"},
             },
-            "designModule": {"studyType": "INTERVENTIONAL"},
+            "designModule": {
+                "studyType": "INTERVENTIONAL",
+                "phases": phases or [],
+                "enrollmentInfo": {"count": 100},
+            },
+            "outcomesModule": {
+                "primaryOutcomes": [{"measure": "Primary endpoint measure"}],
+            },
         }
     }
 
@@ -99,6 +109,8 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
             status="RECRUITING",
             intervention="Amyloid monoclonal antibody",
             first_posted="2026-01-15",
+            phases=["PHASE1"],
+            has_results=False,
         ),
         _study(
             retained_completed,
@@ -107,6 +119,8 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
             status="COMPLETED",
             intervention="Tau aggregation inhibitor",
             first_posted="2025-10-10",
+            phases=["PHASE3"],
+            has_results=True,
         ),
         _study(
             rejected_parkinson,
@@ -153,6 +167,14 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
     assert "COMPLETED" in final_report
     assert rejected_parkinson not in final_report
     assert rejected_cognitive not in final_report
+    assert "frontier" in final_report
+    assert "evidence" in final_report
+    assert "foundation" in final_report
+    assert "PHASE1" in final_report
+    assert "PHASE3" in final_report
+    assert "Results available" in final_report
+    assert "No posted results" in final_report
+    assert "ClinicalTrials landscape layer summary" in final_report
 
     assert state["clinical_data"]["rejected_nct_numbers"] == [
         rejected_parkinson,
@@ -165,6 +187,11 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
         retained_recruiting,
         retained_completed,
     ]
+    trial_details = state["clinical_data"]["trial_record_details"]
+    by_nct = {record["nct_number"]: record for record in trial_details}
+    assert by_nct[retained_recruiting]["primary_stratum"] == "frontier"
+    assert by_nct[retained_completed]["primary_stratum"] == "evidence"
+    assert by_nct[retained_completed]["strata"] == ["evidence", "foundation"]
 
     for old_section in [
         " ".join(["Drug", "Pipeline"]),
@@ -176,7 +203,7 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
     ]:
         assert old_section not in final_report
 
-    for removed_field in ["Enroll" + "ment", " ".join(["Primary", "Endpoint"])]:
+    for removed_field in [" ".join(["Primary", "Endpoint"])]:
         assert removed_field not in final_report
 
     assert renderer.chapter_titles == [

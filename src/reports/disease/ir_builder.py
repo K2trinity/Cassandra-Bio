@@ -40,7 +40,7 @@ RISK_COLUMNS = [
 ]
 
 LANDSCAPE_COLGROUP = [
-    {"key": "primary_stratum", "width": "8%"},
+    {"key": "strata", "width": "8%"},
     {"key": "study_title", "width": "18%"},
     {"key": "nct_number", "width": "10%"},
     {"key": "phases", "width": "8%"},
@@ -156,7 +156,7 @@ class DiseaseReportIRBuilder:
     ) -> dict:
         rows = [
             [
-                trial.primary_stratum,
+                _layer_memberships(trial),
                 trial.study_title,
                 trial.nct_number,
                 _join_list(trial.phases),
@@ -343,6 +343,10 @@ def _table(
 
 def _join_list(values: list[str]) -> str:
     return ", ".join(value for value in values if value) or "-"
+
+
+def _layer_memberships(trial: ClinicalTrialRecord) -> str:
+    return _join_list(trial.strata) if trial.strata else trial.primary_stratum
 
 
 def _display_value(value: Any) -> str:
