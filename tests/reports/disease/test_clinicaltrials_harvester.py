@@ -73,7 +73,7 @@ def test_harvester_uses_condition_query_and_filters_full_match_locally():
 
     def get_json(url, params):
         calls.append((url, dict(params)))
-        if params["query.cond"] != "Alzheimer Disease":
+        if params["query.cond"] != "Alzheimer Disease" or "aggFilters" in params:
             return {"studies": []}
         return payload
 
@@ -108,14 +108,69 @@ def test_harvester_queries_each_literal_condition_term_and_deduplicates_retained
 
     result = ClinicalTrialsDiseaseHarvester(get_json=get_json).fetch_raw_studies(profile, max_records=50)
 
-    assert [call["query.cond"] for call in calls] == [
+    broad_terms = [
+        call["query.cond"]
+        for call in calls
+        if "aggFilters" not in call
+    ]
+    assert broad_terms == [
         "Alzheimer Disease",
         "Alzheimer's Disease",
         "Alzheimers Disease",
     ]
-    assert result.raw_count == 2
+    assert result.raw_count == 8
     assert _nct_ids(result.studies) == ["NCT11111111"]
     assert result.rejected_nct_numbers == []
+
+
+def test_harvester_expands_candidate_queries_and_dedupes_before_stratification():
+    profile = DiseaseResolver().resolve("Alzheimer disease")
+    calls = []
+
+    foundation = _api_study(
+        "NCTFOUNDATION",
+        "Foundation AD",
+        ["Alzheimer Disease"],
+        "2024-01-01",
+        status="COMPLETED",
+    )
+    foundation["protocolSection"]["designModule"]["phases"] = ["PHASE3"]
+    foundation["hasResults"] = True
+
+    frontier = _api_study(
+        "NCTFRONTIER",
+        "Frontier AD",
+        ["Alzheimer Disease"],
+        "2026-04-01",
+        status="RECRUITING",
+    )
+    frontier["protocolSection"]["designModule"]["phases"] = ["PHASE1"]
+
+    def get_json(url, params):
+        calls.append(dict(params))
+        if params["query.cond"] != "Alzheimer Disease":
+            return {"studies": []}
+        if params.get("aggFilters") == "phase:3 4,status:act com":
+            return {"studies": [foundation]}
+        if params.get("aggFilters") == "phase:1 2,status:rec not":
+            return {"studies": [frontier]}
+        if params.get("aggFilters") == "results:with":
+            return {"studies": [foundation]}
+        return {"studies": [frontier, foundation]}
+
+    result = ClinicalTrialsDiseaseHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=80,
+    )
+
+    assert [call.get("aggFilters", "broad") for call in calls[:4]] == [
+        "broad",
+        "phase:3 4,status:act com",
+        "phase:1 2,status:rec not",
+        "results:with",
+    ]
+    assert _nct_ids(result.studies) == ["NCTFRONTIER", "NCTFOUNDATION"]
+    assert result.raw_count == 5
 
 
 def test_harvester_counts_raw_rows_before_dedupe_and_keeps_rejected_ncts_unique():
@@ -133,7 +188,7 @@ def test_harvester_counts_raw_rows_before_dedupe_and_keeps_rejected_ncts_unique(
         max_records=50,
     )
 
-    assert result.raw_count == 3
+    assert result.raw_count == 12
     assert _nct_ids(result.studies) == ["NCT22222222"]
     assert result.rejected_nct_numbers == ["NCT22222221"]
 
@@ -159,10 +214,10 @@ def test_harvester_paginates_with_page_token():
 
     result = ClinicalTrialsDiseaseHarvester(get_json=get_json).fetch_raw_studies(profile, max_records=50)
 
-    assert len(calls) == 2
+    assert len(calls) == 8
     assert "pageToken" not in calls[0]
     assert calls[1]["pageToken"] == "PAGE2"
-    assert result.raw_count == 2
+    assert result.raw_count == 8
     assert _nct_ids(result.studies) == ["NCT33333332", "NCT33333331"]
 
 
@@ -172,8 +227,6 @@ def test_harvester_stops_on_repeated_page_token():
 
     def get_json(url, params):
         calls.append(dict(params))
-        if len(calls) > 2:
-            raise AssertionError("repeated page token should stop pagination")
         return {
             "studies": [
                 _api_study(
@@ -191,10 +244,10 @@ def test_harvester_stops_on_repeated_page_token():
         max_records=50,
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 8
     assert "pageToken" not in calls[0]
     assert calls[1]["pageToken"] == "LOOP"
-    assert result.raw_count == 2
+    assert result.raw_count == 8
 
 
 def test_harvester_stops_at_max_pages_when_tokens_advance():
@@ -203,8 +256,6 @@ def test_harvester_stops_at_max_pages_when_tokens_advance():
 
     def get_json(url, params):
         calls.append(dict(params))
-        if len(calls) > 2:
-            raise AssertionError("max_pages should cap pagination")
         return {
             "studies": [
                 _api_study(
@@ -222,8 +273,8 @@ def test_harvester_stops_at_max_pages_when_tokens_advance():
         max_records=50,
     )
 
-    assert len(calls) == 2
-    assert result.raw_count == 2
+    assert len(calls) == 8
+    assert result.raw_count == 8
 
 
 def test_harvester_sorts_by_study_first_posted_desc_and_caps_to_50():

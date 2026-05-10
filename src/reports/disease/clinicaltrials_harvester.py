@@ -14,6 +14,21 @@ from .models import DiseaseProfile
 
 
 CTGOV_STUDIES_URL = "https://clinicaltrials.gov/api/v2/studies"
+LANDSCAPE_CANDIDATE_QUERIES: tuple[dict[str, Any], ...] = (
+    {},
+    {
+        "aggFilters": "phase:3 4,status:act com",
+        "sort": "LastUpdatePostDate:desc",
+    },
+    {
+        "aggFilters": "phase:1 2,status:rec not",
+        "sort": "StudyFirstPostDate:desc",
+    },
+    {
+        "aggFilters": "results:with",
+        "sort": "LastUpdatePostDate:desc",
+    },
+)
 
 _FULL_MATCH_RE = re.compile(
     r"AREA\s*\[\s*Condition\s*\]\s*COVERAGE\s*\[\s*FullMatch\s*\[\s*(?P<condition>[^\]]+?)\s*\]\s*\]",
@@ -90,42 +105,44 @@ class ClinicalTrialsDiseaseHarvester:
         rejected_seen: set[str] = set()
 
         for condition_term in _query_condition_terms(profile):
-            page_token: str | None = None
-            seen_page_tokens: set[str | None] = set()
-            pages_fetched = 0
-            while pages_fetched < self.max_pages:
-                if page_token in seen_page_tokens:
-                    break
-                seen_page_tokens.add(page_token)
+            for candidate_params in LANDSCAPE_CANDIDATE_QUERIES:
+                page_token: str | None = None
+                seen_page_tokens: set[str | None] = set()
+                pages_fetched = 0
+                while pages_fetched < self.max_pages:
+                    if page_token in seen_page_tokens:
+                        break
+                    seen_page_tokens.add(page_token)
 
-                params: dict[str, Any] = {
-                    "query.cond": condition_term,
-                    "pageSize": self.page_size,
-                    "format": "json",
-                }
-                if page_token:
-                    params["pageToken"] = page_token
+                    params: dict[str, Any] = {
+                        "query.cond": condition_term,
+                        "pageSize": self.page_size,
+                        "format": "json",
+                    }
+                    params.update(candidate_params)
+                    if page_token:
+                        params["pageToken"] = page_token
 
-                payload = self._get_json(CTGOV_STUDIES_URL, params)
-                studies = _extract_study_rows(payload)
-                raw_count += len(studies)
-                pages_fetched += 1
+                    payload = self._get_json(CTGOV_STUDIES_URL, params)
+                    studies = _extract_study_rows(payload)
+                    raw_count += len(studies)
+                    pages_fetched += 1
 
-                for study in studies:
-                    nct_number = _extract_nct_number(study)
-                    if conditions_full_match(_extract_conditions(study), profile):
-                        if nct_number:
-                            retained_by_nct.setdefault(nct_number, study)
-                        else:
-                            retained_without_nct.append(study)
-                    elif nct_number:
-                        if nct_number not in retained_by_nct and nct_number not in rejected_seen:
-                            rejected_nct_numbers.append(nct_number)
-                            rejected_seen.add(nct_number)
+                    for study in studies:
+                        nct_number = _extract_nct_number(study)
+                        if conditions_full_match(_extract_conditions(study), profile):
+                            if nct_number:
+                                retained_by_nct.setdefault(nct_number, study)
+                            else:
+                                retained_without_nct.append(study)
+                        elif nct_number:
+                            if nct_number not in retained_by_nct and nct_number not in rejected_seen:
+                                rejected_nct_numbers.append(nct_number)
+                                rejected_seen.add(nct_number)
 
-                page_token = _extract_next_page_token(payload)
-                if not page_token:
-                    break
+                    page_token = _extract_next_page_token(payload)
+                    if not page_token:
+                        break
 
         retained = list(retained_by_nct.values()) + retained_without_nct
         retained.sort(key=_sort_date_key, reverse=True)
@@ -348,6 +365,7 @@ def _sort_date_key(study: dict[str, Any]) -> date:
 
 __all__ = [
     "CTGOV_STUDIES_URL",
+    "LANDSCAPE_CANDIDATE_QUERIES",
     "ClinicalTrialsConditionDiscovery",
     "ClinicalTrialsDiseaseHarvester",
     "RawClinicalTrialsResult",
