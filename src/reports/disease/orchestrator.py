@@ -119,12 +119,18 @@ class DiseaseReportOrchestrator:
             max_records=max_trials,
         )
         package = self.company_route_provider.enrich(package)
+        package_state = self._build_package_state(
+            candidate_state=harvest_state,
+            retained_records=list(package.clinical_trials),
+            raw_records=raw_result.studies,
+            rejected_nct_numbers=rejected_nct_numbers,
+        )
         narratives = self.narrative_service.generate(
             package,
             language="en" if narrative_language == "en" else "zh",
         )
         handoff_state = {
-            **harvest_state,
+            **package_state,
             "status": "handoff_complete",
             "handoff_complete": True,
             "disease_report_package": package.model_dump(mode="json"),
@@ -188,6 +194,41 @@ class DiseaseReportOrchestrator:
             "errors": [],
         }
 
+    def _build_package_state(
+        self,
+        *,
+        candidate_state: dict[str, Any],
+        retained_records: list[ClinicalTrialRecord],
+        raw_records: list[dict[str, Any]],
+        rejected_nct_numbers: list[str],
+    ) -> dict[str, Any]:
+        selected_nct_numbers = {record.nct_number for record in retained_records}
+        selected_raw_records = [
+            record
+            for record in raw_records
+            if _raw_record_nct_number(record) in selected_nct_numbers
+        ]
+        trial_records = [record.model_dump(mode="json") for record in retained_records]
+        return {
+            **candidate_state,
+            "harvested_data": [_harvested_data_item(record) for record in retained_records],
+            "clinical_data": {
+                **candidate_state["clinical_data"],
+                "trial_records": len(trial_records),
+                "raw_records": len(selected_raw_records),
+                "trial_record_details": trial_records,
+                "raw_record_details": deepcopy(selected_raw_records),
+                "rejected_records": len(rejected_nct_numbers),
+                "rejected_nct_numbers": list(rejected_nct_numbers),
+            },
+            "evidence_stats": {
+                "clinical_trial_records": len(retained_records),
+            },
+            "candidate_harvested_data": deepcopy(candidate_state["harvested_data"]),
+            "candidate_clinical_data": deepcopy(candidate_state["clinical_data"]),
+            "candidate_evidence_stats": deepcopy(candidate_state["evidence_stats"]),
+        }
+
 
 def _harvested_data_item(record: ClinicalTrialRecord) -> dict[str, Any]:
     payload = record.model_dump(mode="json")
@@ -204,6 +245,18 @@ def _harvested_data_item(record: ClinicalTrialRecord) -> dict[str, Any]:
         "url": record.source_url,
         "metadata": payload,
     }
+
+
+def _raw_record_nct_number(record: dict[str, Any]) -> str:
+    protocol = record.get("protocolSection") if isinstance(record, dict) else None
+    identification = (
+        protocol.get("identificationModule")
+        if isinstance(protocol, dict)
+        else None
+    )
+    if not isinstance(identification, dict):
+        return ""
+    return str(identification.get("nctId") or "").strip()
 
 
 def _unique_values(values: list[str]) -> list[str]:

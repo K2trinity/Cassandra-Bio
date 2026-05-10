@@ -175,13 +175,14 @@ def test_disease_report_pipeline_filters_and_renders_merged_shape(tmp_path):
         rejected_parkinson,
         rejected_cognitive,
     ]
+    package_nct_numbers = [
+        trial["nct_number"]
+        for trial in state["disease_report_package"]["clinical_trials"]
+    ]
     assert [
         record["nct_number"]
         for record in state["clinical_data"]["trial_record_details"]
-    ] == [
-        retained_recruiting,
-        retained_completed,
-    ]
+    ] == package_nct_numbers
     trial_details = state["clinical_data"]["trial_record_details"]
     by_nct = {record["nct_number"]: record for record in trial_details}
     assert by_nct[retained_recruiting]["primary_stratum"] == "frontier"

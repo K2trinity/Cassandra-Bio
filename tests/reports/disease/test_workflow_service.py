@@ -284,6 +284,39 @@ def test_orchestrator_applies_max_trials_after_landscape_prioritization(tmp_path
     assert retained["primary_stratum"] == "evidence"
     assert retained["strata"] == ["evidence", "foundation"]
 
+    def assert_final_state_contract(state: dict[str, Any]) -> None:
+        assert state["clinical_data"]["trial_records"] == 1
+        assert [
+            record["nct_number"]
+            for record in state["clinical_data"]["trial_record_details"]
+        ] == ["NCT_OLD_EVIDENCE"]
+        assert [item["nct_number"] for item in state["harvested_data"]] == ["NCT_OLD_EVIDENCE"]
+        assert state["evidence_stats"] == {"clinical_trial_records": 1}
+        assert state["candidate_clinical_data"]["trial_records"] == 2
+        assert [
+            record["nct_number"]
+            for record in state["candidate_clinical_data"]["trial_record_details"]
+        ] == ["NCT_NEW_FRONTIER", "NCT_OLD_EVIDENCE"]
+        assert len(state["candidate_harvested_data"]) == 2
+        assert state["candidate_evidence_stats"] == {"clinical_trial_records": 2}
+
+    assert_final_state_contract(state)
+
+    events = list(
+        orchestrator.stream(
+            "Alzheimer disease",
+            output_dir=tmp_path / "stream",
+            max_trials=1,
+        )
+    )
+    assert [node_name for node_name, _state in events] == [
+        "harvester",
+        "extension_handoff",
+        "writer",
+    ]
+    assert_final_state_contract(events[1][1])
+    assert_final_state_contract(events[2][1])
+
 
 def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
     orchestrator = FakeOrchestrator()
