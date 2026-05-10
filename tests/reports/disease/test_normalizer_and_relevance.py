@@ -120,6 +120,36 @@ def test_normalizer_preserves_phase_results_outcomes_and_enrollment():
     assert record.secondary_outcome_measures == ["Change in ADCS-ADL"]
 
 
+def test_normalizer_preserves_flat_outcome_measure_aliases():
+    record = normalize_trial_payload(
+        {
+            "nct_id": "NCT06500004",
+            "study_title": "Flat Alzheimer outcome study",
+            "status": "COMPLETED",
+            "phases": "PHASE2; PHASE3",
+            "has_results": True,
+            "study_results": "Posted results summary",
+            "results_url": "https://example.test/results/NCT06500004",
+            "conditions": ["Alzheimer Disease"],
+            "interventions": ["Drug B"],
+            "sponsor": "Sponsor B",
+            "study_type": "INTERVENTIONAL",
+            "enrollment": 250,
+            "primary_outcome_measures": "ADAS-Cog; CDR-SB",
+            "secondary_outcome_measures": ["ADCS-ADL", "NPI"],
+        }
+    )
+
+    assert record.nct_number == "NCT06500004"
+    assert record.phases == ["PHASE2", "PHASE3"]
+    assert record.has_results is True
+    assert record.study_results == "Posted results summary"
+    assert record.results_url == "https://example.test/results/NCT06500004"
+    assert record.enrollment == 250
+    assert record.primary_outcome_measures == ["ADAS-Cog", "CDR-SB"]
+    assert record.secondary_outcome_measures == ["ADCS-ADL", "NPI"]
+
+
 def test_relevance_gate_keeps_only_condition_full_match_records():
     profile = DiseaseResolver().resolve("Alzheimer disease")
     records = [

@@ -80,8 +80,20 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
             design_module.get("enrollmentInfo") if isinstance(design_module.get("enrollmentInfo"), dict) else {},
             keys=("enrollment", "enrollment_count", "count"),
         ),
-        primary_outcome_measures=_outcome_measures(outcomes_module, "primaryOutcomes"),
-        secondary_outcome_measures=_outcome_measures(outcomes_module, "secondaryOutcomes"),
+        primary_outcome_measures=_outcome_measures(
+            payload,
+            metadata,
+            outcomes_module,
+            "primaryOutcomes",
+            "primary_outcome_measures",
+        ),
+        secondary_outcome_measures=_outcome_measures(
+            payload,
+            metadata,
+            outcomes_module,
+            "secondaryOutcomes",
+            "secondary_outcome_measures",
+        ),
         study_first_posted=_date_from_sources(
             payload,
             metadata,
@@ -238,24 +250,50 @@ def _int_from_sources(*sources: dict[str, Any], keys: Iterable[str]) -> int | No
     return None
 
 
-def _outcome_measures(outcomes_module: dict[str, Any], key: str) -> list[str]:
-    values: list[str] = []
-    for item in _list_text(outcomes_module.get(key)):
-        text = item.strip()
-        if text and text not in values:
-            values.append(text)
-    if values:
-        return values
-
-    raw_items = outcomes_module.get(key) or []
+def _outcome_measures(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    outcomes_module: dict[str, Any],
+    nested_key: str,
+    *flat_keys: str,
+) -> list[str]:
     measures: list[str] = []
-    if isinstance(raw_items, list):
-        for item in raw_items:
-            if isinstance(item, dict):
-                measure = str(item.get("measure") or "").strip()
-                if measure and measure not in measures:
-                    measures.append(measure)
+    for source in (payload, metadata):
+        source_dict = _dict(source)
+        for key in flat_keys:
+            _extend_outcome_measures(measures, source_dict.get(key), split_text=True)
+    _extend_outcome_measures(measures, outcomes_module.get(nested_key), split_text=False)
     return measures
+
+
+def _extend_outcome_measures(measures: list[str], value: Any, *, split_text: bool) -> None:
+    if value is None:
+        return
+    if isinstance(value, dict):
+        text = _first_text(value, keys=("measure", "name", "label"))
+        if text:
+            _append_unique(measures, text)
+        return
+    if isinstance(value, str):
+        parts = re.split(r"[;,]", value) if split_text else [value]
+        for part in parts:
+            _append_unique(measures, part)
+        return
+
+    try:
+        iterator = iter(value)
+    except TypeError:
+        _append_unique(measures, str(value))
+        return
+
+    for item in iterator:
+        _extend_outcome_measures(measures, item, split_text=split_text)
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    text = value.strip()
+    if text and text not in values:
+        values.append(text)
 
 
 def _date_from_sources(
