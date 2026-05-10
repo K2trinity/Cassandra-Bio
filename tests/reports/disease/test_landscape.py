@@ -110,3 +110,40 @@ def test_landscape_sort_key_prioritizes_evidence_then_foundation_then_frontier()
         "NCT_FOUNDATION",
         "NCT_FRONTIER",
     ]
+
+
+def test_landscape_sort_key_uses_newest_available_source_date():
+    records = [
+        assign_landscape_strata(
+            _record(
+                "NCT_NEWEST_RESULTS",
+                phases=["PHASE4"],
+                status="COMPLETED",
+                posted=date(2023, 1, 1),
+            ).model_copy(
+                update={
+                    "last_update_posted": date(2024, 1, 1),
+                    "results_first_posted": date(2026, 1, 1),
+                }
+            )
+        ),
+        assign_landscape_strata(
+            _record(
+                "NCT_INTERMEDIATE_UPDATE",
+                phases=["PHASE4"],
+                status="COMPLETED",
+                posted=date(2023, 1, 1),
+            ).model_copy(
+                update={
+                    "last_update_posted": date(2025, 1, 1),
+                }
+            )
+        ),
+    ]
+
+    sorted_records = sorted(records, key=landscape_sort_key)
+
+    assert [record.nct_number for record in sorted_records] == [
+        "NCT_NEWEST_RESULTS",
+        "NCT_INTERMEDIATE_UPDATE",
+    ]

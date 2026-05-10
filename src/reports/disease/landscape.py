@@ -58,11 +58,17 @@ def landscape_sort_key(record: ClinicalTrialRecord) -> tuple[int, int, date, str
     primary = record.primary_stratum or "unclassified"
     priority = STRATUM_PRIORITY.get(primary, STRATUM_PRIORITY["unclassified"])
     has_results_rank = 0 if record.has_results else 1
-    newest_date = (
-        record.last_update_posted
-        or record.results_first_posted
-        or record.study_first_posted
-        or date.min
+    newest_date = max(
+        (
+            value
+            for value in (
+                record.last_update_posted,
+                record.results_first_posted,
+                record.study_first_posted,
+            )
+            if value is not None
+        ),
+        default=date.min,
     )
     return (priority, has_results_rank, date.max - newest_date, record.nct_number)
 
