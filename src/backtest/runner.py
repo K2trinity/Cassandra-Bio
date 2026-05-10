@@ -43,6 +43,8 @@ from src.backtest.mock_dataset import (
 from src.backtest.multifactor_strategy import (
     generate_mock_multifactor_signals,
     generate_real_multifactor_signals,
+    normalize_real_multifactor_strategy_config,
+    real_multifactor_formula,
     summarize_factor_attribution,
 )
 from src.backtest.result_store import RESULTS_DIR, load_run_payload
@@ -472,6 +474,8 @@ def run_kline_backtest(
     price_source: str | None = None,
     data_snapshot_id: str | None = None,
     holding_period_days: int | None = None,
+    strategy_config: dict | None = None,
+    persist_result: bool = True,
 ) -> dict:
     """Run a single-ticker backtest and persist result as JSON.
 
@@ -507,6 +511,15 @@ def run_kline_backtest(
         )
     except StrategyAccessError as exc:
         return {"error": str(exc)}
+
+    resolved_strategy_config = None
+    if resolved_strategy_id == MULTIFACTOR_SCORE:
+        try:
+            resolved_strategy_config = normalize_real_multifactor_strategy_config(
+                strategy_config
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
 
     use_mock_ohlc = (
         resolved_strategy_id == MOCK_MULTIFACTOR_DEMO
@@ -625,6 +638,7 @@ def run_kline_backtest(
             price_window,
             signal_events,
             report_confidence=report_confidence,
+            strategy_config=resolved_strategy_config,
         )
     else:
         signal_events = align_events_to_trading_dates(eligible_events, price_window)
@@ -697,6 +711,12 @@ def run_kline_backtest(
                 use_mock_ohlc=use_mock_ohlc,
                 source_id=source_profile.source_id,
             ),
+            "config": resolved_strategy_config,
+            "formula": (
+                real_multifactor_formula(resolved_strategy_config)
+                if resolved_strategy_id == MULTIFACTOR_SCORE
+                else None
+            ),
         },
         "risk_parameters": {
             "stop_loss_pct": stop_loss_pct,
@@ -726,10 +746,11 @@ def run_kline_backtest(
         "baseline": compute_baseline(price_window, results),
     }
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / f"{run_id}.json", "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
-    _update_latest_run_index(payload)
+    if persist_result:
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(RESULTS_DIR / f"{run_id}.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
+        _update_latest_run_index(payload)
 
     return payload
 

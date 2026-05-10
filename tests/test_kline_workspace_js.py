@@ -149,6 +149,8 @@ def test_workspace_js_fetches_backtest_options_for_current_ticker():
         installWorkspace(makeWorkspace({ ticker: 'MRNA' }));
         runWorkspace();
         await settle();
+        await settle();
+        await settle();
 
         if (requests[0] !== '/api/backtest/options?ticker=MRNA') {
           throw new Error('expected ticker-aware options request, got ' + requests.join(','));
@@ -370,6 +372,257 @@ def test_workspace_js_backtest_panel_has_chart_mode_control():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_universe_uses_portfolio_snapshot_defaults():
+    result = _run_workspace_script(r"""
+        let requestBody = null;
+        window.fetch = function (url, options) {
+          if (url === '/api/backtest/options?ticker=MRNA') {
+            return Promise.resolve(jsonResponse({
+              default_price_source: 'yfinance',
+              default_data_snapshot_id: 'snap_mrna_cache',
+              snapshots: [{
+                data_snapshot_id: 'snap_latest_tiingo',
+                snapshot_date: '2026-05-10',
+                price_source: 'tiingo',
+                universe_id: 'biotech_us_v1',
+                bias_profile: 'current_constituents_only'
+              }, {
+                data_snapshot_id: 'snap_old_tiingo',
+                snapshot_date: '2026-05-09',
+                price_source: 'tiingo',
+                universe_id: 'biotech_us_v1',
+                bias_profile: 'current_constituents_only'
+              }, {
+                data_snapshot_id: 'snap_mrna_cache',
+                snapshot_date: '2026-05-07',
+                price_source: 'yfinance',
+                universe_id: 'biotech_four_v1',
+                bias_profile: 'survivorship_biased'
+              }],
+              portfolio: {
+                required_price_source: 'tiingo',
+                default_price_source: 'tiingo',
+                default_data_snapshot_id: 'snap_latest_tiingo'
+              }
+            }));
+          }
+          requestBody = JSON.parse(options.body);
+          return Promise.resolve(jsonResponse({
+            run_id: 'portfolio-run',
+            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1 }],
+            portfolio_metrics: {},
+            constituents: [],
+            focus_ticker: { ticker: 'MRNA', signals: [], trades: [] }
+          }));
+        };
+        global.fetch = window.fetch;
+
+        installWorkspace(makeWorkspace({ ticker: 'MRNA' }));
+        runWorkspace();
+        await settle();
+        await settle();
+        await settle();
+
+        const form = document.getElementById('backtest-form');
+        if (form.elements.price_source.value !== 'yfinance') {
+          throw new Error('single-ticker default should remain visible chart cache: ' + form.elements.price_source.value);
+        }
+        if (form.elements.data_snapshot_id.value !== 'snap_latest_tiingo') {
+          throw new Error('portfolio default snapshot should drive universe runs: ' + form.elements.data_snapshot_id.value);
+        }
+
+        const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
+        universeButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+
+        if (requestBody.price_source !== 'tiingo') {
+          throw new Error('portfolio request must use tiingo: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.data_snapshot_id !== 'snap_latest_tiingo') {
+          throw new Error('portfolio request must use portfolio snapshot default: ' + JSON.stringify(requestBody));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_snapshot_select_defaults_latest_universe_and_sends_user_choice():
+    result = _run_workspace_script(r"""
+        let requestBody = null;
+        window.fetch = function (url, options) {
+          if (url === '/api/backtest/options?ticker=MRNA') {
+            return Promise.resolve(jsonResponse({
+              default_price_source: 'yfinance',
+              default_data_snapshot_id: 'snap_mrna_cache',
+              snapshots: [{
+                data_snapshot_id: 'snap_latest_tiingo',
+                snapshot_date: '2026-05-10',
+                price_source: 'tiingo',
+                universe_id: 'biotech_us_v1',
+                bias_profile: 'current_constituents_only'
+              }, {
+                data_snapshot_id: 'snap_user_tiingo',
+                snapshot_date: '2026-05-09',
+                price_source: 'tiingo',
+                universe_id: 'biotech_research_v2',
+                bias_profile: 'current_constituents_only'
+              }, {
+                data_snapshot_id: 'snap_mrna_cache',
+                snapshot_date: '2026-05-07',
+                price_source: 'yfinance',
+                universe_id: 'biotech_four_v1',
+                bias_profile: 'survivorship_biased'
+              }],
+              portfolio: {
+                required_price_source: 'tiingo',
+                default_price_source: 'tiingo',
+                default_data_snapshot_id: 'snap_latest_tiingo',
+                universe_id: 'biotech_us_v1'
+              }
+            }));
+          }
+          requestBody = JSON.parse(options.body);
+          return Promise.resolve(jsonResponse({
+            run_id: 'portfolio-run',
+            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1 }],
+            portfolio_metrics: {},
+            constituents: [],
+            focus_ticker: { ticker: 'MRNA', signals: [], trades: [] }
+          }));
+        };
+        global.fetch = window.fetch;
+
+        installWorkspace(makeWorkspace({ ticker: 'MRNA' }));
+        runWorkspace();
+        await settle();
+        await settle();
+        await settle();
+
+        const form = document.getElementById('backtest-form');
+        const snapshotControl = form.elements.data_snapshot_id;
+        if (!snapshotControl || snapshotControl.tagName !== 'SELECT') {
+          throw new Error('data snapshot must be selectable');
+        }
+        if (snapshotControl.value !== 'snap_latest_tiingo') {
+          throw new Error('latest portfolio snapshot should be selected by default: ' + snapshotControl.value);
+        }
+        const options = snapshotControl.children.map((option) => option.value).join(',');
+        if (options !== 'snap_latest_tiingo,snap_user_tiingo') {
+          throw new Error('snapshot options should list tiingo snapshots only: ' + options);
+        }
+
+        snapshotControl.value = 'snap_user_tiingo';
+        snapshotControl.dispatchEvent({ type: 'change' });
+        if (form.elements.universe_id.value !== 'biotech_research_v2') {
+          throw new Error('universe id should follow selected snapshot: ' + form.elements.universe_id.value);
+        }
+
+        const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
+        universeButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+
+        if (requestBody.price_source !== 'tiingo') {
+          throw new Error('portfolio request must use tiingo: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.data_snapshot_id !== 'snap_user_tiingo') {
+          throw new Error('portfolio request should send user-selected snapshot: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.universe_id !== 'biotech_research_v2') {
+          throw new Error('portfolio request should send selected snapshot universe: ' + JSON.stringify(requestBody));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+
+def test_workspace_js_strategy_builder_sends_editable_config():
+    result = _run_workspace_script(r"""
+        let requestBody = null;
+        window.fetch = function (url, options) {
+          if (url === '/api/backtest/options?ticker=MRNA') {
+            return Promise.resolve(jsonResponse({
+              default_price_source: 'tiingo',
+              default_data_snapshot_id: 'snap_latest_tiingo',
+              portfolio: {
+                required_price_source: 'tiingo',
+                default_price_source: 'tiingo',
+                default_data_snapshot_id: 'snap_latest_tiingo'
+              }
+            }));
+          }
+          requestBody = JSON.parse(options.body);
+          return Promise.resolve(jsonResponse({
+            run_id: 'portfolio-run',
+            portfolio_equity_curve: [{ date: '2026-04-20', equity: 1 }],
+            portfolio_metrics: {},
+            constituents: [],
+            focus_ticker: { ticker: 'MRNA', signals: [], trades: [] }
+          }));
+        };
+        global.fetch = window.fetch;
+
+        installWorkspace(makeWorkspace({ ticker: 'MRNA' }));
+        runWorkspace();
+        await settle();
+        await settle();
+        await settle();
+
+        const form = document.getElementById('backtest-form');
+        [
+          'strategy_weight_trend',
+          'strategy_weight_momentum',
+          'strategy_weight_liquidity',
+          'strategy_weight_volatility',
+          'strategy_weight_event',
+          'strategy_window_fast',
+          'strategy_window_slow',
+          'strategy_threshold_long',
+          'strategy_threshold_short'
+        ].forEach((name) => {
+          if (!form.elements[name]) {
+            throw new Error('strategy builder control missing: ' + name);
+          }
+        });
+        const formula = document.getElementById('strategy-formula-preview');
+        if (!formula || !formula.textContent.includes('alpha =')) {
+          throw new Error('strategy formula preview missing');
+        }
+
+        form.elements.strategy_weight_trend.value = '0.5';
+        form.elements.strategy_weight_momentum.value = '0.25';
+        form.elements.strategy_weight_liquidity.value = '0.1';
+        form.elements.strategy_weight_volatility.value = '-0.2';
+        form.elements.strategy_weight_event.value = '0.35';
+        form.elements.strategy_window_fast.value = '10';
+        form.elements.strategy_window_slow.value = '40';
+        form.elements.strategy_window_momentum.value = '15';
+        form.elements.strategy_window_volatility.value = '25';
+        form.elements.strategy_window_volume.value = '30';
+        form.elements.strategy_threshold_long.value = '0.2';
+        form.elements.strategy_threshold_short.value = '-0.22';
+
+        const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
+        universeButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+
+        if (!requestBody.strategy_config) {
+          throw new Error('strategy_config missing from request: ' + JSON.stringify(requestBody));
+        }
+        if (requestBody.strategy_config.weights.trend !== 0.5 || requestBody.strategy_config.weights.event !== 0.35) {
+          throw new Error('strategy weights not serialized: ' + JSON.stringify(requestBody.strategy_config));
+        }
+        if (requestBody.strategy_config.windows.fast !== 10 || requestBody.strategy_config.windows.slow !== 40) {
+          throw new Error('strategy windows not serialized: ' + JSON.stringify(requestBody.strategy_config));
+        }
+        if (requestBody.strategy_config.thresholds.long !== 0.2 || requestBody.strategy_config.thresholds.short !== -0.22) {
+          throw new Error('strategy thresholds not serialized: ' + JSON.stringify(requestBody.strategy_config));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_backtest_only_mode_passes_display_mode_and_hides_events():
     result = _run_workspace_script(r"""
         installWorkspace(makeWorkspace({
@@ -486,6 +739,10 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
               trade_count: 3,
               metrics: { sharpe: 1.3 },
               baseline: { buy_hold_return: 2.1 },
+              equity_curve: [
+                { date: '2026-04-20', equity: 1.00 },
+                { date: '2026-04-21', equity: 1.12 }
+              ],
               factor_attribution: {
                 active_factor_days: 3,
                 mean_event_factor: 0.6,
@@ -497,8 +754,18 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
               ticker: 'ALNY',
               strategy_return: -1.2,
               active_signal_days: 1,
-              trade_count: 0
+              trade_count: 0,
+              equity_curve: [
+                { date: '2026-04-20', equity: 1.00 },
+                { date: '2026-04-21', equity: 0.98 }
+              ]
             }],
+            focus_ticker_status: {
+              requested_ticker: 'MRNA',
+              resolved_ticker: 'MRNA',
+              available: true,
+              reason: null
+            },
             focus_ticker: {
               ticker: 'MRNA',
               equity_curve: [{ date: '2026-04-20', equity: 1.05 }],
@@ -514,7 +781,10 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
                 positive_demo_expected: true
               }
             },
-            strategy: { id: 'internal-strategy' },
+            strategy: {
+              id: 'internal-strategy',
+              formula: 'alpha = 0.45 * trend(12,36) + 0.25 * event_score'
+            },
             mock_metadata: {
               mock: true,
               synthetic: true,
@@ -571,11 +841,14 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
         }
 
         const text = document.getElementById('backtest-results').textContent;
-        ['strategy_return', '14.25', 'best_ticker', 'VRTX', 'worst_ticker', 'ALNY', 'total_trades', '9', 'MRNA', '12.5', 'trade_count', 'active_factor_days', 'mean_event_factor'].forEach((expected) => {
+        ['Strategy Formula', 'alpha = 0.45 * trend(12,36)', 'strategy_return', '14.25', 'best_ticker', 'VRTX', 'worst_ticker', 'ALNY', 'total_trades', '9', 'MRNA', '12.5', 'trade_count', 'active_factor_days', 'mean_event_factor'].forEach((expected) => {
           if (!text.includes(expected)) {
             throw new Error('portfolio diagnostics missing ' + expected + ': ' + text);
           }
         });
+        if (document.getElementById('backtest-results').querySelectorAll('svg').length < 2) {
+          throw new Error('portfolio constituent equity curves were not rendered');
+        }
 
         const lowerText = text.toLowerCase();
         ['mock', 'synthetic', 'data_mode', 'positive_demo_expected', 'universe_id', 'internal-strategy'].forEach((forbidden) => {
@@ -583,6 +856,152 @@ def test_workspace_js_universe_backtest_renders_portfolio_and_focus_overlays_wit
             throw new Error('forbidden disclosure leaked into portfolio diagnostics: ' + forbidden + ' in ' + text);
           }
         });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_universe_backtest_results_use_spaced_portfolio_layout():
+    result = _run_workspace_script(r"""
+        function byClass(root, className) {
+          const found = [];
+          function visit(node) {
+            if (node.classList && node.classList.contains(className)) {
+              found.push(node);
+            }
+            (node.children || []).forEach(visit);
+          }
+          visit(root);
+          return found;
+        }
+
+        function mockFetch(url, options) {
+          if (!options || options.method !== 'POST') {
+            return Promise.resolve(jsonResponse({
+              default_price_source: 'tiingo',
+              snapshots: [{
+                data_snapshot_id: 'snap_layout',
+                price_source: 'tiingo',
+                universe_id: 'biotech_us_v1',
+                snapshot_date: '2026-05-10'
+              }],
+              portfolio: {
+                required_price_source: 'tiingo',
+                default_price_source: 'tiingo',
+                default_data_snapshot_id: 'snap_layout',
+                universe_id: 'biotech_us_v1'
+              }
+            }));
+          }
+          return Promise.resolve(jsonResponse({
+            run_id: 'portfolio-layout-run',
+            portfolio_equity_curve: [
+              { date: '2026-04-20', equity: 1.00 },
+              { date: '2026-04-21', equity: 1.08 }
+            ],
+            portfolio_metrics: {
+              strategy_return: 8.1,
+              best_ticker: 'MRNA',
+              worst_ticker: 'ALNY',
+              total_trades: 4,
+              avg_active_signal_days: 3,
+              avg_exposure_days: 5
+            },
+            constituents: [{
+              ticker: 'MRNA',
+              strategy_return: 8.1,
+              active_signal_days: 3,
+              trade_count: 2,
+              exposure_summary: { exposure_days: 5 },
+              equity_curve: [
+                { date: '2026-04-20', equity: 1.00 },
+                { date: '2026-04-21', equity: 1.08 }
+              ]
+            }, {
+              ticker: 'ALNY',
+              strategy_return: -1.4,
+              active_signal_days: 1,
+              trade_count: 0,
+              exposure_summary: { exposure_days: 1 },
+              equity_curve: [
+                { date: '2026-04-20', equity: 1.00 },
+                { date: '2026-04-21', equity: 0.99 }
+              ]
+            }],
+            focus_ticker_status: {
+              requested_ticker: 'VRTX',
+              resolved_ticker: 'MRNA',
+              available: false
+            },
+            focus_ticker: {
+              ticker: 'MRNA',
+              signals: [],
+              trades: [],
+              factor_attribution: {
+                active_factor_days: 3,
+                mean_event_factor: 0.42,
+                mean_liquidity_factor: 0.18
+              }
+            },
+            strategy: {
+              formula: 'alpha = 0.45 * trend(12,36) + 0.35 * momentum(20)'
+            }
+          }));
+        }
+        fetch = mockFetch;
+        window.fetch = mockFetch;
+
+        installWorkspace(makeWorkspace());
+        runWorkspace();
+        await settle();
+        await settle();
+
+        const form = document.getElementById('backtest-form');
+        form.elements.price_source.value = 'tiingo';
+        form.elements.data_snapshot_id.value = 'snap_layout';
+        const universeButton = form.children.find((child) => child.tagName === 'BUTTON' && child.textContent === 'Run Universe');
+        universeButton.dispatchEvent({ type: 'click', preventDefault() {} });
+        await settle();
+        await settle();
+
+        const results = document.getElementById('backtest-results');
+        const layout = byClass(results, 'portfolio-results')[0];
+        if (!layout) {
+          throw new Error('portfolio results should render inside a dedicated layout container');
+        }
+        const overview = byClass(layout, 'portfolio-overview')[0];
+        const grid = byClass(layout, 'portfolio-results-grid')[0];
+        if (!overview || !grid) {
+          throw new Error('portfolio layout should split overview and detail grid regions');
+        }
+        const summary = byClass(layout, 'portfolio-summary')[0];
+        const strategy = byClass(layout, 'portfolio-strategy')[0];
+        const leaderboard = byClass(layout, 'portfolio-leaderboard')[0];
+        const focus = byClass(layout, 'portfolio-focus')[0];
+        if (!summary || summary.parentNode !== overview || !strategy || strategy.parentNode !== overview) {
+          throw new Error('strategy and summary should live in the overview region');
+        }
+        if (!leaderboard || leaderboard.parentNode !== grid || !focus || focus.parentNode !== grid) {
+          throw new Error('constituents and focus diagnostics should be separated in the detail grid');
+        }
+
+        const rows = byClass(leaderboard, 'portfolio-row');
+        if (rows.length !== 2) {
+          throw new Error('expected one separated row per constituent');
+        }
+        const firstRow = rows[0];
+        if (!byClass(firstRow, 'portfolio-row-symbol')[0] || !byClass(firstRow, 'portfolio-row-chart')[0] || !byClass(firstRow, 'portfolio-row-metrics')[0]) {
+          throw new Error('constituent row should split symbol, chart, and metrics columns');
+        }
+        if (byClass(firstRow, 'portfolio-row-metric').length < 4) {
+          throw new Error('constituent row metrics should render as individual metric cells');
+        }
+        if (byClass(firstRow, 'portfolio-row-chart')[0].querySelectorAll('svg').length !== 1) {
+          throw new Error('constituent sparkline should stay in the chart column');
+        }
+        if (!focus.textContent.includes('Focus Ticker') || !focus.textContent.includes('mean_event_factor')) {
+          throw new Error('focus ticker diagnostics should have a dedicated readable panel: ' + focus.textContent);
+        }
         """)
 
     assert result.returncode == 0, result.stderr + result.stdout

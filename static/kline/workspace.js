@@ -18,6 +18,26 @@
     ["yfinance", "Visible Chart Cache"],
     ["tiingo", "Research Snapshot"]
   ];
+  var DEFAULT_STRATEGY_CONFIG = {
+    weights: {
+      trend: 0.45,
+      momentum: 0.35,
+      liquidity: 0.15,
+      volatility: -0.15,
+      event: 0.25
+    },
+    windows: {
+      fast: 12,
+      slow: 36,
+      momentum: 20,
+      volatility: 20,
+      volume: 20
+    },
+    thresholds: {
+      long: 0.18,
+      short: -0.18
+    }
+  };
 
   function byId(id) {
     return document.getElementById(id);
@@ -585,9 +605,37 @@
       option.value = optionValue;
       select.appendChild(option);
     });
-    if (value && Array.prototype.some.call(select.options, function (option) { return option.value === value; })) {
+    var children = Array.prototype.slice.call(select.children || []);
+    if (value && children.some(function (option) { return option.value === value; })) {
       select.value = value;
+    } else if (children.length) {
+      select.value = children[0].value;
     }
+  }
+
+  function snapshotOptionLabel(snapshot) {
+    var parts = [
+      snapshot.data_snapshot_id,
+      snapshot.price_source,
+      snapshot.universe_id,
+      snapshot.snapshot_date
+    ].filter(Boolean);
+    return parts.join(" | ");
+  }
+
+  function snapshotSelectOptions(snapshots) {
+    return (Array.isArray(snapshots) ? snapshots : [])
+      .filter(function (snapshot) {
+        return snapshot &&
+          snapshot.data_snapshot_id &&
+          String(snapshot.price_source || "").trim() === "tiingo";
+      })
+      .map(function (snapshot) {
+        return {
+          id: String(snapshot.data_snapshot_id || ""),
+          label: snapshotOptionLabel(snapshot)
+        };
+      });
   }
 
   function renderMetrics(node, metrics) {
@@ -650,6 +698,17 @@
     });
   }
 
+  function renderStrategyFormula(node, strategy, sectionClassName) {
+    var formula = strategy && typeof strategy.formula === "string" ? strategy.formula.trim() : "";
+    if (!formula || isDisclosureValue(formula)) {
+      return;
+    }
+    var section = makeElement("section", { className: sectionClassName || "backtest-diagnostics" });
+    section.appendChild(makeElement("h3", { className: "panel-heading", text: "Strategy Formula" }));
+    section.appendChild(makeElement("code", { className: "strategy-formula", text: formula }));
+    node.appendChild(section);
+  }
+
   function renderBacktestDiagnostics(node, body) {
     var strategyMetrics = publicStrategyDiagnostics(body && body.strategy);
     if (Object.keys(strategyMetrics).length) {
@@ -658,6 +717,7 @@
       appendMetrics(strategySection, strategyMetrics);
       node.appendChild(strategySection);
     }
+    renderStrategyFormula(node, body && body.strategy);
 
     ["event_filter", "signal_summary", "exposure_summary", "risk_parameters", "baseline", "factor_attribution"].forEach(function (key) {
       if (!body || !body[key]) {
@@ -689,7 +749,52 @@
     grid.appendChild(card);
   }
 
+  function appendPortfolioRowMetric(grid, label, value) {
+    var card = makeElement("div", { className: "portfolio-row-metric" });
+    card.appendChild(makeElement("dt", { text: label }));
+    card.appendChild(makeElement("dd", { text: value == null || value === "" ? "-" : String(value) }));
+    grid.appendChild(card);
+  }
+
+  function makeEquitySparkline(curve) {
+    var points = Array.isArray(curve) ? curve.filter(function (point) {
+      return point && Number.isFinite(Number(point.equity));
+    }) : [];
+    if (points.length < 2) {
+      return null;
+    }
+    var equities = points.map(function (point) { return Number(point.equity); });
+    var min = Math.min.apply(Math, equities);
+    var max = Math.max.apply(Math, equities);
+    var span = max - min || 1;
+    var width = 120;
+    var height = 34;
+    var linePoints = equities.map(function (equity, index) {
+      var x = points.length === 1 ? width : (index / (points.length - 1)) * width;
+      var y = height - ((equity - min) / span) * height;
+      return x.toFixed(2) + "," + y.toFixed(2);
+    }).join(" ");
+    var svg = makeElement("svg", { className: "portfolio-sparkline" });
+    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "constituent equity curve");
+    var polyline = makeElement("polyline");
+    polyline.setAttribute("points", linePoints);
+    polyline.setAttribute("fill", "none");
+    polyline.setAttribute("stroke", "currentColor");
+    polyline.setAttribute("stroke-width", "2");
+    svg.appendChild(polyline);
+    return svg;
+  }
+
   function renderPortfolioDiagnostics(node, body) {
+    node.replaceChildren();
+    var layout = makeElement("div", { className: "portfolio-results" });
+    var overview = makeElement("div", { className: "portfolio-overview" });
+    var detailGrid = makeElement("div", { className: "portfolio-results-grid" });
+
+    renderStrategyFormula(overview, body && body.strategy, "portfolio-strategy");
+
     var metrics = publicMetrics(body && body.portfolio_metrics);
     if (Object.keys(metrics).length) {
       var summary = makeElement("section", { className: "portfolio-summary" });
@@ -699,7 +804,10 @@
         appendPortfolioCard(grid, key, metrics[key]);
       });
       summary.appendChild(grid);
-      node.appendChild(summary);
+      overview.appendChild(summary);
+    }
+    if (overview.children.length) {
+      layout.appendChild(overview);
     }
 
     var constituents = (body && body.constituents) || [];
@@ -708,27 +816,66 @@
       leaderboard.appendChild(makeElement("h3", { className: "panel-heading", text: "Constituents" }));
       constituents.forEach(function (constituent) {
         var row = makeElement("div", { className: "portfolio-row" });
-        row.appendChild(makeElement("strong", { text: publicValue(constituent.ticker) || "-" }));
+        var symbol = makeElement("div", { className: "portfolio-row-symbol" });
+        symbol.appendChild(makeElement("strong", { text: publicValue(constituent.ticker) || "-" }));
+        row.appendChild(symbol);
+        var chartCell = makeElement("div", { className: "portfolio-row-chart" });
+        var sparkline = makeEquitySparkline(constituent.equity_curve);
+        if (sparkline) {
+          chartCell.appendChild(sparkline);
+        } else {
+          chartCell.appendChild(makeElement("span", { className: "portfolio-sparkline-empty", text: "-" }));
+        }
+        row.appendChild(chartCell);
         var details = makeElement("dl", { className: "portfolio-row-metrics" });
         ["strategy_return", "active_signal_days", "trade_count"].forEach(function (key) {
-          appendDefinition(details, key, publicValue(constituent[key]));
+          appendPortfolioRowMetric(details, key, publicValue(constituent[key]));
         });
-        if (constituent.exposure_summary) {
-          appendDefinition(details, "exposure_days", publicValue(constituent.exposure_summary.exposure_days));
-        }
+        appendPortfolioRowMetric(
+          details,
+          "exposure_days",
+          publicValue(constituent.exposure_summary && constituent.exposure_summary.exposure_days)
+        );
         row.appendChild(details);
         leaderboard.appendChild(row);
       });
-      node.appendChild(leaderboard);
+      detailGrid.appendChild(leaderboard);
     }
 
+    var focusStatus = body && body.focus_ticker_status;
     var focus = body && body.focus_ticker;
-    if (focus && focus.factor_attribution) {
-      var section = makeElement("section", { className: "backtest-diagnostics" });
-      section.appendChild(makeElement("h3", { className: "panel-heading", text: "focus_factor_attribution" }));
-      appendMetrics(section, publicFactorAttribution(focus.factor_attribution));
-      node.appendChild(section);
+    var focusAttribution = publicFactorAttribution(focus && focus.factor_attribution);
+    var shouldRenderFocus = (focusStatus && focusStatus.available === false) || Object.keys(focusAttribution).length;
+    if (shouldRenderFocus) {
+      var focusPanel = makeElement("section", { className: "portfolio-focus" });
+      focusPanel.appendChild(makeElement("h3", { className: "panel-heading", text: "Focus Ticker" }));
+      if (focus && focus.ticker) {
+        var focusTicker = makeElement("dl", { className: "portfolio-focus-ticker" });
+        appendPortfolioRowMetric(focusTicker, "ticker", publicValue(focus.ticker) || "-");
+        focusPanel.appendChild(focusTicker);
+      }
+      if (focusStatus && focusStatus.available === false) {
+        focusPanel.appendChild(makeElement("div", {
+          className: "warning-row",
+          text: "Focus ticker " + (focusStatus.requested_ticker || "-") + " is unavailable in this snapshot; showing " + (focusStatus.resolved_ticker || "-") + "."
+        }));
+      }
+      if (Object.keys(focusAttribution).length) {
+        var attribution = makeElement("div", { className: "portfolio-focus-attribution" });
+        attribution.appendChild(makeElement("h4", { className: "panel-subheading", text: "factor_attribution" }));
+        var attributionMetrics = makeElement("dl", { className: "portfolio-focus-metrics" });
+        Object.keys(focusAttribution).forEach(function (key) {
+          appendPortfolioRowMetric(attributionMetrics, key, focusAttribution[key]);
+        });
+        attribution.appendChild(attributionMetrics);
+        focusPanel.appendChild(attribution);
+      }
+      detailGrid.appendChild(focusPanel);
     }
+    if (detailGrid.children.length) {
+      layout.appendChild(detailGrid);
+    }
+    node.appendChild(layout);
   }
 
   function clearBacktestOverlays(workspace, state) {
@@ -767,6 +914,77 @@
     node.appendChild(section);
   }
 
+  function cloneStrategyConfig() {
+    return JSON.parse(JSON.stringify(DEFAULT_STRATEGY_CONFIG));
+  }
+
+  function numericFormValue(form, name, fallback) {
+    var element = form.elements[name];
+    var value = element ? Number(element.value) : fallback;
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function integerFormValue(form, name, fallback) {
+    var value = Math.round(numericFormValue(form, name, fallback));
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function readStrategyConfig(form) {
+    var config = cloneStrategyConfig();
+    config.weights.trend = numericFormValue(form, "strategy_weight_trend", config.weights.trend);
+    config.weights.momentum = numericFormValue(form, "strategy_weight_momentum", config.weights.momentum);
+    config.weights.liquidity = numericFormValue(form, "strategy_weight_liquidity", config.weights.liquidity);
+    config.weights.volatility = numericFormValue(form, "strategy_weight_volatility", config.weights.volatility);
+    config.weights.event = numericFormValue(form, "strategy_weight_event", config.weights.event);
+    config.windows.fast = integerFormValue(form, "strategy_window_fast", config.windows.fast);
+    config.windows.slow = integerFormValue(form, "strategy_window_slow", config.windows.slow);
+    config.windows.momentum = integerFormValue(form, "strategy_window_momentum", config.windows.momentum);
+    config.windows.volatility = integerFormValue(form, "strategy_window_volatility", config.windows.volatility);
+    config.windows.volume = integerFormValue(form, "strategy_window_volume", config.windows.volume);
+    config.thresholds.long = numericFormValue(form, "strategy_threshold_long", config.thresholds.long);
+    config.thresholds.short = numericFormValue(form, "strategy_threshold_short", config.thresholds.short);
+    return config;
+  }
+
+  function strategyFormulaText(config) {
+    return "alpha = " +
+      config.weights.trend + " * trend(" + config.windows.fast + "," + config.windows.slow + ") + " +
+      config.weights.momentum + " * momentum(" + config.windows.momentum + ") + " +
+      config.weights.liquidity + " * liquidity(" + config.windows.volume + ") + " +
+      config.weights.volatility + " * volatility(" + config.windows.volatility + ") + " +
+      config.weights.event + " * event_score; long alpha > " +
+      config.thresholds.long + "; short alpha < " + config.thresholds.short;
+  }
+
+  function addStrategyBuilder(form) {
+    var section = makeElement("section", { className: "strategy-builder" });
+    section.appendChild(makeElement("h3", { className: "panel-heading", text: "Strategy Builder" }));
+    var formula = makeElement("code", {
+      className: "strategy-formula",
+      text: strategyFormulaText(cloneStrategyConfig())
+    });
+    formula.id = "strategy-formula-preview";
+    section.appendChild(formula);
+
+    addInput(section, "Trend Weight", "strategy_weight_trend", "number", String(DEFAULT_STRATEGY_CONFIG.weights.trend), "0.01");
+    addInput(section, "Momentum Weight", "strategy_weight_momentum", "number", String(DEFAULT_STRATEGY_CONFIG.weights.momentum), "0.01");
+    addInput(section, "Liquidity Weight", "strategy_weight_liquidity", "number", String(DEFAULT_STRATEGY_CONFIG.weights.liquidity), "0.01");
+    addInput(section, "Volatility Weight", "strategy_weight_volatility", "number", String(DEFAULT_STRATEGY_CONFIG.weights.volatility), "0.01");
+    addInput(section, "Event Weight", "strategy_weight_event", "number", String(DEFAULT_STRATEGY_CONFIG.weights.event), "0.01");
+    addInput(section, "Fast Window", "strategy_window_fast", "number", String(DEFAULT_STRATEGY_CONFIG.windows.fast), "1");
+    addInput(section, "Slow Window", "strategy_window_slow", "number", String(DEFAULT_STRATEGY_CONFIG.windows.slow), "1");
+    addInput(section, "Momentum Window", "strategy_window_momentum", "number", String(DEFAULT_STRATEGY_CONFIG.windows.momentum), "1");
+    addInput(section, "Volatility Window", "strategy_window_volatility", "number", String(DEFAULT_STRATEGY_CONFIG.windows.volatility), "1");
+    addInput(section, "Volume Window", "strategy_window_volume", "number", String(DEFAULT_STRATEGY_CONFIG.windows.volume), "1");
+    addInput(section, "Long Threshold", "strategy_threshold_long", "number", String(DEFAULT_STRATEGY_CONFIG.thresholds.long), "0.01");
+    addInput(section, "Short Threshold", "strategy_threshold_short", "number", String(DEFAULT_STRATEGY_CONFIG.thresholds.short), "0.01");
+
+    section.addEventListener("change", function () {
+      formula.textContent = strategyFormulaText(readStrategyConfig(form));
+    });
+    form.appendChild(section);
+  }
+
   function renderBacktest(workspace, state) {
     var panel = document.querySelector('[data-panel="backtest"]');
     if (!panel) {
@@ -794,12 +1012,12 @@
       BACKTEST_PRICE_SOURCE_OPTIONS,
       "yfinance"
     );
-    var dataSnapshotInput = addInput(form, "Data Snapshot ID", "data_snapshot_id", "text", "");
+    var dataSnapshotSelect = addSelect(form, "Data Snapshot", "data_snapshot_id", [], "");
     addInput(form, "Stop Loss Fraction", "stop_loss_pct", "number", "-0.08", "0.001");
     addInput(form, "Max Position Fraction", "max_position_pct", "number", "0.2", "0.001");
     addInput(form, "Slippage Fraction", "slippage_pct", "number", "0.001", "0.0001");
     addInput(form, "Hold Days", "holding_period_days", "number", "5", "1");
-    addInput(form, "Universe ID", "universe_id", "text", "biotech_us_v1");
+    var universeInput = addInput(form, "Universe ID", "universe_id", "text", "biotech_us_v1");
     var chartModeSelect = addSelect(
       form,
       "Chart Display Mode",
@@ -807,6 +1025,7 @@
       CHART_DISPLAY_MODES,
       state.chartDisplayMode || "candles_with_backtest"
     );
+    addStrategyBuilder(form);
     form.appendChild(makeElement("button", { type: "submit", text: "Run Backtest" }));
     var universeButton = makeElement("button", {
       type: "button",
@@ -822,13 +1041,42 @@
     results.id = "backtest-results";
     panel.appendChild(status);
     panel.appendChild(results);
+    var portfolioDefaults = {
+      required_price_source: "tiingo",
+      default_price_source: "tiingo",
+      default_data_snapshot_id: "",
+      universe_id: "biotech_us_v1"
+    };
+    var recentSnapshots = [];
+    var universeTouched = false;
 
     function syncSnapshotControl() {
-      dataSnapshotInput.disabled = priceSourceSelect.value !== "tiingo";
+      dataSnapshotSelect.disabled = false;
+    }
+
+    function selectedSnapshot() {
+      var snapshotId = String(dataSnapshotSelect.value || "").trim();
+      for (var index = 0; index < recentSnapshots.length; index += 1) {
+        if (String(recentSnapshots[index].data_snapshot_id || "") === snapshotId) {
+          return recentSnapshots[index];
+        }
+      }
+      return null;
+    }
+
+    function syncUniverseFromSelectedSnapshot(force) {
+      var snapshot = selectedSnapshot();
+      if (!snapshot || !snapshot.universe_id) {
+        return;
+      }
+      if (force || !universeTouched) {
+        universeInput.value = String(snapshot.universe_id || "");
+      }
     }
 
     function applyBacktestOptions(options) {
       options = options || {};
+      recentSnapshots = Array.isArray(options.snapshots) ? options.snapshots : [];
       replaceSelectOptions(
         strategySelect,
         options.strategies || BACKTEST_STRATEGY_OPTIONS,
@@ -839,9 +1087,20 @@
         options.price_sources || BACKTEST_PRICE_SOURCE_OPTIONS,
         options.default_price_source || priceSourceSelect.value || "tiingo"
       );
-      if (options.default_data_snapshot_id && !dataSnapshotInput.value) {
-        dataSnapshotInput.value = options.default_data_snapshot_id;
+      if (options.portfolio) {
+        portfolioDefaults = {
+          required_price_source: options.portfolio.required_price_source || "tiingo",
+          default_price_source: options.portfolio.default_price_source || "tiingo",
+          default_data_snapshot_id: options.portfolio.default_data_snapshot_id || "",
+          universe_id: options.portfolio.universe_id || "biotech_us_v1"
+        };
       }
+      replaceSelectOptions(
+        dataSnapshotSelect,
+        snapshotSelectOptions(recentSnapshots),
+        portfolioDefaults.default_data_snapshot_id || options.default_data_snapshot_id || dataSnapshotSelect.value
+      );
+      syncUniverseFromSelectedSnapshot(false);
       syncSnapshotControl();
     }
 
@@ -883,11 +1142,36 @@
       renderChart(workspace, state);
     });
     priceSourceSelect.addEventListener("change", syncSnapshotControl);
+    dataSnapshotSelect.addEventListener("change", function () {
+      var snapshot = selectedSnapshot();
+      if (snapshot && snapshot.price_source) {
+        priceSourceSelect.value = String(snapshot.price_source || priceSourceSelect.value);
+      }
+      syncUniverseFromSelectedSnapshot(true);
+      syncSnapshotControl();
+    });
+    universeInput.addEventListener("input", function () {
+      universeTouched = true;
+    });
+    universeInput.addEventListener("change", function () {
+      universeTouched = true;
+    });
     syncSnapshotControl();
     loadBacktestOptions();
 
-    function requestPayload() {
+    function requestPayload(options) {
+      options = options || {};
       var priceSource = String(form.elements.price_source.value || "tiingo").trim();
+      var selectedDataSnapshotId = String(form.elements.data_snapshot_id.value || "").trim();
+      if (options.portfolio) {
+        var requiredSource = String(portfolioDefaults.required_price_source || portfolioDefaults.default_price_source || "tiingo").trim();
+        if (priceSource !== requiredSource) {
+          priceSource = requiredSource;
+        }
+        if (!selectedDataSnapshotId) {
+          selectedDataSnapshotId = String(portfolioDefaults.default_data_snapshot_id || "").trim();
+        }
+      }
       var payload = {
         ticker: workspace.ticker,
         start_date: form.elements.start_date.value,
@@ -899,15 +1183,15 @@
         stop_loss_pct: Number(form.elements.stop_loss_pct.value),
         max_position_pct: Number(form.elements.max_position_pct.value),
         slippage_pct: Number(form.elements.slippage_pct.value),
-        holding_period_days: Number(form.elements.holding_period_days.value)
+        holding_period_days: Number(form.elements.holding_period_days.value),
+        strategy_config: readStrategyConfig(form)
       };
       var universeId = String(form.elements.universe_id.value || "").trim();
-      var dataSnapshotId = String(form.elements.data_snapshot_id.value || "").trim();
       if (universeId) {
         payload.universe_id = universeId;
       }
-      if (priceSource === "tiingo" && dataSnapshotId) {
-        payload.data_snapshot_id = dataSnapshotId;
+      if (priceSource === "tiingo" && selectedDataSnapshotId) {
+        payload.data_snapshot_id = selectedDataSnapshotId;
       }
       return payload;
     }
@@ -916,7 +1200,18 @@
       options = options || {};
       state.backtestRequestId = (state.backtestRequestId || 0) + 1;
       var requestId = state.backtestRequestId;
-      var payload = requestPayload();
+      var payload = requestPayload(options);
+      var strategyConfig = payload.strategy_config || {};
+      var strategyWindows = strategyConfig.windows || {};
+      var strategyThresholds = strategyConfig.thresholds || {};
+      if (strategyWindows.fast >= strategyWindows.slow) {
+        status.textContent = "Fast window must be less than slow window.";
+        return;
+      }
+      if (strategyThresholds.short >= strategyThresholds.long) {
+        status.textContent = "Short threshold must be less than long threshold.";
+        return;
+      }
       if (payload.price_source === "tiingo" && !payload.data_snapshot_id) {
         status.textContent = "Select a data snapshot.";
         return;

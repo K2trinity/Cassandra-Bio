@@ -16,6 +16,35 @@ FACTOR_COLUMNS = [
     "regime_factor",
 ]
 DEFAULT_MOCK_SIGNAL_THRESHOLD = 0.15
+DEFAULT_REAL_MULTIFACTOR_CONFIG = {
+    "weights": {
+        "trend": 0.45,
+        "momentum": 0.35,
+        "liquidity": 0.15,
+        "volatility": -0.15,
+        "event": 0.25,
+    },
+    "windows": {
+        "fast": 12,
+        "slow": 36,
+        "momentum": 20,
+        "volatility": 20,
+        "volume": 20,
+    },
+    "thresholds": {
+        "long": 0.18,
+        "short": -0.18,
+    },
+}
+REAL_MULTIFACTOR_WEIGHT_KEYS = frozenset(DEFAULT_REAL_MULTIFACTOR_CONFIG["weights"])
+REAL_MULTIFACTOR_WINDOW_KEYS = frozenset(DEFAULT_REAL_MULTIFACTOR_CONFIG["windows"])
+REAL_MULTIFACTOR_THRESHOLD_KEYS = frozenset(
+    DEFAULT_REAL_MULTIFACTOR_CONFIG["thresholds"]
+)
+
+
+class StrategyConfigError(ValueError):
+    pass
 
 
 def generate_mock_multifactor_signals(
@@ -46,6 +75,7 @@ def generate_real_multifactor_signals(
     price_window: pd.DataFrame,
     events_df: pd.DataFrame,
     report_confidence: float = 1.0,
+    strategy_config: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Generate non-hindsight signals from visible OHLC history and optional events.
 
@@ -55,6 +85,11 @@ def generate_real_multifactor_signals(
     """
     if price_window.empty or "date" not in price_window.columns:
         return pd.DataFrame(columns=["date", "signal", "signal_strength"])
+
+    config = normalize_real_multifactor_strategy_config(strategy_config)
+    weights = config["weights"]
+    windows = config["windows"]
+    thresholds = config["thresholds"]
 
     required_columns = {"date", "close"}
     if not required_columns.issubset(price_window.columns):
@@ -72,31 +107,48 @@ def generate_real_multifactor_signals(
 
     close = rows["close"].clip(lower=0.01)
     returns = close.pct_change()
-    fast_ma = close.rolling(12, min_periods=6).mean()
-    slow_ma = close.rolling(36, min_periods=12).mean()
+    fast_ma = close.rolling(
+        windows["fast"],
+        min_periods=max(2, windows["fast"] // 2),
+    ).mean()
+    slow_ma = close.rolling(
+        windows["slow"],
+        min_periods=max(3, windows["slow"] // 3),
+    ).mean()
     trend = ((fast_ma / slow_ma) - 1).clip(-0.08, 0.08) / 0.08
-    momentum = close.pct_change(20).clip(-0.25, 0.25) / 0.25
-    volatility = returns.rolling(20, min_periods=8).std().fillna(0.0)
+    momentum = close.pct_change(windows["momentum"]).clip(-0.25, 0.25) / 0.25
+    volatility = (
+        returns.rolling(
+            windows["volatility"],
+            min_periods=max(3, windows["volatility"] // 2),
+        )
+        .std()
+        .fillna(0.0)
+    )
     volatility_penalty = (volatility / 0.08).clip(0.0, 1.0)
     volume_ratio = (
-        rows["volume"] / rows["volume"].rolling(20, min_periods=5).mean().clip(lower=1.0)
+        rows["volume"]
+        / rows["volume"]
+        .rolling(windows["volume"], min_periods=max(3, windows["volume"] // 4))
+        .mean()
+        .clip(lower=1.0)
     ).replace([math.inf, -math.inf], 1.0).fillna(1.0)
-    liquidity = ((volume_ratio - 1.0).clip(-0.5, 0.5) / 0.5) * 0.15
+    liquidity = (volume_ratio - 1.0).clip(-0.5, 0.5) / 0.5
 
     price_score = (
-        0.45 * trend.fillna(0.0)
-        + 0.35 * momentum.fillna(0.0)
-        + liquidity.fillna(0.0)
-        - 0.15 * volatility_penalty.fillna(0.0)
+        weights["trend"] * trend.fillna(0.0)
+        + weights["momentum"] * momentum.fillna(0.0)
+        + weights["liquidity"] * liquidity.fillna(0.0)
+        + weights["volatility"] * volatility_penalty.fillna(0.0)
     ).shift(1).fillna(0.0)
 
     event_component = _event_component(rows, events_df, report_confidence)
-    score = (price_score + event_component).clip(-1.0, 1.0)
+    score = (price_score + weights["event"] * event_component).clip(-1.0, 1.0)
 
     signals = rows[["date"]].copy()
     signals["signal"] = 0
-    signals.loc[score > 0.18, "signal"] = 1
-    signals.loc[score < -0.18, "signal"] = -1
+    signals.loc[score > thresholds["long"], "signal"] = 1
+    signals.loc[score < thresholds["short"], "signal"] = -1
     signals["signal_strength"] = score.abs().where(signals["signal"] != 0, 0.0).clip(
         lower=0.0,
         upper=1.0,
@@ -154,7 +206,166 @@ def _event_component(
     event_rows["date"] = _normalize_dates(event_rows["date"])
     merged = price_window[["date"]].merge(event_rows, on="date", how="left")
     event_direction = merged["signal"].fillna(0.0) * merged["signal_strength"].fillna(0.0)
-    return (event_direction * 0.25).shift(1).fillna(0.0)
+    return event_direction.shift(1).fillna(0.0)
+
+
+def normalize_real_multifactor_strategy_config(
+    value: dict[str, Any] | None,
+) -> dict[str, dict[str, float | int]]:
+    config: dict[str, dict[str, float | int]] = {
+        section: dict(values)
+        for section, values in DEFAULT_REAL_MULTIFACTOR_CONFIG.items()
+    }
+    if value is None:
+        return config
+    if not isinstance(value, dict):
+        raise StrategyConfigError("strategy_config must be an object")
+
+    unknown_sections = sorted(set(value) - {"weights", "windows", "thresholds"})
+    if unknown_sections:
+        raise StrategyConfigError(
+            "strategy_config contains unsupported sections: "
+            + ", ".join(unknown_sections)
+        )
+
+    _merge_float_section(
+        config["weights"],
+        value.get("weights"),
+        section_name="weights",
+        allowed_keys=REAL_MULTIFACTOR_WEIGHT_KEYS,
+        min_value=-5.0,
+        max_value=5.0,
+    )
+    _merge_int_section(
+        config["windows"],
+        value.get("windows"),
+        section_name="windows",
+        allowed_keys=REAL_MULTIFACTOR_WINDOW_KEYS,
+        min_value=2,
+        max_value=504,
+    )
+    _merge_float_section(
+        config["thresholds"],
+        value.get("thresholds"),
+        section_name="thresholds",
+        allowed_keys=REAL_MULTIFACTOR_THRESHOLD_KEYS,
+        min_value=-1.0,
+        max_value=1.0,
+    )
+
+    if int(config["windows"]["fast"]) >= int(config["windows"]["slow"]):
+        raise StrategyConfigError(
+            "strategy_config.windows.fast must be less than strategy_config.windows.slow"
+        )
+    if float(config["thresholds"]["short"]) >= float(config["thresholds"]["long"]):
+        raise StrategyConfigError(
+            "strategy_config.thresholds.short must be less than strategy_config.thresholds.long"
+        )
+    if float(config["thresholds"]["long"]) <= 0:
+        raise StrategyConfigError("strategy_config.thresholds.long must be positive")
+    if float(config["thresholds"]["short"]) >= 0:
+        raise StrategyConfigError("strategy_config.thresholds.short must be negative")
+
+    return config
+
+
+def real_multifactor_formula(config: dict[str, Any] | None = None) -> str:
+    resolved = normalize_real_multifactor_strategy_config(config)
+    weights = resolved["weights"]
+    windows = resolved["windows"]
+    thresholds = resolved["thresholds"]
+    return (
+        "alpha = "
+        f"{weights['trend']} * trend({windows['fast']},{windows['slow']}) + "
+        f"{weights['momentum']} * momentum({windows['momentum']}) + "
+        f"{weights['liquidity']} * liquidity({windows['volume']}) + "
+        f"{weights['volatility']} * volatility({windows['volatility']}) + "
+        f"{weights['event']} * event_score; "
+        f"long alpha > {thresholds['long']}; "
+        f"short alpha < {thresholds['short']}"
+    )
+
+
+def _merge_float_section(
+    target: dict[str, float | int],
+    raw: object,
+    *,
+    section_name: str,
+    allowed_keys: frozenset[str],
+    min_value: float,
+    max_value: float,
+) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise StrategyConfigError(f"strategy_config.{section_name} must be an object")
+    unknown = sorted(set(raw) - allowed_keys)
+    if unknown:
+        raise StrategyConfigError(
+            f"strategy_config.{section_name} contains unsupported keys: "
+            + ", ".join(unknown)
+        )
+    for key, value in raw.items():
+        number = _finite_number(
+            value,
+            f"strategy_config.{section_name}.{key}",
+            min_value=min_value,
+            max_value=max_value,
+        )
+        target[key] = number
+
+
+def _merge_int_section(
+    target: dict[str, float | int],
+    raw: object,
+    *,
+    section_name: str,
+    allowed_keys: frozenset[str],
+    min_value: int,
+    max_value: int,
+) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise StrategyConfigError(f"strategy_config.{section_name} must be an object")
+    unknown = sorted(set(raw) - allowed_keys)
+    if unknown:
+        raise StrategyConfigError(
+            f"strategy_config.{section_name} contains unsupported keys: "
+            + ", ".join(unknown)
+        )
+    for key, value in raw.items():
+        number = _finite_number(
+            value,
+            f"strategy_config.{section_name}.{key}",
+            min_value=float(min_value),
+            max_value=float(max_value),
+        )
+        if not float(number).is_integer():
+            raise StrategyConfigError(
+                f"strategy_config.{section_name}.{key} must be an integer"
+            )
+        target[key] = int(number)
+
+
+def _finite_number(
+    value: object,
+    label: str,
+    *,
+    min_value: float,
+    max_value: float,
+) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise StrategyConfigError(f"{label} must be numeric") from exc
+    if not math.isfinite(number):
+        raise StrategyConfigError(f"{label} must be finite")
+    if not (min_value <= number <= max_value):
+        raise StrategyConfigError(
+            f"{label} must be between {min_value:g} and {max_value:g}"
+        )
+    return number
 
 
 def _factor_scores(factors: pd.DataFrame) -> pd.DataFrame:

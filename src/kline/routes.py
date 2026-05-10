@@ -20,6 +20,10 @@ from src.backtest.runner import (
     normalize_kline_ticker,
     run_kline_backtest,
 )
+from src.backtest.multifactor_strategy import (
+    StrategyConfigError,
+    normalize_real_multifactor_strategy_config,
+)
 from src.backtest.strategy_registry import EVENT_BASELINE, MULTIFACTOR_SCORE
 from src.kline.ticker_resolver import TickerResolver
 from src.kline.workspace_service import KlineWorkspaceService
@@ -213,6 +217,22 @@ def _select_default_data_snapshot(
     return snapshots[0] if snapshots else None
 
 
+def _select_default_portfolio_snapshot(
+    snapshots: list[dict[str, str | None]],
+    universe_id: str = "biotech_us_v1",
+) -> dict[str, str | None] | None:
+    for snapshot in snapshots:
+        if (
+            snapshot.get("price_source") == "tiingo"
+            and snapshot.get("universe_id") == universe_id
+        ):
+            return snapshot
+    for snapshot in snapshots:
+        if snapshot.get("price_source") == "tiingo":
+            return snapshot
+    return None
+
+
 @kline_bp.get("/api/backtest/options")
 def api_backtest_options():
     """Return real backtest strategy and data snapshot controls for K-line UI."""
@@ -228,6 +248,7 @@ def api_backtest_options():
     )
     if default_price_source not in {"tiingo", "yfinance"}:
         default_price_source = "tiingo"
+    portfolio_snapshot = _select_default_portfolio_snapshot(snapshots)
 
     return jsonify(
         {
@@ -240,6 +261,16 @@ def api_backtest_options():
             "default_data_snapshot_id": (
                 default_snapshot.get("data_snapshot_id") if default_snapshot else None
             ),
+            "portfolio": {
+                "required_price_source": "tiingo",
+                "default_price_source": "tiingo",
+                "default_data_snapshot_id": (
+                    portfolio_snapshot.get("data_snapshot_id")
+                    if portfolio_snapshot
+                    else None
+                ),
+                "universe_id": "biotech_us_v1",
+            },
             "snapshots": snapshots,
         }
     )
@@ -295,6 +326,31 @@ def _parse_backtest_run_request():
     )
     if not universe_id:
         universe_id = "biotech_us_v1"
+    raw_strategy_config = data.get("strategy_config")
+    strategy_config = None
+    if raw_strategy_config is not None:
+        try:
+            strategy_config = normalize_real_multifactor_strategy_config(
+                raw_strategy_config
+            )
+        except StrategyConfigError as exc:
+            return None, (
+                jsonify({"error": str(exc)}),
+                400,
+            )
+    raw_persist_result = data.get("persist_result", True)
+    if isinstance(raw_persist_result, bool):
+        persist_result = raw_persist_result
+    elif isinstance(raw_persist_result, str) and raw_persist_result.lower() in {
+        "true",
+        "false",
+    }:
+        persist_result = raw_persist_result.lower() == "true"
+    else:
+        return None, (
+            jsonify({"error": "persist_result must be a boolean"}),
+            400,
+        )
 
     if not str(raw_ticker or "").strip() or not start_date or not end_date:
         return None, (
@@ -433,6 +489,8 @@ def _parse_backtest_run_request():
         "price_source": price_source,
         "data_snapshot_id": data_snapshot_id,
         "universe_id": universe_id,
+        "strategy_config": strategy_config,
+        "persist_result": persist_result,
     }, None
 
 
@@ -458,6 +516,8 @@ def api_backtest_run():
         backtest_mode=parsed["backtest_mode"],
         price_source=parsed["price_source"],
         data_snapshot_id=parsed["data_snapshot_id"],
+        strategy_config=parsed["strategy_config"],
+        persist_result=parsed["persist_result"],
     )
 
     if isinstance(result, dict) and result.get("error"):
@@ -494,6 +554,8 @@ def api_backtest_portfolio_run():
         as_of_date=None if parsed["data_snapshot_id"] else parsed["end_date"],
         data_snapshot_id=parsed["data_snapshot_id"],
         price_source=portfolio_price_source,
+        strategy_config=parsed["strategy_config"],
+        persist_result=parsed["persist_result"],
     )
 
     if isinstance(result, dict) and result.get("error"):

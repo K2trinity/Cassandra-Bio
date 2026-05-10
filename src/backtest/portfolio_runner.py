@@ -12,6 +12,11 @@ from src.backtest.data_sources import (
     TIINGO_PROFILE,
     validate_source_for_mode,
 )
+from src.backtest.multifactor_strategy import (
+    StrategyConfigError,
+    normalize_real_multifactor_strategy_config,
+    real_multifactor_formula,
+)
 from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_database
 from src.backtest.runner import normalize_kline_ticker, run_kline_backtest
 from src.backtest.strategy_registry import StrategyAccessError, validate_strategy_access
@@ -169,6 +174,7 @@ def _constituent_row(payload: dict) -> dict:
             "baseline": payload.get("baseline", {}),
             "factor_attribution": payload.get("factor_attribution", {}),
             "exposure_summary": payload.get("exposure_summary", {}),
+            "equity_curve": payload.get("equity_curve", []),
         }
     )
 
@@ -306,6 +312,7 @@ def _persist_portfolio_backtest_run(
         "end_date": end_date,
         "as_of_date": as_of_date,
         "price_source": price_source,
+        "strategy": payload.get("strategy", {}),
         "risk_parameters": payload.get("risk_parameters", {}),
         "eligible_tickers": payload.get("eligible_tickers", []),
         "completed_tickers": payload.get("tickers", []),
@@ -377,10 +384,13 @@ def _run_biotech_portfolio_backtest(
     max_position_pct: float = 0.2,
     slippage_pct: float = 0.001,
     holding_period_days: int | None = None,
+    strategy_config: dict | None = None,
 ) -> dict:
-    normalized_focus_ticker = normalize_kline_ticker(focus_ticker)
-    if normalized_focus_ticker not in tickers:
-        normalized_focus_ticker = tickers[0]
+    requested_focus_ticker = normalize_kline_ticker(focus_ticker)
+    initial_focus_in_universe = requested_focus_ticker in tickers
+    normalized_focus_ticker = (
+        requested_focus_ticker if initial_focus_in_universe else tickers[0]
+    )
 
     resolved_holding_period_days = holding_period_days or 5
     runs = []
@@ -398,6 +408,8 @@ def _run_biotech_portfolio_backtest(
             data_mode=data_mode,
             price_source=price_source,
             data_snapshot_id=data_snapshot_id,
+            strategy_config=strategy_config,
+            persist_result=False,
         )
         if isinstance(payload, dict) and payload.get("error"):
             if data_snapshot_id is not None and _is_snapshot_price_gap(payload.get("error")):
@@ -428,8 +440,18 @@ def _run_biotech_portfolio_backtest(
         }
 
     completed_tickers = tuple(str(payload.get("ticker")) for payload in runs)
-    if normalized_focus_ticker not in completed_tickers:
+    focus_available = requested_focus_ticker in completed_tickers
+    if focus_available:
+        normalized_focus_ticker = requested_focus_ticker
+    else:
         normalized_focus_ticker = completed_tickers[0]
+    focus_status_reason = None
+    if not focus_available:
+        focus_status_reason = (
+            "requested_ticker_missing_price_coverage"
+            if initial_focus_in_universe
+            else "requested_ticker_not_in_universe"
+        )
 
     portfolio_equity_curve = _portfolio_equity_curve(runs)
     constituents = [_constituent_row(payload) for payload in runs]
@@ -443,13 +465,29 @@ def _run_biotech_portfolio_backtest(
         "created_at": created_at.isoformat(timespec="seconds"),
         "universe_id": universe_id,
         "data_snapshot_id": data_snapshot_id,
+        "price_source": price_source,
         "as_of_date": as_of_date,
         "tickers": list(completed_tickers),
         "eligible_tickers": list(tickers),
         "skipped_tickers": skipped_tickers,
         "start_date": start_date,
         "end_date": end_date,
-        "strategy": {"id": strategy_id},
+        "strategy": {
+            "id": strategy_id,
+            "config": strategy_config,
+            "formula": (
+                real_multifactor_formula(strategy_config)
+                if strategy_id == REAL_MULTIFACTOR_STRATEGY_ID
+                and strategy_config is not None
+                else None
+            ),
+        },
+        "focus_ticker_status": {
+            "requested_ticker": requested_focus_ticker,
+            "resolved_ticker": normalized_focus_ticker,
+            "available": bool(focus_available),
+            "reason": focus_status_reason,
+        },
         "risk_parameters": {
             "stop_loss_pct": stop_loss_pct,
             "max_position_pct": max_position_pct,
@@ -478,6 +516,8 @@ def run_real_biotech_portfolio_backtest(
     data_snapshot_id: str | None = None,
     price_source: str | None = None,
     strategy_id: str | None = None,
+    strategy_config: dict | None = None,
+    persist_result: bool = True,
 ) -> dict:
     """Run the real multifactor strategy across the active biotech universe."""
     if not data_snapshot_id:
@@ -514,6 +554,14 @@ def run_real_biotech_portfolio_backtest(
         )
     except StrategyAccessError as exc:
         return {"error": str(exc)}
+    resolved_strategy_config = None
+    if resolved_strategy_id == REAL_MULTIFACTOR_STRATEGY_ID:
+        try:
+            resolved_strategy_config = normalize_real_multifactor_strategy_config(
+                strategy_config
+            )
+        except StrategyConfigError as exc:
+            return {"error": str(exc)}
 
     snapshot_metadata = _data_snapshot_metadata(data_snapshot_id, db_path=db_path)
     source_validation = validate_source_for_mode(
@@ -585,6 +633,7 @@ def run_real_biotech_portfolio_backtest(
         max_position_pct=max_position_pct,
         slippage_pct=slippage_pct,
         holding_period_days=holding_period_days,
+        strategy_config=resolved_strategy_config,
     )
     skipped_count = len(payload.get("skipped_tickers") or [])
     coverage_status = (
@@ -597,22 +646,23 @@ def run_real_biotech_portfolio_backtest(
         skipped_ticker_count=skipped_count,
         coverage_status=coverage_status,
     )
-    _persist_portfolio_backtest_run(
-        payload,
-        db_path=db_path,
-        data_snapshot_id=data_snapshot_id,
-        universe_id=universe_id,
-        strategy_id=resolved_strategy_id,
-        bias_profile=(
-            str(snapshot_metadata.get("bias_profile"))
-            if snapshot_metadata and snapshot_metadata.get("bias_profile")
-            else str(source_validation.bias_profile.value)
-        ),
-        bias_warnings=source_validation.bias_warnings,
-        start_date=start_date,
-        end_date=end_date,
-        as_of_date=resolved_as_of_date,
-        price_source=resolved_price_source,
-        focus_ticker=focus_ticker,
-    )
+    if persist_result:
+        _persist_portfolio_backtest_run(
+            payload,
+            db_path=db_path,
+            data_snapshot_id=data_snapshot_id,
+            universe_id=universe_id,
+            strategy_id=resolved_strategy_id,
+            bias_profile=(
+                str(snapshot_metadata.get("bias_profile"))
+                if snapshot_metadata and snapshot_metadata.get("bias_profile")
+                else str(source_validation.bias_profile.value)
+            ),
+            bias_warnings=source_validation.bias_warnings,
+            start_date=start_date,
+            end_date=end_date,
+            as_of_date=resolved_as_of_date,
+            price_source=resolved_price_source,
+            focus_ticker=focus_ticker,
+        )
     return payload

@@ -179,14 +179,23 @@ def test_real_portfolio_backtest_uses_latest_twelve_snapshot_universe(
         and call["data_mode"] == "real"
         and call["price_source"] == "tiingo"
         and call["data_snapshot_id"] == "snap_20260509_df843b255a1e"
+        and call["strategy_config"]["windows"]["fast"] == 12
+        and call["persist_result"] is False
         for call in calls
     )
     assert payload["universe_id"] == "biotech_us_v1"
     assert payload["data_snapshot_id"] == "snap_20260509_df843b255a1e"
+    assert payload["price_source"] == "tiingo"
     assert payload["as_of_date"] == "2026-05-09"
     assert payload["tickers"] == list(LATEST_BIOTECH_US_TICKERS)
     assert payload["eligible_tickers"] == list(LATEST_BIOTECH_US_TICKERS)
     assert payload["focus_ticker"]["ticker"] == "MRNA"
+    assert payload["focus_ticker_status"] == {
+        "requested_ticker": "MRNA",
+        "resolved_ticker": "MRNA",
+        "available": True,
+        "reason": None,
+    }
     assert payload["data_credibility"] == {
         "eligible_universe_count": 12,
         "skipped_ticker_count": 0,
@@ -194,7 +203,11 @@ def test_real_portfolio_backtest_uses_latest_twelve_snapshot_universe(
         "universe_bias_status": "current_constituents_only",
         "coverage_status": "complete",
     }
-    assert payload["strategy"] == {"id": "multifactor_score"}
+    assert payload["strategy"]["id"] == "multifactor_score"
+    assert payload["strategy"]["config"]["windows"]["fast"] == 12
+    assert "alpha =" in payload["strategy"]["formula"]
+    assert len(payload["constituents"]) == len(LATEST_BIOTECH_US_TICKERS)
+    assert all(row["equity_curve"] for row in payload["constituents"])
     assert {"ABBA", "JNJ", "LLY"}.isdisjoint(payload["tickers"])
     _assert_no_portfolio_disclosure_text(payload)
 
@@ -278,13 +291,23 @@ def test_real_portfolio_backtest_uses_duckdb_universe(tmp_path, monkeypatch):
         and call["max_position_pct"] == 0.15
         and call["slippage_pct"] == 0.002
         and call["holding_period_days"] == 7
+        and call["strategy_config"]["windows"]["fast"] == 12
+        and call["persist_result"] is False
         for call in calls
     )
     assert payload["universe_id"] == "biotech_us_v1"
     assert payload["data_snapshot_id"] == "snap_20260507_tiingo"
     assert payload["tickers"] == ["BIIB", "MRNA", "VRTX"]
-    assert payload["strategy"] == {"id": "multifactor_score"}
+    assert payload["price_source"] == "tiingo"
+    assert payload["strategy"]["id"] == "multifactor_score"
+    assert payload["strategy"]["config"]["windows"]["fast"] == 12
+    assert "alpha =" in payload["strategy"]["formula"]
     assert payload["focus_ticker"]["ticker"] == "MRNA"
+    assert payload["constituents"][1]["equity_curve"] == [
+        {"date": "2025-01-02", "equity": 1.0},
+        {"date": "2025-01-03", "equity": 1.01},
+        {"date": "2025-01-06", "equity": 1.03},
+    ]
     assert payload["data_credibility"] == {
         "eligible_universe_count": 3,
         "skipped_ticker_count": 0,
@@ -446,6 +469,30 @@ def test_real_portfolio_backtest_rejects_visible_cache_price_source(monkeypatch)
     assert payload["data_credibility"]["coverage_status"] == "invalid_price_source"
 
 
+def test_real_portfolio_backtest_rejects_invalid_strategy_config(monkeypatch):
+    from src.backtest import portfolio_runner
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("portfolio backtest must reject invalid strategy config first")
+        ),
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="ALNY",
+        start_date="2025-01-02",
+        end_date="2025-01-31",
+        data_snapshot_id="snap_current_tiingo",
+        strategy_config={"windows": {"fast": 40, "slow": 10}},
+    )
+
+    assert payload["error"] == (
+        "strategy_config.windows.fast must be less than strategy_config.windows.slow"
+    )
+
+
 def test_real_portfolio_backtest_records_run_metadata_in_duckdb(
     tmp_path,
     monkeypatch,
@@ -573,6 +620,7 @@ def test_real_portfolio_backtest_records_run_metadata_in_duckdb(
     assert parameters["end_date"] == "2025-01-31"
     assert parameters["as_of_date"] == "2026-05-09"
     assert parameters["price_source"] == "tiingo"
+    assert parameters["strategy"] == payload["strategy"]
     assert parameters["risk_parameters"] == {
         "stop_loss_pct": -0.07,
         "max_position_pct": 0.15,
@@ -587,6 +635,111 @@ def test_real_portfolio_backtest_records_run_metadata_in_duckdb(
     assert json.loads(row[8]) == [
         "Source tiingo has unknown survivorship-bias coverage."
     ]
+
+
+def test_real_portfolio_backtest_can_skip_persisting_smoke_runs(
+    tmp_path,
+    monkeypatch,
+):
+    from src.backtest import portfolio_runner
+    from src.backtest.research_db import initialize_research_database
+
+    db_path = initialize_research_database(tmp_path / "research.duckdb")
+    import duckdb
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO data_snapshots (
+                data_snapshot_id,
+                snapshot_date,
+                price_source,
+                event_source_db,
+                universe_id,
+                bias_profile,
+                price_partition_root,
+                event_snapshot_hash,
+                security_master_hash,
+                coverage_json,
+                created_at
+            )
+            VALUES (
+                'snap_smoke_tiingo',
+                '2026-05-09',
+                'tiingo',
+                'events.db',
+                'biotech_us_v1',
+                'current_constituents_only',
+                'prices_daily',
+                'events',
+                'security',
+                '{}',
+                CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO universe_membership (
+                universe_id,
+                security_id,
+                ticker,
+                member_from,
+                member_to,
+                weight,
+                membership_source,
+                as_of_date
+            )
+            VALUES ('biotech_us_v1', ?, ?, '2026-05-09', NULL, NULL, 'test', '2026-05-09')
+            """,
+            [
+                ("BIO:ALNY", "ALNY"),
+                ("BIO:AMGN", "AMGN"),
+            ],
+        )
+    finally:
+        conn.close()
+
+    child_calls = []
+
+    def fake_run_kline_backtest(**kwargs):
+        child_calls.append(kwargs)
+        return _portfolio_runner_payload(
+            kwargs["ticker"],
+            [1.0, 1.01, 1.02],
+            0.02,
+            2,
+            1,
+        )
+
+    monkeypatch.setattr(
+        portfolio_runner,
+        "run_kline_backtest",
+        fake_run_kline_backtest,
+    )
+
+    payload = portfolio_runner.run_real_biotech_portfolio_backtest(
+        focus_ticker="ALNY",
+        start_date="2025-01-02",
+        end_date="2025-01-31",
+        db_path=db_path,
+        data_snapshot_id="snap_smoke_tiingo",
+        persist_result=False,
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        persisted_count = conn.execute(
+            "SELECT count(*) FROM backtest_runs WHERE run_id = ?",
+            [payload["run_id"]],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert persisted_count == 0
+    assert child_calls
+    assert all(call["persist_result"] is False for call in child_calls)
 
 
 def test_real_portfolio_backtest_skips_snapshot_tickers_without_prices(
@@ -683,6 +836,12 @@ def test_real_portfolio_backtest_skips_snapshot_tickers_without_prices(
     assert payload["as_of_date"] == "2026-05-09"
     assert payload["tickers"] == ["ALNY", "AMGN"]
     assert payload["focus_ticker"]["ticker"] == "ALNY"
+    assert payload["focus_ticker_status"] == {
+        "requested_ticker": "BIIB",
+        "resolved_ticker": "ALNY",
+        "available": False,
+        "reason": "requested_ticker_missing_price_coverage",
+    }
     assert payload["skipped_tickers"] == [
         {"ticker": "BIIB", "reason": "no OHLC data"}
     ]
@@ -1411,6 +1570,64 @@ def test_run_kline_backtest_returns_phase2_event_diagnostics(tmp_path, monkeypat
     assert runner.load_saved_run(payload["run_id"]) == payload
 
 
+def test_run_kline_backtest_can_skip_persisting_smoke_runs(tmp_path, monkeypatch):
+    from src.backtest import runner
+
+    monkeypatch.setattr(runner, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(runner, "init_db", lambda: None)
+    monkeypatch.setattr(runner, "get_fetch_log_entries", lambda ticker: [])
+    monkeypatch.setattr(
+        runner,
+        "get_trusted_events_for_backtest",
+        lambda ticker, start_date, end_date: pd.DataFrame(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "load_ohlc",
+        lambda ticker: pd.DataFrame(
+            [
+                {
+                    "date": "2026-04-20",
+                    "open": 100,
+                    "high": 101,
+                    "low": 99,
+                    "close": 100,
+                    "volume": 1000,
+                },
+                {
+                    "date": "2026-04-21",
+                    "open": 101,
+                    "high": 103,
+                    "low": 100,
+                    "close": 102,
+                    "volume": 1100,
+                },
+                {
+                    "date": "2026-04-22",
+                    "open": 102,
+                    "high": 104,
+                    "low": 101,
+                    "close": 103,
+                    "volume": 1200,
+                },
+            ]
+        ),
+    )
+
+    payload = runner.run_kline_backtest(
+        ticker="MRNA",
+        start_date="2026-04-20",
+        end_date="2026-04-22",
+        price_source="yfinance",
+        persist_result=False,
+    )
+
+    assert "error" not in payload
+    assert payload["run_id"]
+    assert list(tmp_path.iterdir()) == []
+    assert runner.load_saved_run(payload["run_id"]) is None
+
+
 def test_mock_multifactor_signals_create_multiple_long_signals():
     from src.backtest.mock_dataset import build_mock_factor_frame
     from src.backtest.multifactor_strategy import generate_mock_multifactor_signals
@@ -1846,6 +2063,55 @@ def test_real_multifactor_signals_do_not_depend_on_future_prices():
     altered = generate_real_multifactor_signals(altered_future, pd.DataFrame())
 
     pd.testing.assert_frame_equal(original.iloc[:75], altered.iloc[:75])
+
+
+def test_real_multifactor_signals_accept_editable_strategy_config():
+    from src.backtest.multifactor_strategy import generate_real_multifactor_signals
+
+    price_window = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp("2025-01-02") + pd.offsets.BDay(index),
+                "open": 100.0 + index * 0.6,
+                "high": 101.0 + index * 0.6,
+                "low": 99.0 + index * 0.6,
+                "close": 100.0 + index * 0.7,
+                "volume": 1_000_000 + index * 10_000,
+            }
+            for index in range(90)
+        ]
+    )
+
+    default_signals = generate_real_multifactor_signals(price_window, pd.DataFrame())
+    custom_signals = generate_real_multifactor_signals(
+        price_window,
+        pd.DataFrame(),
+        strategy_config={
+            "weights": {
+                "trend": 1.0,
+                "momentum": 0.0,
+                "liquidity": 0.0,
+                "volatility": 0.0,
+                "event": 0.0,
+            },
+            "windows": {
+                "fast": 8,
+                "slow": 24,
+                "momentum": 10,
+                "volatility": 15,
+                "volume": 15,
+            },
+            "thresholds": {
+                "long": 0.05,
+                "short": -0.5,
+            },
+        },
+    )
+
+    assert int(default_signals["signal"].abs().sum()) != int(
+        custom_signals["signal"].abs().sum()
+    )
+    assert int((custom_signals["signal"] == 1).sum()) > 0
 
 
 def test_mock_a_backtest_positive_for_all_four_demo_tickers(tmp_path, monkeypatch):

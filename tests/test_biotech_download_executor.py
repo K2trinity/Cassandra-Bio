@@ -488,7 +488,9 @@ def test_tiingo_success_with_no_valid_rows_is_skipped(tmp_path):
     assert manifest["skipped"][0]["reason"] == "no_valid_rows"
 
 
-def test_stubbed_providers_fail_without_executable_provider(tmp_path):
+def test_stubbed_providers_fail_without_executable_provider(tmp_path, monkeypatch):
+    _clear_provider_env(monkeypatch)
+
     from src.data_ingestion.download_executor import DownloadRequest, run_download
 
     with pytest.raises(RuntimeError) as exc_info:

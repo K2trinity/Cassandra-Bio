@@ -468,6 +468,9 @@ def test_backtest_options_api_prefers_snapshot_covering_requested_ticker(monkeyp
         "snap_latest_tiingo",
         "snap_mrna_cache",
     ]
+    assert body["portfolio"]["default_price_source"] == "tiingo"
+    assert body["portfolio"]["default_data_snapshot_id"] == "snap_latest_tiingo"
+    assert body["portfolio"]["required_price_source"] == "tiingo"
 
 
 def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):
@@ -820,6 +823,27 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
             "strategy_id": "event_baseline",
             "price_source": "tiingo",
             "data_snapshot_id": "snap_20260507_tiingo",
+            "persist_result": False,
+            "strategy_config": {
+                "weights": {
+                    "trend": 0.5,
+                    "momentum": 0.25,
+                    "liquidity": 0.1,
+                    "volatility": -0.2,
+                    "event": 0.35,
+                },
+                "windows": {
+                    "fast": 10,
+                    "slow": 40,
+                    "momentum": 15,
+                    "volatility": 25,
+                    "volume": 30,
+                },
+                "thresholds": {
+                    "long": 0.2,
+                    "short": -0.22,
+                },
+            },
         },
     )
     body = response.get_json()
@@ -838,6 +862,27 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
         "as_of_date": None,
         "data_snapshot_id": "snap_20260507_tiingo",
         "price_source": "tiingo",
+        "persist_result": False,
+        "strategy_config": {
+            "weights": {
+                "trend": 0.5,
+                "momentum": 0.25,
+                "liquidity": 0.1,
+                "volatility": -0.2,
+                "event": 0.35,
+            },
+            "windows": {
+                "fast": 10,
+                "slow": 40,
+                "momentum": 15,
+                "volatility": 25,
+                "volume": 30,
+            },
+            "thresholds": {
+                "long": 0.2,
+                "short": -0.22,
+            },
+        },
     }
     assert body["run_id"] == "portfolio-123"
     assert body["universe_id"] == "biotech_custom_v2"
@@ -848,6 +893,33 @@ def test_backtest_portfolio_run_api_returns_real_runner_payload(monkeypatch):
     body_text = json.dumps(body, sort_keys=True).lower()
     for forbidden in ["mock", "synthetic", "data_mode", "positive_demo_expected"]:
         assert forbidden not in body_text
+
+
+def test_backtest_portfolio_run_api_rejects_invalid_persist_result(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("route must reject before invoking portfolio runner")
+        ),
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
+            "persist_result": "sometimes",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "persist_result must be a boolean"}
 
 
 def test_backtest_portfolio_run_api_requires_data_snapshot(monkeypatch):
@@ -902,6 +974,40 @@ def test_backtest_portfolio_run_api_rejects_visible_cache_price_source(monkeypat
     assert response.status_code == 400
     assert response.get_json() == {
         "error": "portfolio backtests require tiingo snapshot prices"
+    }
+
+
+def test_backtest_portfolio_run_api_rejects_invalid_strategy_config(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "run_real_biotech_portfolio_backtest",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("route must reject before invoking portfolio runner")
+        ),
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.post(
+        "/api/backtest/portfolio/run",
+        json={
+            "ticker": "MRNA",
+            "start_date": "2025-01-02",
+            "end_date": "2025-03-31",
+            "price_source": "tiingo",
+            "data_snapshot_id": "snap_20260507_tiingo",
+            "strategy_config": {
+                "windows": {
+                    "fast": 50,
+                    "slow": 20,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "strategy_config.windows.fast must be less than strategy_config.windows.slow"
     }
 
 
