@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime
 
+import pandas as pd
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
 from src.backtest.portfolio_runner import run_real_biotech_portfolio_backtest
-from src.backtest.research_db import RESEARCH_DB_PATH, initialize_research_database
+from src.backtest.research_db import (
+    RESEARCH_DB_PATH,
+    RESEARCH_DIR,
+    initialize_research_database,
+)
 from src.backtest.runner import (
     load_saved_run,
     normalize_kline_ticker,
@@ -30,6 +36,7 @@ BACKTEST_PRICE_SOURCE_OPTIONS = (
     {"id": "tiingo", "label": "Research Snapshot"},
     {"id": "yfinance", "label": "Visible Chart Cache"},
 )
+SAFE_PARTITION_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 __all__ = ["kline_bp"]
 
@@ -47,14 +54,16 @@ def kline_default():
 
 @kline_bp.get("/kline/<path:symbol>")
 def kline_view(symbol: str):
-    """Render the K-line phase 1 workspace."""
+    """Render the K-line workspace shell without blocking on data assembly."""
     try:
-        workspace = workspace_service.build_workspace(symbol)
+        company = resolver.resolve(symbol)
     except ValueError as exc:
         return _invalid_ticker_response(str(exc))
     return render_template(
         "kline_workspace.html",
-        workspace=workspace.to_dict(),
+        workspace=None,
+        ticker=company.ticker,
+        company=company.to_dict(),
         error=None,
         kline_active=True,
     )
@@ -63,8 +72,13 @@ def kline_view(symbol: str):
 @kline_bp.get("/api/kline/workspace/<symbol>")
 def api_kline_workspace(symbol: str):
     """Return the serialized K-line workspace payload for a symbol."""
+    refresh = _truthy_query_arg(request.args.get("refresh"))
     try:
-        return jsonify(workspace_service.build_workspace(symbol).to_dict())
+        workspace = workspace_service.build_workspace(
+            symbol,
+            cache_only=not refresh,
+        )
+        return jsonify(workspace.to_dict())
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -79,7 +93,7 @@ def api_kline_tickers():
 def api_kline_events(symbol: str):
     """Return Phase 2 event points for a symbol."""
     try:
-        workspace = workspace_service.build_workspace(symbol)
+        workspace = workspace_service.build_workspace(symbol, cache_only=True)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     event_layer_kinds = {"catalysts", "news", "macro"}
@@ -155,11 +169,58 @@ def _list_recent_data_snapshots(limit: int = 10) -> list[dict[str, str | None]]:
     ]
 
 
+def _snapshot_has_ticker_coverage(ticker: str, snapshot: dict[str, str | None]) -> bool:
+    snapshot_id = str(snapshot.get("data_snapshot_id") or "").strip()
+    source = str(snapshot.get("price_source") or "").strip()
+    if (
+        not snapshot_id
+        or not SAFE_PARTITION_TOKEN.fullmatch(snapshot_id)
+        or source not in {"tiingo", "yfinance"}
+    ):
+        return False
+
+    source_root = (
+        RESEARCH_DIR
+        / "prices_daily"
+        / f"data_snapshot_id={snapshot_id}"
+        / f"source={source}"
+    )
+    if not source_root.exists():
+        return False
+
+    for path in sorted(source_root.glob("year=*/*.parquet")):
+        if path.stem.upper() == ticker:
+            return True
+        try:
+            tickers = pd.read_parquet(path, columns=["ticker"])["ticker"]
+        except Exception:  # noqa: BLE001
+            continue
+        if ticker in set(tickers.astype(str).str.upper()):
+            return True
+    return False
+
+
+def _select_default_data_snapshot(
+    snapshots: list[dict[str, str | None]],
+    ticker: str | None,
+) -> dict[str, str | None] | None:
+    normalized_ticker = normalize_kline_ticker(ticker) if ticker else None
+    if normalized_ticker is not None:
+        for snapshot in snapshots:
+            if _snapshot_has_ticker_coverage(normalized_ticker, snapshot):
+                return snapshot
+
+    return snapshots[0] if snapshots else None
+
+
 @kline_bp.get("/api/backtest/options")
 def api_backtest_options():
     """Return real backtest strategy and data snapshot controls for K-line UI."""
     snapshots = _list_recent_data_snapshots()
-    default_snapshot = snapshots[0] if snapshots else None
+    default_snapshot = _select_default_data_snapshot(
+        snapshots,
+        str(request.args.get("ticker") or "").strip(),
+    )
     default_price_source = (
         default_snapshot.get("price_source")
         if default_snapshot and default_snapshot.get("price_source")
@@ -460,3 +521,7 @@ def _invalid_ticker_response(message: str):
         ),
         400,
     )
+
+
+def _truthy_query_arg(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "refresh"}

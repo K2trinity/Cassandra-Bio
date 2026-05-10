@@ -64,12 +64,19 @@ class KlineWorkspaceService:
         self.catalyst_provider = catalyst_provider or CatalystEventProvider()
         self.backtest_provider = backtest_provider or BacktestResultProvider()
 
-    def build_workspace(self, symbol: object) -> KlineWorkspacePayload:
+    def build_workspace(
+        self,
+        symbol: object,
+        cache_only: bool = False,
+    ) -> KlineWorkspacePayload:
         company = self.resolver.resolve(symbol)
         ticker = company.ticker
 
-        price, price_statuses = self.ohlc_provider.load(ticker)
-        catalysts, catalyst_statuses = self.catalyst_provider.load(ticker)
+        price, price_statuses = self.ohlc_provider.load(ticker, cache_only=cache_only)
+        catalysts, catalyst_statuses = self.catalyst_provider.load(
+            ticker,
+            cache_only=cache_only,
+        )
         last_backtest = self.backtest_provider.load_last_run(ticker)
 
         backtest_status = "ready" if last_backtest else "empty"
@@ -113,8 +120,11 @@ class KlineWorkspaceService:
     ) -> KlineRangeContext:
         company = self.resolver.resolve(symbol)
         ticker = company.ticker
-        price, _price_statuses = self.ohlc_provider.load(ticker)
-        catalysts, _catalyst_statuses = self.catalyst_provider.load(ticker)
+        price, _price_statuses = self.ohlc_provider.load(ticker, cache_only=True)
+        catalysts, _catalyst_statuses = self.catalyst_provider.load(
+            ticker,
+            cache_only=True,
+        )
 
         price_rows = sorted(
             [

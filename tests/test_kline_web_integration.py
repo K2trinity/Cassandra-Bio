@@ -44,9 +44,11 @@ def _install_fake_workspace_service(monkeypatch):
     class FakeWorkspaceService:
         def __init__(self):
             self.requested_symbols = []
+            self.cache_only_flags = []
 
-        def build_workspace(self, symbol: str):
+        def build_workspace(self, symbol: str, cache_only: bool = False):
             self.requested_symbols.append(symbol)
+            self.cache_only_flags.append(cache_only)
             return KlineWorkspacePayload.example(symbol)
 
     fake_service = FakeWorkspaceService()
@@ -75,7 +77,7 @@ def test_investigation_page_renders_head_assets_from_base_template():
     assert 'href="/kline"' in html
 
 
-def test_kline_page_renders_phase1_workspace(monkeypatch):
+def test_kline_page_renders_lightweight_shell_without_workspace_fetch(monkeypatch):
     fake_service = _install_fake_workspace_service(monkeypatch)
     client = app.test_client()
 
@@ -83,10 +85,10 @@ def test_kline_page_renders_phase1_workspace(monkeypatch):
     html = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert fake_service.requested_symbols == ["MRNA"]
+    assert fake_service.requested_symbols == []
     assert 'id="kline-workspace"' in html
     assert 'data-ticker="MRNA"' in html
-    assert 'id="kline-workspace-data" type="application/json"' in html
+    assert 'id="kline-workspace-data" type="application/json"' not in html
     assert 'data-role="ticker-selector"' in html
     assert 'id="source-strip"' in html
     assert 'id="company-name"' in html
@@ -108,29 +110,22 @@ def test_kline_page_renders_phase1_workspace(monkeypatch):
         assert reference not in html
 
 
-def test_kline_workspace_renders_disabled_future_capability_contracts(monkeypatch):
+def test_kline_workspace_api_returns_disabled_future_capability_contracts(monkeypatch):
     _install_fake_workspace_service(monkeypatch)
     client = app.test_client()
 
-    response = client.get("/kline/MRNA")
-    html = response.get_data(as_text=True)
+    response = client.get("/api/kline/workspace/MRNA")
+    body = json.dumps(response.get_json())
 
     assert response.status_code == 200
-    assert '"id": "news"' in html
-    assert '"enabled": false' in html
-    assert '"phase": 2' in html
-    assert '"id": "range_analysis"' in html
-    assert '"phase": 3' in html
+    assert '"id": "news"' in body
+    assert '"enabled": false' in body
+    assert '"phase": 2' in body
+    assert '"id": "range_analysis"' in body
+    assert '"phase": 3' in body
 
 
-def test_kline_workspace_invalid_ticker_has_recovery_link(monkeypatch):
-    class FailingWorkspaceService:
-        def build_workspace(self, symbol: str):
-            raise ValueError(
-                "invalid ticker: use 1-16 letters, numbers, dots, or hyphens"
-            )
-
-    monkeypatch.setattr(kline_routes, "workspace_service", FailingWorkspaceService())
+def test_kline_workspace_invalid_ticker_has_recovery_link():
     client = app.test_client()
 
     response = client.get("/kline/BAD!")
@@ -218,6 +213,20 @@ def test_kline_workspace_api_returns_workspace_json(monkeypatch):
 
     assert response.status_code == 200
     assert fake_service.requested_symbols == ["MRNA"]
+    assert fake_service.cache_only_flags == [True]
+    assert body["ticker"] == "MRNA"
+
+
+def test_kline_workspace_api_refresh_query_forces_source_refresh(monkeypatch):
+    fake_service = _install_fake_workspace_service(monkeypatch)
+    client = app.test_client()
+
+    response = client.get("/api/kline/workspace/MRNA?refresh=1")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert fake_service.requested_symbols == ["MRNA"]
+    assert fake_service.cache_only_flags == [False]
     assert body["ticker"] == "MRNA"
 
 
@@ -260,7 +269,7 @@ def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
     )
 
     class FakeWorkspaceService:
-        def build_workspace(self, symbol: str):
+        def build_workspace(self, symbol: str, cache_only: bool = False):
             return KlineWorkspacePayload(
                 ticker="MRNA",
                 company=KlineCompany.example("MRNA"),
@@ -411,6 +420,54 @@ def test_backtest_options_api_returns_real_strategy_and_snapshot_options(monkeyp
     assert body["default_price_source"] == "tiingo"
     assert body["default_data_snapshot_id"] == "snap_20260509_df843b255a1e"
     assert body["snapshots"][0]["snapshot_date"] == "2026-05-09"
+
+
+def test_backtest_options_api_prefers_snapshot_covering_requested_ticker(monkeypatch):
+    monkeypatch.setattr(
+        kline_routes,
+        "_list_recent_data_snapshots",
+        lambda limit=10: [
+            {
+                "data_snapshot_id": "snap_latest_tiingo",
+                "snapshot_date": "2026-05-09",
+                "price_source": "tiingo",
+                "universe_id": "biotech_us_v1",
+                "bias_profile": "current_constituents_only",
+                "created_at": "2026-05-09 10:36:50",
+            },
+            {
+                "data_snapshot_id": "snap_mrna_cache",
+                "snapshot_date": "2026-05-07",
+                "price_source": "yfinance",
+                "universe_id": "biotech_four_v1",
+                "bias_profile": "survivorship_biased",
+                "created_at": "2026-05-07 01:24:11",
+            },
+        ],
+        raising=False,
+    )
+
+    def has_ticker_coverage(ticker, snapshot):
+        return ticker == "MRNA" and snapshot["data_snapshot_id"] == "snap_mrna_cache"
+
+    monkeypatch.setattr(
+        kline_routes,
+        "_snapshot_has_ticker_coverage",
+        has_ticker_coverage,
+        raising=False,
+    )
+
+    client = app.test_client()
+    response = client.get("/api/backtest/options?ticker=MRNA")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["default_price_source"] == "yfinance"
+    assert body["default_data_snapshot_id"] == "snap_mrna_cache"
+    assert [snapshot["data_snapshot_id"] for snapshot in body["snapshots"]] == [
+        "snap_latest_tiingo",
+        "snap_mrna_cache",
+    ]
 
 
 def test_backtest_api_returns_signal_and_trade_overlays(monkeypatch):

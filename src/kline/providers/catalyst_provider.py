@@ -27,12 +27,17 @@ class CatalystEventProvider:
     def __init__(
         self,
         fetch_events: Callable[[str, int], list[dict[str, Any]]] | None = None,
+        fetch_cached_events: Callable[[str, int], list[dict[str, Any]]] | None = None,
         fetch_statuses: Callable[..., Any] | None | object = _OMITTED,
     ):
         if fetch_events is None:
             from src.services.event_ingestion_service import get_events_for_ticker
 
             fetch_events = get_events_for_ticker
+        if fetch_cached_events is None:
+            from src.services.event_ingestion_service import get_cached_events_for_ticker
+
+            fetch_cached_events = get_cached_events_for_ticker
         if fetch_statuses is _OMITTED:
             from src.services.event_ingestion_service import (
                 get_source_statuses_for_ticker,
@@ -40,12 +45,18 @@ class CatalystEventProvider:
 
             fetch_statuses = get_source_statuses_for_ticker
         self.fetch_events = fetch_events
+        self.fetch_cached_events = fetch_cached_events
         self.fetch_statuses = fetch_statuses
 
-    def load(self, ticker: str) -> tuple[list[KlineEvent], list[KlineDataStatus]]:
+    def load(
+        self,
+        ticker: str,
+        cache_only: bool = False,
+    ) -> tuple[list[KlineEvent], list[KlineDataStatus]]:
         requested_ticker = str(ticker).strip().upper()
         try:
-            raw_events = list(self.fetch_events(requested_ticker, 6) or [])
+            fetch_events = self.fetch_cached_events if cache_only else self.fetch_events
+            raw_events = list(fetch_events(requested_ticker, 6) or [])
         except Exception as exc:  # noqa: BLE001 - provider boundary reports status.
             return (
                 [],

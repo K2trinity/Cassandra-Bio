@@ -2,6 +2,8 @@
   "use strict";
 
   var rangeContextRequestId = 0;
+  var refreshRequestId = 0;
+  var activeState = null;
   var EVENT_LAYER_KINDS = ["catalysts", "news", "macro"];
   var CHART_DISPLAY_MODES = [
     ["candles_with_backtest", "Candles + Backtest"],
@@ -31,6 +33,45 @@
     } catch (error) {
       return null;
     }
+  }
+
+  function readWorkspaceTicker() {
+    var root = byId("kline-workspace");
+    var ticker = root && root.dataset && root.dataset.ticker;
+    return ticker ? String(ticker).trim().toUpperCase() : null;
+  }
+
+  function browserFetch() {
+    if (window.fetch && typeof window.fetch === "function") {
+      return window.fetch.bind(window);
+    }
+    if (typeof fetch === "function") {
+      return fetch;
+    }
+    return null;
+  }
+
+  function workspaceApiUrl(ticker, refresh) {
+    var url = "/api/kline/workspace/" + encodeURIComponent(ticker);
+    return refresh ? url + "?refresh=1" : url;
+  }
+
+  function fetchWorkspace(ticker, options) {
+    options = options || {};
+    var request = browserFetch();
+    if (!request) {
+      return Promise.reject(new Error("workspace fetch unavailable"));
+    }
+    return request(workspaceApiUrl(ticker, options.refresh)).then(function (response) {
+      return response.json().then(function (body) {
+        return { ok: response.ok, body: body };
+      });
+    }).then(function (result) {
+      if (!result.ok) {
+        throw new Error((result.body && result.body.error) || "Workspace unavailable.");
+      }
+      return result.body;
+    });
   }
 
   function catalystLayer(workspace) {
@@ -111,6 +152,56 @@
       node.type = options.type;
     }
     return node;
+  }
+
+  function renderLoading(ticker) {
+    setText(byId("company-name"), ticker || "K-line");
+    setText(byId("last-close"), "-");
+    setText(byId("coverage-range"), "-");
+    setText(byId("hover-readout"), "-");
+
+    var strip = byId("source-strip");
+    if (strip) {
+      strip.replaceChildren(makeElement("span", {
+        className: "source-chip is-loading",
+        text: "workspace: loading"
+      }));
+    }
+
+    var chart = byId("kline-container");
+    if (chart) {
+      chart.textContent = "Loading workspace.";
+    }
+
+    document.querySelectorAll("[data-panel]").forEach(function (panel) {
+      panel.replaceChildren(makeElement("p", {
+        className: "empty-state",
+        text: "Loading workspace."
+      }));
+    });
+  }
+
+  function renderLoadError(message) {
+    var strip = byId("source-strip");
+    if (strip) {
+      strip.replaceChildren(makeElement("span", {
+        className: "source-chip is-error",
+        text: "workspace: error"
+      }));
+    }
+
+    var chart = byId("kline-container");
+    if (chart) {
+      chart.textContent = message || "Workspace unavailable.";
+    }
+
+    var statusPanel = document.querySelector('[data-panel="status"]');
+    if (statusPanel) {
+      statusPanel.replaceChildren(makeElement("p", {
+        className: "empty-state",
+        text: message || "Workspace unavailable."
+      }));
+    }
   }
 
   function formatMoney(value) {
@@ -224,6 +315,34 @@
       });
       strip.appendChild(item);
     });
+    appendRefreshControl(strip, workspace.ticker);
+  }
+
+  function appendRefreshControl(strip, ticker) {
+    var button = makeElement("button", {
+      type: "button",
+      className: "source-refresh-button",
+      text: "Refresh"
+    });
+    button.addEventListener("click", function () {
+      refreshWorkspace(ticker);
+    });
+    strip.appendChild(button);
+  }
+
+  function renderRefreshStatus(status, text) {
+    var strip = byId("source-strip");
+    if (!strip) {
+      return;
+    }
+    var chip = byId("workspace-refresh-status");
+    if (!chip) {
+      chip = makeElement("span", { className: "source-chip" });
+      chip.id = "workspace-refresh-status";
+      strip.appendChild(chip);
+    }
+    chip.className = "source-chip is-" + safeToken(status);
+    chip.textContent = text;
   }
 
   function renderLayerBar(workspace, state) {
@@ -732,8 +851,13 @@
         syncSnapshotControl();
         return;
       }
+      var optionsUrl = "/api/backtest/options";
+      var ticker = String(workspace.ticker || "").trim().toUpperCase();
+      if (ticker) {
+        optionsUrl += "?ticker=" + encodeURIComponent(ticker);
+      }
       Promise.resolve().then(function () {
-        return optionsFetch.call(window, "/api/backtest/options");
+        return optionsFetch.call(window, optionsUrl);
       }).then(function (response) {
         return response.json().then(function (body) {
           return { ok: response.ok, body: body };
@@ -907,11 +1031,31 @@
     }
   }
 
-  function init() {
-    var workspace = readWorkspace();
-    if (!workspace) {
+  function bindTickerForm() {
+    var form = byId("ticker-form");
+    if (!form) {
       return;
     }
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      openTicker(form.elements.symbol.value);
+    });
+  }
+
+  function bindTabs() {
+    document.querySelectorAll("[data-tab]").forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        activatePanel(tab.dataset.tab);
+      });
+    });
+  }
+
+  function renderWorkspace(workspace) {
+    if (activeState && typeof activeState.chartCleanup === "function") {
+      activeState.chartCleanup();
+      activeState.chartCleanup = null;
+    }
+
     var savedBacktest = backtestLayer(workspace);
     var savedBacktestSummary = savedBacktest.summary || {};
 
@@ -938,24 +1082,55 @@
     renderStatus(workspace);
     renderChart(workspace, state);
 
-    var form = byId("ticker-form");
-    if (form) {
-      form.addEventListener("submit", function (event) {
-        event.preventDefault();
-        openTicker(form.elements.symbol.value);
-      });
-    }
+    activeState = state;
+  }
 
-    document.querySelectorAll("[data-tab]").forEach(function (tab) {
-      tab.addEventListener("click", function () {
-        activatePanel(tab.dataset.tab);
-      });
+  function refreshWorkspace(ticker) {
+    if (!ticker) {
+      return Promise.resolve();
+    }
+    var requestId = ++refreshRequestId;
+    renderRefreshStatus("refreshing", "workspace: refreshing");
+    return fetchWorkspace(ticker, { refresh: true }).then(function (loadedWorkspace) {
+      if (requestId !== refreshRequestId) {
+        return;
+      }
+      renderWorkspace(loadedWorkspace);
+      renderRefreshStatus("ready", "workspace: refreshed");
+    }).catch(function () {
+      if (requestId !== refreshRequestId) {
+        return;
+      }
+      renderRefreshStatus("error", "workspace: refresh failed");
+    });
+  }
+
+  function init() {
+    bindTickerForm();
+    bindTabs();
+    window.addEventListener("beforeunload", function () {
+      if (activeState && typeof activeState.chartCleanup === "function") {
+        activeState.chartCleanup();
+      }
     });
 
-    window.addEventListener("beforeunload", function () {
-      if (typeof state.chartCleanup === "function") {
-        state.chartCleanup();
-      }
+    var workspace = readWorkspace();
+    if (workspace) {
+      renderWorkspace(workspace);
+      return;
+    }
+
+    var ticker = readWorkspaceTicker();
+    if (!ticker) {
+      return;
+    }
+
+    renderLoading(ticker);
+    fetchWorkspace(ticker).then(function (loadedWorkspace) {
+      renderWorkspace(loadedWorkspace);
+      refreshWorkspace(loadedWorkspace.ticker || ticker);
+    }).catch(function (error) {
+      renderLoadError(error && error.message);
     });
   }
 

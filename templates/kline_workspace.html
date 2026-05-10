@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}K-line Workspace{% if workspace %} - {{ workspace.ticker }}{% endif %}{% endblock %}
+{% block title %}K-line Workspace{% if workspace %} - {{ workspace.ticker }}{% elif ticker %} - {{ ticker }}{% endif %}{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="/static/vendor/pokie-chart.css">
@@ -18,24 +18,30 @@
     </section>
 </main>
 {% else %}
-<main class="kline-workspace" id="kline-workspace" data-ticker="{{ workspace.ticker }}">
+{% set current_ticker = workspace.ticker if workspace else ticker %}
+{% set current_company = workspace.company if workspace else company %}
+<main class="kline-workspace" id="kline-workspace" data-ticker="{{ current_ticker }}">
+    {% if workspace %}
     <script id="kline-workspace-data" type="application/json">{{ workspace|tojson }}</script>
+    {% endif %}
 
     <section class="kline-topbar" aria-label="Workspace controls">
         <div class="ticker-control" data-role="ticker-selector">
             <label for="ticker-search">Ticker</label>
             <form id="ticker-form" class="ticker-form">
-                <input id="ticker-search" name="symbol" value="{{ workspace.ticker }}" autocomplete="off" spellcheck="false" inputmode="latin">
+                <input id="ticker-search" name="symbol" value="{{ current_ticker }}" autocomplete="off" spellcheck="false" inputmode="latin">
                 <button type="submit">Open</button>
             </form>
         </div>
-        <div class="source-strip" id="source-strip" aria-label="Data source status"></div>
+        <div class="source-strip" id="source-strip" aria-label="Data source status">
+            <span class="source-chip is-loading">workspace: loading</span>
+        </div>
     </section>
 
     <section class="company-strip" aria-label="Current company">
         <div class="company-heading">
-            <h2 id="company-name">{{ workspace.company.name }}</h2>
-            <p>{{ workspace.ticker }} · {{ workspace.company.sector }}</p>
+            <h2 id="company-name">{{ current_company.name }}</h2>
+            <p>{{ current_ticker }} · {{ current_company.sector }}</p>
         </div>
         <div class="price-readout">
             <span>Last close</span>

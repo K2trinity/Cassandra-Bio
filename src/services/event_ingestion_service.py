@@ -54,6 +54,13 @@ def get_source_statuses_for_ticker(ticker: str) -> list[dict]:
     return get_fetch_log_entries(ticker)
 
 
+def get_cached_events_for_ticker(ticker: str, max_age_hours: int = 6) -> list[dict]:
+    """Return trusted cached chart events without fetching external sources."""
+    init_db()
+    init_fetch_log_table()
+    return get_trusted_events_for_chart(ticker)
+
+
 def _status_for_exception(exc: Exception) -> str:
     """Map source fetch exceptions into user-facing data-source states."""
     text = str(exc).lower()

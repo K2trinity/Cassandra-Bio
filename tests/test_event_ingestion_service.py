@@ -737,6 +737,61 @@ def test_ingestion_service_cache_hit():
         mock_trials.assert_not_called()
 
 
+def test_cached_events_for_ticker_never_fetches_external_sources(monkeypatch):
+    """Cache-first workspace reads trusted DB events without source fan-out."""
+    from src.services import event_ingestion_service
+
+    cached_events = [
+        {
+            "id": "cached-1",
+            "ticker": "CACHEONLY",
+            "date": "2026-04-20",
+            "type": "clinical_readout",
+            "source": "clinicaltrials",
+        }
+    ]
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "get_trusted_events_for_chart",
+        lambda ticker: cached_events,
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "OpenFDAClient",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("openfda called")),
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "search_trials",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("clinicaltrials called")
+        ),
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_market_news_events",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("alphavantage called")
+        ),
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_biotech_macro_events",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gdelt called")),
+    )
+    monkeypatch.setattr(
+        event_ingestion_service,
+        "fetch_macro_regime_events",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("macro_regime called")
+        ),
+    )
+
+    events = event_ingestion_service.get_cached_events_for_ticker("CACHEONLY")
+
+    assert events == cached_events
+
+
 def test_event_db_roundtrips_source_ids_and_metadata():
     """Event DB should persist structured attribution fields as decoded objects."""
     from src.backtest.events_db import (

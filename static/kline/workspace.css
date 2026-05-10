@@ -98,6 +98,7 @@
 .layer-bar button,
 .panel-tabs button,
 .backtest-form button,
+.source-refresh-button,
 .kline-error a {
   background: #242b35;
   border: 1px solid var(--kline-border);
@@ -112,6 +113,7 @@
 .layer-bar button:hover,
 .panel-tabs button:hover,
 .backtest-form button:hover,
+.source-refresh-button:hover,
 .kline-error a:hover {
   background: #2d3642;
   border-color: #445063;
@@ -173,9 +175,20 @@
 }
 
 .source-chip.is-partial,
-.status-row.is-partial {
+.status-row.is-partial,
+.source-chip.is-stale,
+.status-row.is-stale,
+.source-chip.is-refreshing {
   border-color: rgba(246, 173, 85, 0.5);
   color: #fde0ad;
+}
+
+.source-refresh-button {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  min-height: 28px;
+  padding: 5px 9px;
 }
 
 .company-strip {

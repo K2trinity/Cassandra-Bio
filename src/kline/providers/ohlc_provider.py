@@ -9,17 +9,31 @@ from src.kline.models import KlineDataStatus, KlinePriceSeries
 
 
 class OHLCProvider:
-    def __init__(self, fetch_rows: Callable[[str, int], Any] | None = None):
+    def __init__(
+        self,
+        fetch_rows: Callable[[str, int], Any] | None = None,
+        fetch_cached_rows: Callable[[str, int], Any] | None = None,
+    ):
         if fetch_rows is None:
             from src.services.market_data_service import get_ohlc_rows_with_status
 
             fetch_rows = get_ohlc_rows_with_status
-        self.fetch_rows = fetch_rows
+        if fetch_cached_rows is None:
+            from src.services.market_data_service import get_cached_ohlc_rows_with_status
 
-    def load(self, ticker: str) -> tuple[KlinePriceSeries, list[KlineDataStatus]]:
+            fetch_cached_rows = get_cached_ohlc_rows_with_status
+        self.fetch_rows = fetch_rows
+        self.fetch_cached_rows = fetch_cached_rows
+
+    def load(
+        self,
+        ticker: str,
+        cache_only: bool = False,
+    ) -> tuple[KlinePriceSeries, list[KlineDataStatus]]:
         try:
+            fetch_rows = self.fetch_cached_rows if cache_only else self.fetch_rows
             rows, status, message, last_updated = _rows_status_from_payload(
-                self.fetch_rows(ticker, 24)
+                fetch_rows(ticker, 24)
             )
             status = status or ("ready" if rows else "empty")
 

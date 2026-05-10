@@ -221,3 +221,66 @@ class TestGetOhlcRows:
                 "volume": 1000,
             }
         ]
+
+    def test_cached_ohlc_rows_with_status_reads_stale_cache_without_refresh(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Cache-first workspace loads must not call refresh_ohlc."""
+        from src.services import market_data_service
+
+        cached = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=1),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [1000],
+        })
+        cached.to_parquet(tmp_path / "CACHEONLY.parquet", index=False)
+        monkeypatch.setattr(market_data_service, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            market_data_service,
+            "refresh_ohlc",
+            lambda ticker: (_ for _ in ()).throw(AssertionError("refresh called")),
+        )
+        monkeypatch.setattr(
+            market_data_service,
+            "_is_cache_stale",
+            lambda path, max_age_hours: True,
+        )
+
+        result = market_data_service.get_cached_ohlc_rows_with_status("CACHEONLY")
+
+        assert result["status"] == "stale"
+        assert result["message"] == "cached OHLC is stale; refresh pending"
+        assert result["rows"][0]["date"] == "2024-01-01"
+
+    def test_cached_ohlc_rows_with_status_returns_empty_without_download(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Missing cache should produce an empty payload, not a yfinance fetch."""
+        from src.services import market_data_service
+
+        monkeypatch.setattr(market_data_service, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            market_data_service,
+            "refresh_ohlc",
+            lambda ticker: (_ for _ in ()).throw(AssertionError("refresh called")),
+        )
+        monkeypatch.setattr(
+            market_data_service,
+            "load_ohlc",
+            lambda ticker: (_ for _ in ()).throw(AssertionError("load called")),
+        )
+
+        result = market_data_service.get_cached_ohlc_rows_with_status("MISS")
+
+        assert result == {
+            "rows": [],
+            "status": "empty",
+            "message": "no cached OHLC available",
+        }

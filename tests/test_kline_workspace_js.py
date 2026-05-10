@@ -92,6 +92,72 @@ def test_workspace_js_allows_absolute_web_source_url():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_fetches_workspace_when_inline_payload_missing():
+    result = _run_workspace_script(r"""
+        const requests = [];
+        installWorkspaceShell('MRNA');
+        window.fetch = function (url) {
+          requests.push(url);
+          if (url === '/api/backtest/options?ticker=MRNA') {
+            return Promise.resolve(jsonResponse({}));
+          }
+          if (url === '/api/kline/workspace/MRNA?refresh=1') {
+            return Promise.resolve(jsonResponse(makeWorkspace({
+              company: { name: 'Moderna refreshed', sector: 'Healthcare' },
+              price: {
+                rows: [{ date: '2026-04-21', open: 2, high: 3, low: 2, close: 3, volume: 200 }],
+                date_range: { start: '2026-04-21', end: '2026-04-21' },
+                last_close: 3
+              }
+            })));
+          }
+          return Promise.resolve(jsonResponse(makeWorkspace({
+            company: { name: 'Moderna cached', sector: 'Healthcare' }
+          })));
+        };
+
+        runWorkspace();
+        await settle();
+        await settle();
+        await settle();
+
+        if (requests[0] !== '/api/kline/workspace/MRNA') {
+          throw new Error('expected first request to load workspace API, got ' + requests.join(','));
+        }
+        if (!requests.includes('/api/kline/workspace/MRNA?refresh=1')) {
+          throw new Error('expected background refresh request, got ' + requests.join(','));
+        }
+        if (document.getElementById('company-name').textContent !== 'Moderna refreshed') {
+          throw new Error('refreshed workspace was not rendered after async refresh');
+        }
+        if (chartConfigs.length < 2) {
+          throw new Error('expected cached and refreshed chart renders, got ' + chartConfigs.length);
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_workspace_js_fetches_backtest_options_for_current_ticker():
+    result = _run_workspace_script(r"""
+        const requests = [];
+        window.fetch = function (url) {
+          requests.push(url);
+          return Promise.resolve(jsonResponse({ default_price_source: 'yfinance' }));
+        };
+
+        installWorkspace(makeWorkspace({ ticker: 'MRNA' }));
+        runWorkspace();
+        await settle();
+
+        if (requests[0] !== '/api/backtest/options?ticker=MRNA') {
+          throw new Error('expected ticker-aware options request, got ' + requests.join(','));
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_range_context_ignores_stale_response():
     result = _run_workspace_script(r"""
         const deferred = [];
@@ -1047,9 +1113,9 @@ def _dom_harness() -> str:
           chartConfigs.length = 0;
         }
 
-        function installWorkspace(workspace) {
-          const script = addNode('kline-workspace-data', 'script');
-          script.textContent = JSON.stringify(workspace);
+        function installWorkspaceShell(ticker = 'MRNA') {
+          const root = addNode('kline-workspace', 'main');
+          root.dataset.ticker = ticker;
           addNode('source-strip');
           addNode('company-name');
           addNode('last-close');
@@ -1062,7 +1128,7 @@ def _dom_harness() -> str:
           const tickerForm = addNode('ticker-form', 'form');
           const symbol = document.createElement('input');
           symbol.name = 'symbol';
-          symbol.value = workspace.ticker || 'MRNA';
+          symbol.value = ticker;
           tickerForm.appendChild(symbol);
 
           ['catalysts', 'details', 'backtest', 'status'].forEach((name) => {
@@ -1073,6 +1139,12 @@ def _dom_harness() -> str:
             panel.dataset.panel = name;
             document.body.appendChild(panel);
           });
+        }
+
+        function installWorkspace(workspace) {
+          const script = addNode('kline-workspace-data', 'script');
+          script.textContent = JSON.stringify(workspace);
+          installWorkspaceShell(workspace.ticker || 'MRNA');
         }
 
         function catalystLayerWithSourceUrl(sourceUrl) {

@@ -62,6 +62,44 @@ def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
     }
 
 
+def get_cached_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
+    """Return cached OHLC rows without downloading or refreshing data."""
+    cache_path = DATA_DIR / f"{ticker}.parquet"
+    if not cache_path.exists():
+        return {
+            "rows": [],
+            "status": "empty",
+            "message": "no cached OHLC available",
+        }
+
+    try:
+        df = pd.read_parquet(cache_path)
+        rows = _serialize_ohlc_frame(df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Failed to load cached OHLC for {ticker}: {exc}")
+        return {
+            "rows": [],
+            "status": "error",
+            "message": str(exc),
+        }
+
+    if not rows:
+        return {
+            "rows": [],
+            "status": "empty",
+            "message": "cached OHLC is empty",
+            "last_updated": _cache_mtime_iso(cache_path),
+        }
+
+    is_stale = _is_cache_stale(cache_path, max_age_hours)
+    return {
+        "rows": rows,
+        "status": "stale" if is_stale else "ready",
+        "message": "cached OHLC is stale; refresh pending" if is_stale else None,
+        "last_updated": _cache_mtime_iso(cache_path),
+    }
+
+
 def _stale_payload(ticker: str, message: str) -> dict:
     return {
         "rows": _serialize_ohlc_frame(load_ohlc(ticker)),
@@ -74,3 +112,10 @@ def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:
     """Get OHLC rows with the historical list-only return contract."""
     payload = get_ohlc_rows_with_status(ticker, max_age_hours)
     return list(payload.get("rows") or [])
+
+
+def _cache_mtime_iso(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return None

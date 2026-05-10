@@ -26,8 +26,8 @@ class FakeOHLCProvider:
         self.KlinePriceSeries = KlinePriceSeries
         self.requests = []
 
-    def load(self, ticker: str):
-        self.requests.append(ticker)
+    def load(self, ticker: str, cache_only: bool = False):
+        self.requests.append((ticker, cache_only))
         return (
             self.KlinePriceSeries(
                 rows=[
@@ -55,8 +55,8 @@ class FakeCatalystProvider:
         self.KlineEvent = KlineEvent
         self.requests = []
 
-    def load(self, ticker: str):
-        self.requests.append(ticker)
+    def load(self, ticker: str, cache_only: bool = False):
+        self.requests.append((ticker, cache_only))
         return (
             [
                 self.KlineEvent(
@@ -470,7 +470,7 @@ def test_workspace_warnings_include_failed_source_statuses():
     contracts = _contracts()
 
     class RateLimitedCatalystProvider:
-        def load(self, ticker: str):
+        def load(self, ticker: str, cache_only: bool = False):
             return [], [
                 contracts.KlineDataStatus(
                     source="openfda",
@@ -533,6 +533,17 @@ def test_workspace_payload_contains_phase2_layers_and_future_capabilities():
         "phase": 3,
         "label": "Range Analysis",
     } in payload["capabilities"]
+
+
+def test_workspace_cache_only_mode_delegates_to_cache_only_providers():
+    contracts = _contracts()
+    service = _service(contracts)
+
+    service.build_workspace("MRNA", cache_only=True)
+
+    assert service.ohlc_provider.requests == [("MRNA", True)]
+    assert service.catalyst_provider.requests == [("MRNA", True)]
+    assert service.backtest_provider.requests == ["MRNA"]
 
 
 def test_workspace_backtest_layer_omits_backend_mock_metadata():
@@ -636,7 +647,7 @@ def test_workspace_payload_splits_catalyst_news_and_macro_layers():
     contracts = _contracts()
 
     class MixedEventProvider:
-        def load(self, ticker: str):
+        def load(self, ticker: str, cache_only: bool = False):
             return [
                 contracts.KlineEvent(
                     id="clinical-1",
