@@ -95,6 +95,47 @@ def test_build_narrative_payload_is_chapter_scoped_and_read_only():
     assert package.model_dump(mode="json") == before
 
 
+def test_narrative_payload_exposes_report_architecture_and_layer_summary():
+    package = _package()
+    trial = package.clinical_trials[0].model_copy(
+        update={
+            "phases": ["PHASE1"],
+            "has_results": False,
+            "study_results": "No posted results",
+            "strata": ["frontier"],
+            "primary_stratum": "frontier",
+            "primary_outcome_measures": ["Change in iADRS"],
+        }
+    )
+    package = package.model_copy(update={"clinical_trials": [trial]})
+
+    payload = build_narrative_payload(package)
+
+    assert payload["report_architecture"]["chapters"] == [
+        {
+            "id": "executive_summary",
+            "purpose": "Shows report scope, source counts, and how to read the evidence layers.",
+        },
+        {
+            "id": "clinical_trial_and_pipeline_landscape",
+            "purpose": "Shows deduplicated ClinicalTrials.gov records with layer, phase, status, and results fields.",
+        },
+        {
+            "id": "pipeline_timeline_and_competition_risk",
+            "purpose": "Shows deterministic timeline and competition signals derived from retained records.",
+        },
+    ]
+    assert payload["clinical_trial_and_pipeline_landscape"]["stratum_counts"]["frontier"] == 1
+    assert payload["clinical_trial_and_pipeline_landscape"]["phase_distribution"] == {"PHASE1": 1}
+    assert payload["clinical_trial_and_pipeline_landscape"]["results_distribution"] == {
+        "No posted results": 1,
+    }
+    assert payload["clinical_trial_and_pipeline_landscape"]["records"][0]["primary_stratum"] == "frontier"
+    assert payload["clinical_trial_and_pipeline_landscape"]["records"][0]["primary_outcome_measures"] == [
+        "Change in iADRS"
+    ]
+
+
 def test_narrative_service_returns_chinese_strings_from_mocked_gemini():
     client = FakeClient(
         {
@@ -115,6 +156,11 @@ def test_narrative_service_returns_chinese_strings_from_mocked_gemini():
         "clinical_trial_and_pipeline_landscape",
         "pipeline_timeline_and_competition_risk",
     ]
+    call = client.calls[0]
+    assert call["kwargs"]["max_output_tokens"] == 2400
+    assert "report_architecture" in call["prompt"]
+    assert "Explain what each report section shows" in call["system_instruction"]
+    assert "Do not overwrite or correct source fields" in call["system_instruction"]
 
 
 def test_narrative_service_returns_english_strings_from_mocked_gemini():
