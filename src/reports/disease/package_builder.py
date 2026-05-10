@@ -23,7 +23,9 @@ class DiseaseReportPackageBuilder:
     ) -> DiseaseReportPackage:
         deduped_by_nct: dict[str, ClinicalTrialRecord] = {}
         for record in retained_records:
-            deduped_by_nct.setdefault(record.nct_number, record)
+            existing = deduped_by_nct.get(record.nct_number)
+            if existing is None or landscape_sort_key(record) < landscape_sort_key(existing):
+                deduped_by_nct[record.nct_number] = record
 
         sorted_records = sorted(
             deduped_by_nct.values(),

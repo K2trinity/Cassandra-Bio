@@ -50,7 +50,7 @@ def test_build_dedupes_sorts_newest_first_and_populates_audit():
         retained_records=[
             _trial("NCT_OLD", date(2024, 1, 1)),
             _trial("NCT_NEW", date(2026, 1, 1)),
-            _trial("NCT_OLD", date(2025, 1, 1), title="Duplicate old study"),
+            _trial("NCT_OLD", date(2025, 1, 1), title="Newer duplicate old study"),
         ],
         raw_count="4",
         rejected_nct_numbers=rejected_nct_numbers,
@@ -58,7 +58,7 @@ def test_build_dedupes_sorts_newest_first_and_populates_audit():
     )
 
     assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_NEW", "NCT_OLD"]
-    assert package.clinical_trials[1].study_title == "Study NCT_OLD"
+    assert package.clinical_trials[1].study_title == "Newer duplicate old study"
     assert package.risk_records == risk_records
 
     audit = package.source_audit
@@ -143,5 +143,41 @@ def test_build_sorts_by_landscape_priority_and_records_stratum_counts():
         "evidence": 1,
         "foundation": 2,
         "frontier": 1,
+        "unclassified": 0,
+    }
+
+
+def test_build_keeps_best_duplicate_by_landscape_sort_key():
+    old_frontier = _trial("NCT_DUP", date(2023, 1, 1), title="Frontier old")
+    new_evidence = _trial("NCT_DUP", date(2026, 1, 1), title="Evidence new").model_copy(
+        update={
+            "has_results": True,
+            "strata": ["evidence", "foundation"],
+            "primary_stratum": "evidence",
+            "results_first_posted": date(2026, 2, 1),
+            "last_update_posted": date(2026, 3, 1),
+        }
+    )
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=_profile(),
+        retained_records=[old_frontier, new_evidence],
+        raw_count=2,
+        rejected_nct_numbers=[],
+        risk_records=[],
+    )
+
+    assert [trial.nct_number for trial in package.clinical_trials] == ["NCT_DUP"]
+    retained = package.clinical_trials[0]
+    assert retained.study_title == "Evidence new"
+    assert retained.has_results is True
+    assert retained.primary_stratum == "evidence"
+    assert retained.strata == ["evidence", "foundation"]
+    assert retained.results_first_posted == date(2026, 2, 1)
+    assert retained.last_update_posted == date(2026, 3, 1)
+    assert package.source_audit.details["stratum_counts"] == {
+        "evidence": 1,
+        "foundation": 1,
+        "frontier": 0,
         "unclassified": 0,
     }
