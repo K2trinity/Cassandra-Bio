@@ -15,6 +15,7 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
     interventions_module = _dict(protocol.get("armsInterventionsModule"))
     sponsors_module = _dict(protocol.get("sponsorCollaboratorsModule"))
     design_module = _dict(protocol.get("designModule"))
+    outcomes_module = _dict(protocol.get("outcomesModule"))
     metadata = _dict(payload.get("metadata"))
 
     nct = _first_text(payload, metadata, identification, keys=("nct_number", "nct_id", "nctId"))
@@ -42,15 +43,45 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
         default="Unknown",
     )
     study_type = _first_text(payload, metadata, design_module, keys=("study_type", "studyType"), default="Unknown")
+    has_results = _bool_from_sources(payload, metadata, "hasResults", "has_results")
+    result_label = "Results available" if has_results else "No posted results"
 
     return ClinicalTrialRecord(
         study_title=title or "Untitled Clinical Trial",
         nct_number=nct,
         status=status,
+        phases=_split_phase_values(
+            payload.get("phases")
+            or payload.get("phase")
+            or metadata.get("phases")
+            or metadata.get("phase")
+            or design_module.get("phases")
+        ),
+        has_results=has_results,
+        study_results=_first_text(
+            payload,
+            metadata,
+            keys=("study_results", "results_status"),
+            default=result_label,
+        ) or result_label,
+        results_url=_first_text(
+            payload,
+            metadata,
+            keys=("results_url",),
+            default=f"https://clinicaltrials.gov/study/{nct}/results",
+        ) or f"https://clinicaltrials.gov/study/{nct}/results",
         conditions=conditions,
         interventions=interventions,
         sponsor=sponsor,
         study_type=study_type,
+        enrollment=_int_from_sources(
+            payload,
+            metadata,
+            design_module.get("enrollmentInfo") if isinstance(design_module.get("enrollmentInfo"), dict) else {},
+            keys=("enrollment", "enrollment_count", "count"),
+        ),
+        primary_outcome_measures=_outcome_measures(outcomes_module, "primaryOutcomes"),
+        secondary_outcome_measures=_outcome_measures(outcomes_module, "secondaryOutcomes"),
         study_first_posted=_date_from_sources(
             payload,
             metadata,
@@ -58,6 +89,14 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
             "study_first_posted",
             "studyFirstPostDate",
             "studyFirstPostDateStruct",
+        ),
+        results_first_posted=_date_from_sources(
+            payload,
+            metadata,
+            status_module,
+            "results_first_posted",
+            "resultsFirstPostDate",
+            "resultsFirstPostDateStruct",
         ),
         last_update_posted=_date_from_sources(
             payload,
@@ -155,6 +194,68 @@ def _extract_interventions(
         or interventions_module.get("interventions")
         or interventions_module.get("intervention")
     )
+
+
+def _split_phase_values(value: Any) -> list[str]:
+    phases: list[str] = []
+    for item in _list_text(value):
+        for part in re.split(r"[,;/]", item):
+            text = part.strip().upper()
+            if text and text not in phases:
+                phases.append(text)
+    return phases
+
+
+def _bool_from_sources(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    *keys: str,
+) -> bool:
+    for source in (payload, metadata):
+        source_dict = _dict(source)
+        for key in keys:
+            value = source_dict.get(key)
+            if isinstance(value, bool):
+                return value
+            if value is not None:
+                return str(value).strip().lower() in {"true", "1", "yes", "y"}
+    return False
+
+
+def _int_from_sources(*sources: dict[str, Any], keys: Iterable[str]) -> int | None:
+    for source in sources:
+        source_dict = _dict(source)
+        for key in keys:
+            value = source_dict.get(key)
+            if isinstance(value, dict):
+                value = value.get("count")
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _outcome_measures(outcomes_module: dict[str, Any], key: str) -> list[str]:
+    values: list[str] = []
+    for item in _list_text(outcomes_module.get(key)):
+        text = item.strip()
+        if text and text not in values:
+            values.append(text)
+    if values:
+        return values
+
+    raw_items = outcomes_module.get(key) or []
+    measures: list[str] = []
+    if isinstance(raw_items, list):
+        for item in raw_items:
+            if isinstance(item, dict):
+                measure = str(item.get("measure") or "").strip()
+                if measure and measure not in measures:
+                    measures.append(measure)
+    return measures
 
 
 def _date_from_sources(

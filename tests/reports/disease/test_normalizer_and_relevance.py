@@ -54,7 +54,7 @@ def test_normalizer_reads_status_aliases_without_losing_source_field():
     assert normalize_trial_payload({**base, "metadata": {"study_status": "SUSPENDED"}}).status == "SUSPENDED"
 
 
-def test_normalizer_does_not_emit_removed_fields():
+def test_normalizer_preserves_enrollment_without_removed_endpoint_field():
     record = normalize_trial_payload(
         {
             "nct_id": "NCT06500003",
@@ -69,8 +69,55 @@ def test_normalizer_does_not_emit_removed_fields():
 
     payload = record.model_dump()
 
-    assert "enrollment" not in payload
+    assert payload["enrollment"] == 100
     assert "primary_endpoint" not in payload
+
+
+def test_normalizer_preserves_phase_results_outcomes_and_enrollment():
+    payload = {
+        "hasResults": True,
+        "protocolSection": {
+            "identificationModule": {
+                "nctId": "NCT99999999",
+                "briefTitle": "Phase 3 antibody study in Alzheimer Disease",
+            },
+            "statusModule": {
+                "overallStatus": "COMPLETED",
+                "studyFirstPostDateStruct": {"date": "2024-01-10"},
+                "resultsFirstPostDateStruct": {"date": "2026-03-01"},
+                "lastUpdatePostDateStruct": {"date": "2026-04-02"},
+            },
+            "conditionsModule": {"conditions": ["Alzheimer Disease"]},
+            "armsInterventionsModule": {
+                "interventions": [{"name": "Antibody A"}],
+            },
+            "sponsorCollaboratorsModule": {
+                "leadSponsor": {"name": "Sponsor A"},
+            },
+            "designModule": {
+                "phases": ["PHASE3"],
+                "studyType": "INTERVENTIONAL",
+                "enrollmentInfo": {"count": 1800},
+            },
+            "outcomesModule": {
+                "primaryOutcomes": [{"measure": "Change in CDR-SB"}],
+                "secondaryOutcomes": [{"measure": "Change in ADCS-ADL"}],
+            },
+        },
+    }
+
+    record = normalize_trial_payload(payload)
+
+    assert record.nct_number == "NCT99999999"
+    assert record.phases == ["PHASE3"]
+    assert record.has_results is True
+    assert record.study_results == "Results available"
+    assert record.results_url == "https://clinicaltrials.gov/study/NCT99999999/results"
+    assert record.results_first_posted == date(2026, 3, 1)
+    assert record.last_update_posted == date(2026, 4, 2)
+    assert record.enrollment == 1800
+    assert record.primary_outcome_measures == ["Change in CDR-SB"]
+    assert record.secondary_outcome_measures == ["Change in ADCS-ADL"]
 
 
 def test_relevance_gate_keeps_only_condition_full_match_records():
