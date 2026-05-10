@@ -11,6 +11,7 @@ from .clinicaltrials_harvester import (
 )
 from .company_routes import NoopCompanyRouteProvider
 from .ir_builder import DiseaseReportIRBuilder
+from .landscape import assign_landscape_strata
 from .models import ClinicalTrialRecord
 from .narrative import DiseaseReportNarrativeService
 from .normalizer import normalize_trial_payload
@@ -91,15 +92,19 @@ class DiseaseReportOrchestrator:
         rejected_nct_numbers = _unique_values(
             list(raw_result.rejected_nct_numbers) + list(relevance_result.rejected_nct_numbers)
         )
+        stratified_records = [
+            assign_landscape_strata(record)
+            for record in relevance_result.retained
+        ]
         risk_records = self.risk_engine.build(
-            relevance_result.retained,
+            stratified_records,
             disease_name=profile.disease_name,
         )
 
         harvest_state = self._build_harvest_state(
             user_query=user_query,
             profile=profile,
-            retained_records=relevance_result.retained,
+            retained_records=stratified_records,
             raw_records=raw_result.studies,
             rejected_nct_numbers=rejected_nct_numbers,
         )
@@ -107,7 +112,7 @@ class DiseaseReportOrchestrator:
 
         package = self.package_builder.build(
             disease_profile=profile,
-            retained_records=relevance_result.retained,
+            retained_records=stratified_records,
             raw_count=raw_result.raw_count,
             rejected_nct_numbers=rejected_nct_numbers,
             risk_records=risk_records,
