@@ -13,29 +13,43 @@ from src.reports.disease.models import (
 )
 
 
-def test_clinical_trial_record_has_required_report_fields_only():
+def test_clinical_trial_record_carries_landscape_fields():
     record = ClinicalTrialRecord(
         study_title="A Study of Donanemab in Early Symptomatic Alzheimer Disease",
         nct_number="NCT00000001",
         status="RECRUITING",
+        phases=["PHASE2"],
+        has_results=False,
+        study_results="No posted results",
+        results_url="https://clinicaltrials.gov/study/NCT00000001/results",
         conditions=["Alzheimer Disease"],
         interventions=["Donanemab"],
         sponsor="Eli Lilly and Company",
         study_type="INTERVENTIONAL",
+        enrollment=1200,
+        primary_outcome_measures=["Change from baseline in iADRS"],
+        secondary_outcome_measures=["Change from baseline in CDR-SB"],
         study_first_posted=date(2026, 4, 20),
+        results_first_posted=None,
         last_update_posted=date(2026, 4, 22),
         start_date=date(2026, 5, 1),
         primary_completion_date=date(2029, 5, 1),
         completion_date=None,
+        strata=["frontier"],
+        primary_stratum="frontier",
         source_url="https://clinicaltrials.gov/study/NCT00000001",
     )
 
     payload = record.model_dump()
 
+    assert payload["phases"] == ["PHASE2"]
     assert payload["status"] == "RECRUITING"
-    assert payload["conditions"] == ["Alzheimer Disease"]
-    assert "enrollment" not in payload
-    assert "primary_endpoint" not in payload
+    assert payload["has_results"] is False
+    assert payload["study_results"] == "No posted results"
+    assert payload["enrollment"] == 1200
+    assert payload["primary_outcome_measures"] == ["Change from baseline in iADRS"]
+    assert payload["strata"] == ["frontier"]
+    assert payload["primary_stratum"] == "frontier"
 
 
 def test_clinical_trial_record_rejects_unknown_fields():
@@ -49,7 +63,7 @@ def test_clinical_trial_record_rejects_unknown_fields():
             sponsor="Unknown",
             study_type="OBSERVATIONAL",
             source_url="https://clinicaltrials.gov/study/NCT00000002",
-            enrollment="100",
+            unsupported_field="not allowed",
         )
 
 

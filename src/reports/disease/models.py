@@ -24,15 +24,25 @@ class ClinicalTrialRecord(BaseModel):
     study_title: str = Field(..., min_length=1)
     nct_number: str = Field(..., min_length=1)
     status: str = Field(default="Unknown", min_length=1)
+    phases: list[str] = Field(default_factory=list)
+    has_results: bool = False
+    study_results: str = "No posted results"
+    results_url: str = ""
     conditions: list[str] = Field(default_factory=list)
     interventions: list[str] = Field(default_factory=list)
     sponsor: str = "Unknown"
     study_type: str = "Unknown"
+    enrollment: int | None = None
+    primary_outcome_measures: list[str] = Field(default_factory=list)
+    secondary_outcome_measures: list[str] = Field(default_factory=list)
     study_first_posted: date | None = None
+    results_first_posted: date | None = None
     last_update_posted: date | None = None
     start_date: date | None = None
     primary_completion_date: date | None = None
     completion_date: date | None = None
+    strata: list[str] = Field(default_factory=list)
+    primary_stratum: str = "unclassified"
     source_url: str = Field(..., min_length=1)
 
 
