@@ -42,6 +42,13 @@ def _package() -> DiseaseReportPackage:
         study_type="INTERVENTIONAL",
         study_first_posted=date(2026, 4, 20),
         source_url="https://clinicaltrials.gov/study/NCT00000001",
+        phases=["PHASE1"],
+        has_results=False,
+        study_results="No posted results",
+        enrollment=500,
+        primary_outcome_measures=["Change in iADRS"],
+        strata=["frontier"],
+        primary_stratum="frontier",
     )
     risk = PipelineRiskRecord(
         nct_number="NCT00000001",
@@ -83,7 +90,19 @@ def _table_headers(table: dict) -> list[str]:
 
 def _find_table(ir: dict, chapter_id: str) -> dict:
     chapter = next(chapter for chapter in ir["chapters"] if chapter["chapterId"] == chapter_id)
-    return next(block for block in chapter["blocks"] if block["type"] == "table")
+    if chapter_id == "clinical_trial_and_pipeline_landscape":
+        return next(
+            block
+            for block in chapter["blocks"]
+            if block["type"] == "table"
+            and block["caption"] == "Clinical trial landscape"
+            and block["metadata"]["layout"] == "wide-clinical-trial-table"
+        )
+    return next(
+        block
+        for block in chapter["blocks"]
+        if block["type"] == "table"
+    )
 
 
 def test_ir_has_exact_three_approved_chapters():
@@ -96,15 +115,41 @@ def test_ir_has_exact_three_approved_chapters():
     ]
 
 
-def test_landscape_table_uses_exact_approved_columns():
+def test_landscape_table_uses_layer_phase_status_results_columns():
+    ir = DiseaseReportIRBuilder().build(_package())
+
+    chapter = next(
+        chapter
+        for chapter in ir["chapters"]
+        if chapter["chapterId"] == "clinical_trial_and_pipeline_landscape"
+    )
+    tables = [block for block in chapter["blocks"] if block["type"] == "table"]
+
+    assert tables[0]["caption"] == "ClinicalTrials landscape layer summary"
+    assert tables[1]["caption"] == "Clinical trial landscape"
+    assert _table_headers(tables[1]) == LANDSCAPE_COLUMNS
+    assert tables[1]["metadata"]["layout"] == "wide-clinical-trial-table"
+    assert tables[1]["metadata"]["className"] == "clinical-trial-landscape"
+    assert len(tables[1]["colgroup"]) == len(LANDSCAPE_COLUMNS)
+    assert "Layer" in LANDSCAPE_COLUMNS
+    assert "Phase" in LANDSCAPE_COLUMNS
+    assert "Results" in LANDSCAPE_COLUMNS
+
+
+def test_landscape_table_renders_source_fields_without_llm_rewrite():
     ir = DiseaseReportIRBuilder().build(_package())
 
     table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
+    values = [
+        cell["blocks"][0]["inlines"][0]["text"]
+        for cell in table["rows"][1]["cells"]
+    ]
 
-    assert _table_headers(table) == LANDSCAPE_COLUMNS
-    assert table["metadata"]["layout"] == "wide-clinical-trial-table"
-    assert table["metadata"]["className"] == "clinical-trial-landscape"
-    assert len(table["colgroup"]) == 7
+    assert "frontier" in values
+    assert "PHASE1" in values
+    assert "RECRUITING" in values
+    assert "No posted results" in values
+    assert "Change in iADRS" in values
 
 
 def test_ir_excludes_removed_sections_and_removed_fields():
@@ -119,7 +164,6 @@ def test_ir_excludes_removed_sections_and_removed_fields():
         " ".join(["Literature", "Review"]),
         " ".join(["CNS", "Benchmark"]),
         " ".join(["Data", "Quality"]),
-        "Enroll" + "ment",
         " ".join(["Primary", "Endpoint"]),
     ]:
         assert removed_text not in payload

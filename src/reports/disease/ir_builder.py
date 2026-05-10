@@ -5,6 +5,7 @@ from typing import Any
 
 from src.engines.report_engine.core import DocumentComposer
 
+from .landscape import stratum_counts
 from .models import (
     ClinicalTrialRecord,
     DiseaseChapterNarratives,
@@ -13,13 +14,17 @@ from .models import (
 )
 
 LANDSCAPE_COLUMNS = [
+    "Layer",
     "Study Title",
     "NCT Number",
+    "Phase",
     "Status",
-    "Conditions",
+    "Results",
     "Interventions",
     "Sponsor",
-    "Study Type",
+    "Enrollment",
+    "Primary Outcomes",
+    "Last Update Posted",
 ]
 
 RISK_COLUMNS = [
@@ -35,13 +40,17 @@ RISK_COLUMNS = [
 ]
 
 LANDSCAPE_COLGROUP = [
-    {"key": "study_title", "width": "24%"},
-    {"key": "nct_number", "width": "12%"},
-    {"key": "status", "width": "12%"},
-    {"key": "conditions", "width": "14%"},
-    {"key": "interventions", "width": "16%"},
-    {"key": "sponsor", "width": "14%"},
-    {"key": "study_type", "width": "8%"},
+    {"key": "primary_stratum", "width": "8%"},
+    {"key": "study_title", "width": "18%"},
+    {"key": "nct_number", "width": "10%"},
+    {"key": "phases", "width": "8%"},
+    {"key": "status", "width": "9%"},
+    {"key": "study_results", "width": "9%"},
+    {"key": "interventions", "width": "12%"},
+    {"key": "sponsor", "width": "10%"},
+    {"key": "enrollment", "width": "6%"},
+    {"key": "primary_outcome_measures", "width": "14%"},
+    {"key": "last_update_posted", "width": "8%"},
 ]
 
 RISK_COLGROUP = [
@@ -147,13 +156,17 @@ class DiseaseReportIRBuilder:
     ) -> dict:
         rows = [
             [
+                trial.primary_stratum,
                 trial.study_title,
                 trial.nct_number,
+                _join_list(trial.phases),
                 trial.status,
-                _join_list(trial.conditions),
+                trial.study_results,
                 _join_list(trial.interventions),
                 trial.sponsor,
-                trial.study_type,
+                trial.enrollment,
+                _join_list(trial.primary_outcome_measures),
+                trial.last_update_posted,
             ]
             for trial in trials
         ]
@@ -170,6 +183,15 @@ class DiseaseReportIRBuilder:
                 _paragraph(
                     narratives.clinical_trial_and_pipeline_landscape
                     or f"Structured clinical landscape contains {len(trials)} retained records."
+                ),
+                _table(
+                    ["Layer", "Records", "Filter Meaning", "With Results", "Core Question"],
+                    _layer_summary_rows(trials),
+                    caption="ClinicalTrials landscape layer summary",
+                    metadata={
+                        "layout": "clinical-trial-layer-summary",
+                        "className": "clinical-trial-layer-summary",
+                    },
                 ),
                 _table(
                     LANDSCAPE_COLUMNS,
@@ -229,6 +251,44 @@ class DiseaseReportIRBuilder:
                 ),
             ],
         }
+
+
+def _layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
+    counts = stratum_counts(trials)
+    result_counts = {
+        "evidence": sum(
+            1 for trial in trials if "evidence" in trial.strata and trial.has_results
+        ),
+        "foundation": sum(
+            1 for trial in trials if "foundation" in trial.strata and trial.has_results
+        ),
+        "frontier": sum(
+            1 for trial in trials if "frontier" in trial.strata and trial.has_results
+        ),
+    }
+    return [
+        [
+            "Evidence",
+            counts["evidence"],
+            "Posted results",
+            result_counts["evidence"],
+            "Objective efficacy/safety result-bearing records",
+        ],
+        [
+            "Foundation",
+            counts["foundation"],
+            "Phase 3/4 active-not-recruiting or completed",
+            result_counts["foundation"],
+            "Late-stage standard-of-care and benchmark activity",
+        ],
+        [
+            "Frontier",
+            counts["frontier"],
+            "Phase 1/2 recruiting or not-yet-recruiting",
+            result_counts["frontier"],
+            "Early mechanism and target exploration",
+        ],
+    ]
 
 
 def _heading(text: str, anchor: str) -> dict:
