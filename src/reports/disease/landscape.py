@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from .models import ClinicalTrialRecord
 
@@ -54,7 +54,7 @@ def stratum_counts(records: list[ClinicalTrialRecord]) -> dict[str, int]:
     return counts
 
 
-def landscape_sort_key(record: ClinicalTrialRecord) -> tuple[int, int, date, str]:
+def landscape_sort_key(record: ClinicalTrialRecord) -> tuple[int, int, timedelta, str]:
     primary = record.primary_stratum or "unclassified"
     priority = STRATUM_PRIORITY.get(primary, STRATUM_PRIORITY["unclassified"])
     has_results_rank = 0 if record.has_results else 1

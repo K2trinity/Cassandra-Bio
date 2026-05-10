@@ -21,11 +21,14 @@ def _trial(nct_number: str, posted: date | None, title: str | None = None) -> Cl
         study_title=title or f"Study {nct_number}",
         nct_number=nct_number,
         status="RECRUITING",
+        phases=["PHASE1"],
         conditions=["Alzheimer Disease"],
         interventions=["Drug A"],
         sponsor="Sponsor A",
         study_type="INTERVENTIONAL",
         study_first_posted=posted,
+        strata=["frontier"],
+        primary_stratum="frontier",
         source_url=f"https://clinicaltrials.gov/study/{nct_number}",
     )
 
@@ -103,3 +106,42 @@ def test_build_sorts_missing_study_first_posted_last():
         "NCT_OLD",
         "NCT_MISSING",
     ]
+
+
+def test_build_sorts_by_landscape_priority_and_records_stratum_counts():
+    profile = _profile()
+    evidence = _trial("NCT_EVIDENCE", date(2024, 1, 1))
+    evidence = evidence.model_copy(
+        update={
+            "has_results": True,
+            "strata": ["evidence", "foundation"],
+            "primary_stratum": "evidence",
+        }
+    )
+    foundation = _trial("NCT_FOUNDATION", date(2026, 1, 1)).model_copy(
+        update={"strata": ["foundation"], "primary_stratum": "foundation"}
+    )
+    frontier = _trial("NCT_FRONTIER", date(2026, 5, 1)).model_copy(
+        update={"strata": ["frontier"], "primary_stratum": "frontier"}
+    )
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=profile,
+        retained_records=[frontier, foundation, evidence],
+        raw_count=3,
+        rejected_nct_numbers=[],
+        risk_records=[],
+        max_records=50,
+    )
+
+    assert [trial.nct_number for trial in package.clinical_trials] == [
+        "NCT_EVIDENCE",
+        "NCT_FOUNDATION",
+        "NCT_FRONTIER",
+    ]
+    assert package.source_audit.details["stratum_counts"] == {
+        "evidence": 1,
+        "foundation": 2,
+        "frontier": 1,
+        "unclassified": 0,
+    }

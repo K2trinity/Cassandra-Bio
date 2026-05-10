@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
-
+from .landscape import landscape_sort_key, stratum_counts
 from .models import (
     ClinicalTrialRecord,
     DiseaseProfile,
@@ -28,11 +27,7 @@ class DiseaseReportPackageBuilder:
 
         sorted_records = sorted(
             deduped_by_nct.values(),
-            key=lambda record: (
-                record.study_first_posted is not None,
-                record.study_first_posted or date.min,
-            ),
-            reverse=True,
+            key=landscape_sort_key,
         )
         capped_records = sorted_records[:max_records]
 
@@ -44,6 +39,9 @@ class DiseaseReportPackageBuilder:
             retained_count=len(capped_records),
             rejected_count=len(rejected_nct_numbers),
             rejected_nct_numbers=list(rejected_nct_numbers),
+            details={
+                "stratum_counts": stratum_counts(capped_records),
+            },
         )
 
         return DiseaseReportPackage(
