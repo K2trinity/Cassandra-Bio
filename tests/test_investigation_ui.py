@@ -95,6 +95,12 @@ def test_company_quick_query_selects_company_mode():
     assert "btn.dataset.targetType" in html
 
 
+def test_investigation_kline_navigation_preserves_current_run_page():
+    html = render_investigation()
+
+    assert 'href="/kline" target="_blank" rel="noopener noreferrer" data-tab="kline"' in html
+
+
 def test_investigation_page_has_no_graph_or_image_capture_remnants():
     html = render_investigation()
 
