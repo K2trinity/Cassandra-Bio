@@ -98,20 +98,41 @@ def test_company_quick_query_selects_company_mode():
 def test_investigation_quick_queries_use_supported_target_prompts():
     html = render_investigation()
 
-    assert (
-        'placeholder="Disease landscape on melanoma, focusing on immune checkpoint inhibitor safety signals"'
-        in html
-    )
-    assert (
-        'data-query="Disease landscape on melanoma, focusing on immune checkpoint inhibitor hepatotoxicity and safety signals"'
-        in html
-    )
-    assert (
-        'data-query="Disease landscape on sickle cell disease, focusing on CRISPR and gene-editing clinical trials"'
-        in html
-    )
+    assert 'placeholder="conduct a comprehensive survey on Alzheimer Disease"' in html
+    assert 'data-query="conduct a comprehensive survey on Alzheimer Disease"' in html
+    assert 'data-target-type="disease"' in html
+    assert "Alzheimer Disease landscape" in html
+    assert 'data-query="Company pipeline for Vertex Pharmaceuticals"' in html
+    assert 'data-target-type="company"' in html
+    assert "Vertex pipeline" in html
+    assert html.count('class="quick-query ') == 2
+    assert "Melanoma safety landscape" not in html
+    assert "CRISPR disease landscape" not in html
     assert 'data-query="Assess nivolumab hepatotoxicity in melanoma patients"' not in html
     assert 'data-query="Evaluate CRISPR off-target effects in clinical trials"' not in html
+
+
+def test_investigation_page_exposes_prompt_pattern_guide_for_both_report_types():
+    html = render_investigation()
+
+    assert 'data-testid="prompt-pattern-guide"' in html
+    assert "View prompt patterns" in html
+    assert "Disease report" in html
+    assert "conduct a comprehensive survey on Alzheimer Disease" in html
+    assert "Company report" in html
+    assert "Company pipeline for Vertex Pharmaceuticals" in html
+
+
+def test_investigation_warns_when_query_sentence_may_not_retrieve():
+    html = render_investigation()
+
+    assert 'id="promptWarning"' in html
+    assert "function getPromptPatternWarning" in html
+    assert "This sentence may not retrieve ClinicalTrials records" in html
+    assert "Use: conduct a comprehensive survey on Alzheimer Disease" in html
+    assert "Use: Company pipeline for Vertex Pharmaceuticals" in html
+    assert "queryInput.addEventListener('input', updatePromptWarning)" in html
+    assert "analysis_target_type" in html
 
 
 def test_analyze_empty_harvest_payload_explains_source_problem(monkeypatch, tmp_path):

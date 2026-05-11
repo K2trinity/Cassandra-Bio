@@ -274,10 +274,11 @@
                 <textarea
                     id="queryInput"
                     rows="5"
-                    placeholder="Disease landscape on melanoma, focusing on immune checkpoint inhibitor safety signals"
+                    placeholder="conduct a comprehensive survey on Alzheimer Disease"
                     class="min-h-36 w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-white placeholder-slate-500 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
                     required
                 ></textarea>
+                <div id="promptWarning" class="mt-3 hidden rounded-lg border border-amber-700/70 bg-amber-950/30 p-3 text-sm text-amber-100"></div>
                 <div data-testid="analysis-target-mode" class="mt-4 grid grid-cols-2 overflow-hidden rounded-lg border border-slate-700 bg-slate-950 p-1 text-sm">
                     <label class="cursor-pointer">
                         <input type="radio" name="analysis_target_type" value="disease" class="peer sr-only" checked>
@@ -288,6 +289,19 @@
                         <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-cyan-500 peer-checked:text-slate-950">Company pipeline</span>
                     </label>
                 </div>
+                <details data-testid="prompt-pattern-guide" class="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
+                    <summary class="cursor-pointer select-none font-semibold text-cyan-200">View prompt patterns</summary>
+                    <div class="mt-3 grid gap-3">
+                        <div class="rounded-md border border-slate-800 bg-slate-900 p-3">
+                            <div class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Disease report</div>
+                            <code class="block whitespace-normal rounded bg-slate-950 px-2 py-1 text-cyan-100">conduct a comprehensive survey on Alzheimer Disease</code>
+                        </div>
+                        <div class="rounded-md border border-slate-800 bg-slate-900 p-3">
+                            <div class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Company report</div>
+                            <code class="block whitespace-normal rounded bg-slate-950 px-2 py-1 text-cyan-100">Company pipeline for Vertex Pharmaceuticals</code>
+                        </div>
+                    </div>
+                </details>
                 <div class="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
                     <button
                         type="submit"
@@ -322,11 +336,8 @@
                     <span class="text-xs font-medium text-slate-500">Optional</span>
                 </div>
                 <div class="grid gap-2">
-                    <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Disease landscape on melanoma, focusing on immune checkpoint inhibitor hepatotoxicity and safety signals">
-                        Melanoma safety landscape
-                    </button>
-                    <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Disease landscape on sickle cell disease, focusing on CRISPR and gene-editing clinical trials">
-                        CRISPR disease landscape
+                    <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="conduct a comprehensive survey on Alzheimer Disease" data-target-type="disease">
+                        Alzheimer Disease landscape
                     </button>
                     <button class="quick-query rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-left text-sm text-slate-300 transition hover:border-cyan-500 hover:text-cyan-200" data-query="Company pipeline for Vertex Pharmaceuticals" data-target-type="company">
                         Vertex pipeline
@@ -964,10 +975,49 @@
     
     // ===== End Phase 3.2 Functions =====
     
+    function selectedAnalysisTargetType() {
+        const targetModeInput = document.querySelector('input[name="analysis_target_type"]:checked');
+        return targetModeInput ? targetModeInput.value : 'disease';
+    }
+
+    function getPromptPatternWarning(query, targetType) {
+        const normalizedQuery = (query || '').trim();
+        if (!normalizedQuery) return '';
+
+        const diseasePattern = /\b(?:conduct|create|generate|prepare|write|disease)\b.*\b(?:survey|landscape|report|review|analysis|overview)\b.*\b(?:on|of|about|for)\b.+/i;
+        const companyPattern = /\b(?:company\s+)?(?:pipeline|portfolio)\s+(?:for|of|on|about)\s+.+/i;
+
+        if (targetType === 'company') {
+            if (companyPattern.test(normalizedQuery)) return '';
+            return 'This sentence may not retrieve sponsor records. Use: Company pipeline for Vertex Pharmaceuticals';
+        }
+
+        if (diseasePattern.test(normalizedQuery)) return '';
+        return 'This sentence may not retrieve ClinicalTrials records. Use: conduct a comprehensive survey on Alzheimer Disease';
+    }
+
+    function updatePromptWarning() {
+        const warningEl = document.getElementById('promptWarning');
+        const queryInput = document.getElementById('queryInput');
+        if (!warningEl || !queryInput) return '';
+
+        const warning = getPromptPatternWarning(queryInput.value, selectedAnalysisTargetType());
+        if (!warning) {
+            warningEl.classList.add('hidden');
+            warningEl.innerHTML = '';
+            return '';
+        }
+
+        warningEl.classList.remove('hidden');
+        warningEl.innerHTML = escapeHtml(warning);
+        return warning;
+    }
+
     // Quick query buttons
+    const queryInput = document.getElementById('queryInput');
     document.querySelectorAll('.quick-query').forEach(btn => {
         btn.addEventListener('click', () => {
-            document.getElementById('queryInput').value = btn.dataset.query;
+            queryInput.value = btn.dataset.query;
             const targetType = btn.dataset.targetType;
             if (targetType) {
                 const targetMode = document.querySelector(`input[name="analysis_target_type"][value="${targetType}"]`);
@@ -975,11 +1025,17 @@
                     targetMode.checked = true;
                 }
             }
+            updatePromptWarning();
         });
+    });
+
+    queryInput.addEventListener('input', updatePromptWarning);
+    document.querySelectorAll('input[name="analysis_target_type"]').forEach(input => {
+        input.addEventListener('change', updatePromptWarning);
     });
     
     // Keyboard shortcut
-    document.getElementById('queryInput').addEventListener('keydown', (e) => {
+    queryInput.addEventListener('keydown', (e) => {
         if (e.ctrlKey && e.key === 'Enter') {
             document.getElementById('queryForm').dispatchEvent(new Event('submit'));
         }
@@ -1085,7 +1141,9 @@
     document.getElementById('queryForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         
-        const query = document.getElementById('queryInput').value.trim();
+        const query = queryInput.value.trim();
+        const analysisTargetType = selectedAnalysisTargetType();
+        const promptPatternWarning = updatePromptWarning();
         _lastSubmittedQuery = query;  // 快照本次查询，供 Retry 按钮复用
         const progressSection = document.getElementById('progressSection');
         const logContainer = document.getElementById('logContainer');
@@ -1143,10 +1201,11 @@
         try {
             const formData = new FormData();
             formData.append('query', query);
-            const targetModeInput = document.querySelector('input[name="analysis_target_type"]:checked');
-            const analysisTargetType = targetModeInput ? targetModeInput.value : 'auto';
             formData.append('analysis_target_type', analysisTargetType);
             uploadedFiles.forEach(file => formData.append('files', file));
+            if (promptPatternWarning) {
+                addLog('warning', promptPatternWarning);
+            }
             
             const response = await fetch('/api/analyze', {
                 method: 'POST',
