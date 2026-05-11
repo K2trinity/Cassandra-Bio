@@ -78,6 +78,19 @@ RISK_COLGROUP = [
     {"key": "competition_evidence", "width": "15%"},
 ]
 
+CHART_COLORS = [
+    "#2563eb",
+    "#16a34a",
+    "#f59e0b",
+    "#dc2626",
+    "#7c3aed",
+    "#0891b2",
+    "#64748b",
+]
+
+DISEASE_STRATUM_ORDER = ["evidence", "foundation", "frontier", "unclassified"]
+COMPANY_STRATUM_ORDER = ["catalyst", "expansion", "track_record", "unclassified"]
+
 
 class DiseaseReportIRBuilder:
     def build(
@@ -109,6 +122,13 @@ class DiseaseReportIRBuilder:
             "generatedAt": _isoformat(package.generated_at),
             "sourceAudit": package.source_audit.model_dump(mode="json"),
             "layout": {
+                "visualHierarchy": [
+                    "chapterBrief",
+                    "kpiGrid",
+                    "chart",
+                    "summaryTable",
+                    "detailTable",
+                ],
                 "wideTables": [
                     {
                         "chapterId": "clinical_trial_and_pipeline_landscape",
@@ -127,16 +147,28 @@ class DiseaseReportIRBuilder:
         }
         if is_company:
             audit_details = package.source_audit.details
+            stratum_counts = _int_mapping(audit_details.get("stratum_counts"))
             metadata["companyPipeline"] = {
-                "stratumCounts": _int_mapping(audit_details.get("stratum_counts")),
+                "stratumCounts": stratum_counts,
                 "expansionConditionCounts": _int_mapping(
                     audit_details.get("expansion_condition_counts")
                 ),
             }
         else:
+            stratum_counts = _stratum_counts(package)
             metadata["diseaseLandscape"] = {
-                "stratumCounts": _stratum_counts(package),
+                "stratumCounts": stratum_counts,
             }
+        metadata["landscapeOverview"] = {
+            "retainedRecords": package.source_audit.retained_count,
+            "rejectedRecords": package.source_audit.rejected_count,
+            "riskRecords": len(package.risk_records),
+            "stratumCounts": stratum_counts,
+            "phaseDistribution": _phase_distribution(package.clinical_trials),
+            "statusDistribution": _status_distribution(package.clinical_trials),
+            "resultsDistribution": _results_distribution(package.clinical_trials),
+            "riskDistribution": _risk_distribution(package.risk_records),
+        }
 
         chapters = [
             self._executive_summary_chapter(package, narratives),
@@ -176,7 +208,14 @@ class DiseaseReportIRBuilder:
             "order": 10,
             "blocks": [
                 _heading("Executive Summary", "executive-summary"),
-                _paragraph(narratives.executive_summary or summary),
+                _chapter_brief(
+                    narratives.executive_summary or summary,
+                    [
+                        f"{audit.retained_count} retained records",
+                        f"{audit.rejected_count} rejected records",
+                        f"{len(package.risk_records)} risk records",
+                    ],
+                ),
                 {
                     "type": "kpiGrid",
                     "cols": 3,
@@ -186,6 +225,21 @@ class DiseaseReportIRBuilder:
                         {"label": "Risk Records", "value": str(len(package.risk_records))},
                     ],
                 },
+                _bar_widget(
+                    "report-intake-funnel",
+                    "Report Intake Funnel",
+                    [
+                        ("Retained Records", audit.retained_count),
+                        ("Rejected Records", audit.rejected_count),
+                    ],
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "executive-layer-mix",
+                    "Landscape Layer Mix",
+                    _stratum_chart_items(package),
+                    dataset_label="Records",
+                ),
             ],
         }
 
@@ -223,9 +277,38 @@ class DiseaseReportIRBuilder:
                     "Clinical Trial And Pipeline Landscape",
                     "clinical-trial-and-pipeline-landscape",
                 ),
-                _paragraph(
+                _chapter_brief(
                     narratives.clinical_trial_and_pipeline_landscape
-                    or f"Structured clinical landscape contains {len(trials)} retained records."
+                    or f"Structured clinical landscape contains {len(trials)} retained records.",
+                    [
+                        f"{len(trials)} retained records",
+                        f"{len(_phase_distribution(trials))} phase buckets",
+                        f"{sum(1 for trial in trials if trial.has_results)} records with posted results",
+                    ],
+                ),
+                _bar_widget(
+                    "landscape-layer-mix",
+                    "Landscape Layer Mix",
+                    _stratum_chart_items(package),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "landscape-phase-mix",
+                    "Phase Mix",
+                    _count_items(_phase_distribution(trials)),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "landscape-results-availability",
+                    "Results Availability",
+                    _count_items(_results_distribution(trials)),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "landscape-status-mix",
+                    "Status Mix",
+                    _count_items(_status_distribution(trials), limit=8),
+                    dataset_label="Records",
                 ),
                 _table(
                     ["Layer", "Records", "Filter Meaning", "With Results", "Core Question"],
@@ -282,9 +365,26 @@ class DiseaseReportIRBuilder:
                     "Pipeline Timeline And Competition Risk",
                     "pipeline-timeline-and-competition-risk",
                 ),
-                _paragraph(
+                _chapter_brief(
                     narratives.pipeline_timeline_and_competition_risk
-                    or f"Timeline and competition assessment uses {len(risk_records)} deterministic risk records."
+                    or f"Timeline and competition assessment uses {len(risk_records)} deterministic risk records.",
+                    [
+                        f"{len(risk_records)} deterministic risk records",
+                        f"{len(_risk_signal_counts(risk_records, 'timeline_signal'))} timeline labels",
+                        f"{len(_risk_signal_counts(risk_records, 'competition_signal'))} competition labels",
+                    ],
+                ),
+                _bar_widget(
+                    "risk-timeline-signal-distribution",
+                    "Timeline Signal Distribution",
+                    _count_items(_risk_signal_counts(risk_records, "timeline_signal")),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "risk-competition-signal-distribution",
+                    "Competition Signal Distribution",
+                    _count_items(_risk_signal_counts(risk_records, "competition_signal")),
+                    dataset_label="Records",
                 ),
                 _table(
                     RISK_COLUMNS,
@@ -323,7 +423,30 @@ class DiseaseReportIRBuilder:
                     "Company Catalyst And R&D Summary",
                     "company-catalyst-and-rd-summary",
                 ),
-                _paragraph(summary_text),
+                _chapter_brief(
+                    summary_text,
+                    [
+                        f"{stratum_counts.get('catalyst', 0)} catalyst records",
+                        f"{stratum_counts.get('expansion', 0)} expansion records",
+                        f"{stratum_counts.get('track_record', 0)} track-record records",
+                    ],
+                ),
+                _bar_widget(
+                    "company-pipeline-hierarchy",
+                    "Company Pipeline Hierarchy",
+                    _count_items(
+                        stratum_counts,
+                        order=COMPANY_STRATUM_ORDER,
+                        labels=STRATUM_LABELS,
+                    ),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "company-expansion-condition-mix",
+                    "Expansion Condition Mix",
+                    _count_items(expansion_condition_counts, limit=8),
+                    dataset_label="Records",
+                ),
                 _labeled_paragraph(
                     "Catalyst Tracker",
                     f"{stratum_counts.get('catalyst', 0)} event-driven records prioritized by near-term readout timing.",
@@ -362,7 +485,34 @@ class DiseaseReportIRBuilder:
                     "Disease Evidence Synthesis Summary",
                     "disease-evidence-synthesis-summary",
                 ),
-                _paragraph(summary_text),
+                _chapter_brief(
+                    summary_text,
+                    [
+                        f"{counts.get('evidence', 0)} evidence records",
+                        f"{counts.get('foundation', 0)} foundation records",
+                        f"{counts.get('frontier', 0)} frontier records",
+                    ],
+                ),
+                _bar_widget(
+                    "disease-evidence-hierarchy",
+                    "Disease Evidence Hierarchy",
+                    _count_items(
+                        counts,
+                        order=DISEASE_STRATUM_ORDER,
+                        labels=STRATUM_LABELS,
+                    ),
+                    dataset_label="Records",
+                ),
+                _bar_widget(
+                    "report-evidence-flow",
+                    "Report Evidence Flow",
+                    [
+                        ("Retained Records", package.source_audit.retained_count),
+                        ("Rejected Records", package.source_audit.rejected_count),
+                        ("Risk Records", len(package.risk_records)),
+                    ],
+                    dataset_label="Records",
+                ),
                 _labeled_paragraph(
                     "Evidence Base",
                     (
@@ -480,6 +630,26 @@ def _paragraph(text: Any) -> dict:
     return {"type": "paragraph", "inlines": [{"text": _display_value(text)}]}
 
 
+def _chapter_brief(summary: Any, focus_items: list[str] | None = None) -> dict:
+    blocks = [_paragraph(summary)]
+    clean_focus = [item for item in (focus_items or []) if item]
+    if clean_focus:
+        blocks.append(
+            {
+                "type": "list",
+                "listType": "bullet",
+                "items": [[_paragraph(item)] for item in clean_focus],
+            }
+        )
+    return {
+        "type": "callout",
+        "tone": "info",
+        "title": "Chapter Brief",
+        "blocks": blocks,
+        "metadata": {"layout": "chapter-brief"},
+    }
+
+
 def _labeled_paragraph(label: str, body: str) -> dict:
     return {
         "type": "paragraph",
@@ -530,6 +700,129 @@ def _table(
     if colgroup:
         block["colgroup"] = colgroup
     return block
+
+
+def _bar_widget(
+    widget_id: str,
+    title: str,
+    items: list[tuple[str, int]],
+    *,
+    dataset_label: str,
+) -> dict:
+    clean_items = [(label, int(value)) for label, value in items if label]
+    if not clean_items:
+        clean_items = [("No records", 0)]
+    labels = [label for label, _ in clean_items]
+    values = [value for _, value in clean_items]
+    colors = [CHART_COLORS[index % len(CHART_COLORS)] for index in range(len(labels))]
+    return {
+        "type": "widget",
+        "widgetId": widget_id,
+        "widgetType": "chart.js/bar",
+        "props": {
+            "title": title,
+            "type": "bar",
+            "options": {
+                "indexAxis": "y",
+                "responsive": True,
+                "plugins": {"legend": {"display": False}},
+                "scales": {
+                    "x": {"beginAtZero": True, "ticks": {"precision": 0}},
+                    "y": {"ticks": {"autoSkip": False}},
+                },
+            },
+        },
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": dataset_label,
+                    "data": values,
+                    "backgroundColor": colors,
+                    "borderColor": colors,
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "metadata": {"layout": "visual-summary-chart"},
+    }
+
+
+def _stratum_chart_items(package: DiseaseReportPackage) -> list[tuple[str, int]]:
+    counts = _stratum_counts(package)
+    if package.disease_profile.target_type == "company":
+        return _count_items(
+            counts,
+            order=COMPANY_STRATUM_ORDER,
+            labels=STRATUM_LABELS,
+        )
+    return _count_items(
+        counts,
+        order=DISEASE_STRATUM_ORDER,
+        labels=STRATUM_LABELS,
+    )
+
+
+def _count_items(
+    counts: dict[str, int],
+    *,
+    order: list[str] | None = None,
+    labels: dict[str, str] | None = None,
+    limit: int | None = None,
+) -> list[tuple[str, int]]:
+    if not counts:
+        return [("No records", 0)]
+
+    label_map = labels or {}
+    ordered_keys = list(order or [])
+    ordered_keys.extend(
+        key
+        for key, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        if key not in ordered_keys
+    )
+    items = [
+        (label_map.get(key, key), int(counts.get(key, 0)))
+        for key in ordered_keys
+        if int(counts.get(key, 0)) > 0
+    ]
+    if limit is not None:
+        items = items[:limit]
+    return items or [("No records", 0)]
+
+
+def _phase_distribution(trials: list[ClinicalTrialRecord]) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for trial in trials:
+        phases = trial.phases or ["Unspecified"]
+        counter.update(_display_value(phase) for phase in phases if _display_value(phase))
+    return dict(counter)
+
+
+def _status_distribution(trials: list[ClinicalTrialRecord]) -> dict[str, int]:
+    return dict(Counter(_display_value(trial.status) for trial in trials))
+
+
+def _results_distribution(trials: list[ClinicalTrialRecord]) -> dict[str, int]:
+    return dict(Counter(_display_value(trial.study_results) for trial in trials))
+
+
+def _risk_distribution(risk_records: list[PipelineRiskRecord]) -> dict[str, dict[str, int]]:
+    return {
+        "timeline": _risk_signal_counts(risk_records, "timeline_signal"),
+        "competition": _risk_signal_counts(risk_records, "competition_signal"),
+    }
+
+
+def _risk_signal_counts(
+    risk_records: list[PipelineRiskRecord],
+    field_name: str,
+) -> dict[str, int]:
+    return dict(
+        Counter(
+            _display_value(getattr(record, field_name, "Data insufficient"))
+            for record in risk_records
+        )
+    )
 
 
 def _join_list(values: list[str]) -> str:

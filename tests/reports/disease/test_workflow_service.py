@@ -454,7 +454,9 @@ def test_orchestrator_passes_narrative_language_to_service(tmp_path):
 
     assert narrative_service.calls[0]["language"] == "en"
     assert state["disease_report_narratives"]["language"] == "en"
-    assert state["report_ir"]["chapters"][0]["blocks"][1]["inlines"][0]["text"] == "English narrative."
+    chapter_brief = state["report_ir"]["chapters"][0]["blocks"][1]
+    assert chapter_brief["type"] == "callout"
+    assert "English narrative." in json.dumps(chapter_brief, ensure_ascii=False)
 
 
 def test_workflow_service_forwards_narrative_language(tmp_path):

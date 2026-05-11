@@ -184,6 +184,24 @@ def _table_rows(table: dict) -> list[list[str]]:
     ]
 
 
+def _chapter(ir: dict, chapter_id: str) -> dict:
+    return next(chapter for chapter in ir["chapters"] if chapter["chapterId"] == chapter_id)
+
+
+def _block_text(block: dict) -> str:
+    payload = json.dumps(block, ensure_ascii=False)
+    return payload
+
+
+def _widget_titles(chapter: dict) -> list[str]:
+    titles = []
+    for block in chapter["blocks"]:
+        if block.get("type") == "widget":
+            props = block.get("props") if isinstance(block.get("props"), dict) else {}
+            titles.append(props.get("title") or block.get("title") or "")
+    return titles
+
+
 def test_disease_ir_has_four_isolated_chapters():
     ir = DiseaseReportIRBuilder().build(_package())
 
@@ -200,11 +218,7 @@ def test_disease_ir_has_four_isolated_chapters():
 
 def test_landscape_table_uses_layer_phase_status_results_columns():
     ir = DiseaseReportIRBuilder().build(_package())
-    chapter = next(
-        chapter
-        for chapter in ir["chapters"]
-        if chapter["chapterId"] == "clinical_trial_and_pipeline_landscape"
-    )
+    chapter = _chapter(ir, "clinical_trial_and_pipeline_landscape")
     tables = [block for block in chapter["blocks"] if block["type"] == "table"]
 
     assert tables[0]["caption"] == "ClinicalTrials landscape layer summary"
@@ -233,11 +247,7 @@ def test_layer_summary_includes_unclassified_stratum_count():
     package = package.model_copy(update={"clinical_trials": [unclassified]})
 
     ir = DiseaseReportIRBuilder().build(package)
-    chapter = next(
-        chapter
-        for chapter in ir["chapters"]
-        if chapter["chapterId"] == "clinical_trial_and_pipeline_landscape"
-    )
+    chapter = _chapter(ir, "clinical_trial_and_pipeline_landscape")
     summary_table = next(
         block
         for block in chapter["blocks"]
@@ -311,12 +321,8 @@ def test_company_ir_exposes_pipeline_condition_counts_and_company_fourth_summary
     ]
     chapter = ir["chapters"][-1]
     assert chapter["chapterId"] == "company_catalyst_and_rd_summary"
-    text_blocks = [
-        block["inlines"][0]["text"]
-        for block in chapter["blocks"]
-        if block.get("type") == "paragraph"
-    ]
-    assert text_blocks[0].startswith("**Catalyst Tracker:**")
+    assert chapter["blocks"][1]["type"] == "callout"
+    assert "**Catalyst Tracker:** one near-term event." in _block_text(chapter["blocks"][1])
     bold_labels = [
         inline["text"]
         for block in chapter["blocks"]
@@ -424,21 +430,92 @@ def test_ir_builder_inserts_narrative_paragraphs_without_changing_tables():
     ir = DiseaseReportIRBuilder().build(_package(), narratives=narratives)
 
     chapters = {chapter["chapterId"]: chapter for chapter in ir["chapters"]}
-    assert chapters["executive_summary"]["blocks"][1]["inlines"][0]["text"] == "中文执行摘要段落。"
-    assert (
-        chapters["clinical_trial_and_pipeline_landscape"]["blocks"][1]["inlines"][0]["text"]
-        == "中文管线格局段落。"
+    assert chapters["executive_summary"]["blocks"][1]["type"] == "callout"
+    assert "中文执行摘要段落。" in _block_text(chapters["executive_summary"]["blocks"][1])
+    assert chapters["clinical_trial_and_pipeline_landscape"]["blocks"][1]["type"] == "callout"
+    assert "中文管线格局段落。" in _block_text(
+        chapters["clinical_trial_and_pipeline_landscape"]["blocks"][1]
     )
-    assert (
-        chapters["pipeline_timeline_and_competition_risk"]["blocks"][1]["inlines"][0]["text"]
-        == "中文风险段落。"
-    )
-    assert (
-        chapters["disease_evidence_synthesis_summary"]["blocks"][1]["inlines"][0]["text"]
-        == "中文前三章总结段落。"
+    assert chapters["pipeline_timeline_and_competition_risk"]["blocks"][1]["type"] == "callout"
+    assert "中文风险段落。" in _block_text(chapters["pipeline_timeline_and_competition_risk"]["blocks"][1])
+    assert chapters["disease_evidence_synthesis_summary"]["blocks"][1]["type"] == "callout"
+    assert "中文前三章总结段落。" in _block_text(
+        chapters["disease_evidence_synthesis_summary"]["blocks"][1]
     )
 
     landscape_table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
     risk_table = _find_table(ir, "pipeline_timeline_and_competition_risk")
     assert _table_headers(landscape_table) == LANDSCAPE_COLUMNS
     assert _table_headers(risk_table) == RISK_COLUMNS
+
+
+def test_ir_builder_adds_one_glance_visual_overview():
+    ir = DiseaseReportIRBuilder().build(_package())
+    executive = _chapter(ir, "executive_summary")
+
+    assert ir["metadata"]["layout"]["visualHierarchy"] == [
+        "chapterBrief",
+        "kpiGrid",
+        "chart",
+        "summaryTable",
+        "detailTable",
+    ]
+    assert executive["blocks"][1]["type"] == "callout"
+    assert executive["blocks"][1]["title"] == "Chapter Brief"
+    assert _widget_titles(executive) == [
+        "Report Intake Funnel",
+        "Landscape Layer Mix",
+    ]
+    intake_chart = next(
+        block
+        for block in executive["blocks"]
+        if block.get("type") == "widget"
+        and block.get("widgetId") == "report-intake-funnel"
+    )
+    assert intake_chart["data"]["labels"] == ["Retained Records", "Rejected Records"]
+    assert intake_chart["data"]["datasets"][0]["data"] == [1, 2]
+
+
+def test_landscape_chapter_surfaces_charts_before_drilldown_tables():
+    ir = DiseaseReportIRBuilder().build(_company_package())
+    chapter = _chapter(ir, "clinical_trial_and_pipeline_landscape")
+    widgets = [block for block in chapter["blocks"] if block.get("type") == "widget"]
+    first_table_index = next(
+        index for index, block in enumerate(chapter["blocks"]) if block.get("type") == "table"
+    )
+
+    assert [widget["widgetId"] for widget in widgets] == [
+        "landscape-layer-mix",
+        "landscape-phase-mix",
+        "landscape-results-availability",
+        "landscape-status-mix",
+    ]
+    assert max(chapter["blocks"].index(widget) for widget in widgets) < first_table_index
+    assert widgets[0]["data"]["labels"] == [
+        "Catalyst Tracker",
+        "Expansion Map",
+        "Track Record",
+    ]
+    assert widgets[0]["data"]["datasets"][0]["data"] == [1, 1, 1]
+
+
+def test_risk_and_final_summary_chapters_have_data_hierarchy_charts():
+    ir = DiseaseReportIRBuilder().build(_package())
+    risk = _chapter(ir, "pipeline_timeline_and_competition_risk")
+    final_summary = _chapter(ir, "disease_evidence_synthesis_summary")
+
+    assert _widget_titles(risk) == [
+        "Timeline Signal Distribution",
+        "Competition Signal Distribution",
+    ]
+    assert _widget_titles(final_summary) == [
+        "Disease Evidence Hierarchy",
+        "Report Evidence Flow",
+    ]
+    timeline_chart = next(
+        block
+        for block in risk["blocks"]
+        if block.get("widgetId") == "risk-timeline-signal-distribution"
+    )
+    assert timeline_chart["data"]["labels"] == ["Low"]
+    assert timeline_chart["data"]["datasets"][0]["data"] == [1]

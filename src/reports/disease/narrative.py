@@ -247,6 +247,7 @@ def _system_instruction(
     )
     instruction = (
         "You write objective biomedical report summaries from structured JSON only.\n"
+        "Each returned field is rendered as the opening brief for its report chapter.\n"
         "Explain what each report section shows and what core point its data supports.\n"
         "Be direct and visual: name the report architecture, the ClinicalTrials layers, and the phase/status/results patterns.\n"
         "Use cautious wording such as 'the supplied dataset shows' and 'records indicate'.\n"
