@@ -117,6 +117,7 @@ def _disease_package() -> DiseaseReportPackage:
             "strata": ["frontier"],
             "primary_stratum": "frontier",
             "primary_outcome_measures": ["Change in iADRS"],
+            "why_stopped": "",
         }
     )
     audit = package.source_audit.model_copy(
@@ -174,7 +175,21 @@ def test_company_narrative_payload_is_chapter_scoped_and_read_only():
 
 
 def test_disease_narrative_payload_exposes_architecture_and_disease_fourth_summary():
-    payload = build_narrative_payload(_disease_package())
+    package = _disease_package()
+    stopped = package.clinical_trials[0].model_copy(
+        update={
+            "nct_number": "NCT_STOPPED",
+            "study_title": "Terminated Alzheimer Disease study",
+            "status": "TERMINATED",
+            "phases": ["PHASE2"],
+            "primary_stratum": "foundation",
+            "strata": ["foundation"],
+            "why_stopped": "Business decision after interim portfolio review.",
+        }
+    )
+    package = package.model_copy(update={"clinical_trials": [package.clinical_trials[0], stopped]})
+
+    payload = build_narrative_payload(package)
 
     assert payload["executive_summary"]["target_type"] == "disease"
     assert "company_pipeline_summary" not in payload
@@ -183,14 +198,20 @@ def test_disease_narrative_payload_exposes_architecture_and_disease_fourth_summa
         "purpose": "Summarizes the first three disease chapters into a source-grounded disease-level conclusion.",
     }
     assert payload["clinical_trial_and_pipeline_landscape"]["stratum_counts"]["frontier"] == 1
-    assert payload["clinical_trial_and_pipeline_landscape"]["phase_distribution"] == {"PHASE1": 1}
+    assert payload["clinical_trial_and_pipeline_landscape"]["phase_distribution"] == {
+        "PHASE1": 1,
+        "PHASE2": 1,
+    }
     assert payload["clinical_trial_and_pipeline_landscape"]["results_distribution"] == {
-        "No posted results": 1,
+        "No posted results": 2,
     }
     assert payload["clinical_trial_and_pipeline_landscape"]["records"][0]["primary_stratum"] == "frontier"
     assert payload["clinical_trial_and_pipeline_landscape"]["records"][0]["primary_outcome_measures"] == [
         "Change in iADRS"
     ]
+    stopped_record = payload["clinical_trial_and_pipeline_landscape"]["termination_context"]["records"][0]
+    assert stopped_record["nct_number"] == "NCT_STOPPED"
+    assert stopped_record["why_stopped"] == "Business decision after interim portfolio review."
     disease_summary = payload["disease_evidence_synthesis"]
     assert disease_summary["target_type"] == "disease"
     assert disease_summary["section_order"] == [
@@ -198,6 +219,8 @@ def test_disease_narrative_payload_exposes_architecture_and_disease_fourth_summa
         "Clinical Trial And Pipeline Landscape",
         "Pipeline Timeline And Competition Risk",
     ]
+    assert payload["industry_landscape_context"]["disease_name"] == "Alzheimer Disease"
+    assert payload["industry_landscape_context"]["termination_context"]["terminated_like_count"] == 1
 
 
 def test_disease_narrative_service_requests_disease_fourth_chapter():
@@ -207,6 +230,7 @@ def test_disease_narrative_service_requests_disease_fourth_chapter():
             "clinical_trial_and_pipeline_landscape": "入组试验集中在干预性研究，赞助方和干预手段清晰。",
             "pipeline_timeline_and_competition_risk": "时间线风险较低，竞争风险由同类干预数量决定。",
             "disease_evidence_synthesis_summary": "前三章共同说明该疾病证据仍需按来源字段谨慎解释。",
+            "industry_landscape_summary": "行业全景显示阿尔茨海默病仍由疾病修饰疗法、诊断分层和支付约束共同塑造。",
         }
     )
     service = DiseaseReportNarrativeService(client_factory=lambda: client)
@@ -216,15 +240,19 @@ def test_disease_narrative_service_requests_disease_fourth_chapter():
     assert narratives.language == "zh"
     assert narratives.executive_summary.startswith("该报告")
     assert narratives.disease_evidence_synthesis_summary.startswith("前三章")
+    assert narratives.industry_landscape_summary.startswith("行业全景")
     assert client.calls[0]["response_schema"]["required"] == [
         "executive_summary",
         "clinical_trial_and_pipeline_landscape",
         "pipeline_timeline_and_competition_risk",
         "disease_evidence_synthesis_summary",
+        "industry_landscape_summary",
     ]
     assert "company_catalyst_and_rd_summary" not in client.calls[0]["response_schema"]["properties"]
     assert "Do not reuse company labels" in client.calls[0]["system_instruction"]
-    assert client.calls[0]["kwargs"]["max_output_tokens"] == 2400
+    assert "Industry Landscape Summary" in client.calls[0]["system_instruction"]
+    assert "Chapter two and three may be longer" in client.calls[0]["system_instruction"]
+    assert client.calls[0]["kwargs"]["max_output_tokens"] == 3600
 
 
 def test_company_narrative_service_requests_short_bold_company_summary():
@@ -259,6 +287,7 @@ def test_narrative_service_returns_english_strings_from_mocked_gemini():
             "clinical_trial_and_pipeline_landscape": "The landscape is centered on interventional development.",
             "pipeline_timeline_and_competition_risk": "Risk discussion remains grounded in deterministic labels.",
             "disease_evidence_synthesis_summary": "The first three chapters support a source-grounded disease synthesis.",
+            "industry_landscape_summary": "The disease industry landscape remains shaped by clinical differentiation and adoption constraints.",
         }
     )
     service = DiseaseReportNarrativeService(client_factory=lambda: client)
@@ -268,6 +297,7 @@ def test_narrative_service_returns_english_strings_from_mocked_gemini():
     assert narratives.language == "en"
     assert narratives.executive_summary.startswith("The report")
     assert narratives.disease_evidence_synthesis_summary.startswith("The first three")
+    assert narratives.industry_landscape_summary.startswith("The disease industry")
     assert "English" in client.calls[0]["system_instruction"]
 
 
@@ -299,6 +329,7 @@ def test_narrative_service_falls_back_to_empty_on_missing_mode_specific_field():
     assert narratives.language == "en"
     assert narratives.executive_summary == ""
     assert narratives.disease_evidence_synthesis_summary == ""
+    assert narratives.industry_landscape_summary == ""
 
 
 def test_narrative_service_falls_back_to_empty_on_non_string_fields():

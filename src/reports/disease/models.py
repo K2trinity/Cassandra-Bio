@@ -27,6 +27,7 @@ class ClinicalTrialRecord(BaseModel):
     study_title: str = Field(..., min_length=1)
     nct_number: str = Field(..., min_length=1)
     status: str = Field(default="Unknown", min_length=1)
+    why_stopped: str = ""
     phases: list[str] = Field(default_factory=list)
     has_results: bool = False
     study_results: str = "No posted results"
@@ -94,6 +95,7 @@ class DiseaseChapterNarratives(BaseModel):
     clinical_trial_and_pipeline_landscape: str = ""
     pipeline_timeline_and_competition_risk: str = ""
     disease_evidence_synthesis_summary: str = ""
+    industry_landscape_summary: str = ""
     company_catalyst_and_rd_summary: str = ""
     language: Literal["zh", "en"] = "zh"
 

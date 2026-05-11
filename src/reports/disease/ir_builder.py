@@ -30,6 +30,7 @@ LANDSCAPE_COLUMNS = [
     "NCT Number",
     "Phase",
     "Status",
+    "Stop Reason",
     "Results",
     "Conditions",
     "Interventions",
@@ -37,6 +38,15 @@ LANDSCAPE_COLUMNS = [
     "Enrollment",
     "Primary Outcomes",
     "Last Update Posted",
+]
+
+RISK_ASSESSMENT_COLUMNS = [
+    "Candidate / Sponsor",
+    "Mechanism Or Intervention",
+    "Clinical Stage / Status",
+    "Clinical Evidence Snapshot",
+    "Safety And Clinical Risk Cue",
+    "Operational And Commercial Risk Cue",
 ]
 
 RISK_COLUMNS = [
@@ -57,6 +67,7 @@ LANDSCAPE_COLGROUP = [
     {"key": "nct_number", "width": "9%"},
     {"key": "phases", "width": "7%"},
     {"key": "status", "width": "8%"},
+    {"key": "why_stopped", "width": "9%"},
     {"key": "study_results", "width": "8%"},
     {"key": "conditions", "width": "10%"},
     {"key": "interventions", "width": "10%"},
@@ -256,6 +267,7 @@ class DiseaseReportIRBuilder:
                 trial.nct_number,
                 _join_list(trial.phases),
                 trial.status,
+                _stop_reason(trial),
                 trial.study_results,
                 _join_list(trial.conditions),
                 _join_list(trial.interventions),
@@ -284,6 +296,7 @@ class DiseaseReportIRBuilder:
                         f"{len(trials)} retained records",
                         f"{len(_phase_distribution(trials))} phase buckets",
                         f"{sum(1 for trial in trials if trial.has_results)} records with posted results",
+                        f"{_terminal_trial_count(trials)} stopped or paused records",
                     ],
                 ),
                 _bar_widget(
@@ -447,6 +460,16 @@ class DiseaseReportIRBuilder:
                     _count_items(expansion_condition_counts, limit=8),
                     dataset_label="Records",
                 ),
+                _table(
+                    RISK_ASSESSMENT_COLUMNS,
+                    _multidimensional_risk_rows(package.clinical_trials),
+                    caption="Multidimensional clinical and commercial risk assessment",
+                    metadata={
+                        "layout": "wide-risk-assessment-table",
+                        "className": "clinical-commercial-risk-assessment",
+                    },
+                    colgroup=_risk_assessment_colgroup(),
+                ),
                 _labeled_paragraph(
                     "Catalyst Tracker",
                     f"{stratum_counts.get('catalyst', 0)} event-driven records prioritized by near-term readout timing.",
@@ -475,6 +498,10 @@ class DiseaseReportIRBuilder:
             narratives.disease_evidence_synthesis_summary
             or _disease_summary_fallback(package, counts)
         )
+        industry_summary_text = (
+            narratives.industry_landscape_summary
+            or _industry_landscape_fallback(package, counts)
+        )
         return {
             "chapterId": "disease_evidence_synthesis_summary",
             "title": "Disease Evidence Synthesis Summary",
@@ -492,6 +519,14 @@ class DiseaseReportIRBuilder:
                         f"{counts.get('foundation', 0)} foundation records",
                         f"{counts.get('frontier', 0)} frontier records",
                     ],
+                ),
+                _chapter_brief(
+                    industry_summary_text,
+                    [
+                        "Industry-level context, not trial-specific causal attribution",
+                        "Future outlook grounded in supplied trial mix and cautious sector interpretation",
+                    ],
+                    title="Industry Landscape Summary",
                 ),
                 _bar_widget(
                     "disease-evidence-hierarchy",
@@ -512,6 +547,16 @@ class DiseaseReportIRBuilder:
                         ("Risk Records", len(package.risk_records)),
                     ],
                     dataset_label="Records",
+                ),
+                _table(
+                    RISK_ASSESSMENT_COLUMNS,
+                    _multidimensional_risk_rows(package.clinical_trials),
+                    caption="Multidimensional clinical and commercial risk assessment",
+                    metadata={
+                        "layout": "wide-risk-assessment-table",
+                        "className": "clinical-commercial-risk-assessment",
+                    },
+                    colgroup=_risk_assessment_colgroup(),
                 ),
                 _labeled_paragraph(
                     "Evidence Base",
@@ -630,7 +675,12 @@ def _paragraph(text: Any) -> dict:
     return {"type": "paragraph", "inlines": [{"text": _display_value(text)}]}
 
 
-def _chapter_brief(summary: Any, focus_items: list[str] | None = None) -> dict:
+def _chapter_brief(
+    summary: Any,
+    focus_items: list[str] | None = None,
+    *,
+    title: str = "Chapter Brief",
+) -> dict:
     blocks = [_paragraph(summary)]
     clean_focus = [item for item in (focus_items or []) if item]
     if clean_focus:
@@ -644,7 +694,7 @@ def _chapter_brief(summary: Any, focus_items: list[str] | None = None) -> dict:
     return {
         "type": "callout",
         "tone": "info",
-        "title": "Chapter Brief",
+        "title": title,
         "blocks": blocks,
         "metadata": {"layout": "chapter-brief"},
     }
@@ -825,6 +875,113 @@ def _risk_signal_counts(
     )
 
 
+def _risk_assessment_colgroup() -> list[dict[str, str]]:
+    return [
+        {"key": "candidate_sponsor", "width": "16%"},
+        {"key": "mechanism_or_intervention", "width": "16%"},
+        {"key": "clinical_stage_status", "width": "14%"},
+        {"key": "clinical_evidence", "width": "18%"},
+        {"key": "clinical_risk", "width": "18%"},
+        {"key": "commercial_risk", "width": "18%"},
+    ]
+
+
+def _multidimensional_risk_rows(trials: list[ClinicalTrialRecord]) -> list[list[Any]]:
+    return [
+        [
+            _candidate_and_sponsor(trial),
+            _mechanism_or_intervention(trial),
+            _clinical_stage_status(trial),
+            _clinical_evidence_snapshot(trial),
+            _clinical_risk_cue(trial),
+            _commercial_risk_cue(trial),
+        ]
+        for trial in trials[:12]
+    ] or [["No retained records", "-", "-", "-", "-", "-"]]
+
+
+def _candidate_and_sponsor(trial: ClinicalTrialRecord) -> str:
+    candidate = _join_list(trial.interventions) if trial.interventions else trial.study_title
+    return f"{candidate} ({trial.sponsor})"
+
+
+def _mechanism_or_intervention(trial: ClinicalTrialRecord) -> str:
+    interventions = _join_list(trial.interventions)
+    conditions = _join_list(trial.conditions)
+    if interventions == "-":
+        return f"Mechanism not reported; condition focus: {conditions}"
+    return f"Source intervention: {interventions}; condition focus: {conditions}"
+
+
+def _clinical_stage_status(trial: ClinicalTrialRecord) -> str:
+    stage = _join_list(trial.phases)
+    dates = []
+    if trial.study_first_posted:
+        dates.append(f"first posted {_isoformat(trial.study_first_posted)}")
+    if trial.primary_completion_date:
+        dates.append(f"primary completion {_isoformat(trial.primary_completion_date)}")
+    date_text = "; ".join(dates)
+    return f"{stage}; {trial.status}" + (f"; {date_text}" if date_text else "")
+
+
+def _clinical_evidence_snapshot(trial: ClinicalTrialRecord) -> str:
+    result_text = trial.study_results or ("Results available" if trial.has_results else "No posted results")
+    enrollment = f"enrollment {trial.enrollment}" if trial.enrollment is not None else "enrollment not reported"
+    outcomes = _join_list(trial.primary_outcome_measures[:2])
+    return f"{result_text}; {enrollment}; primary outcomes: {outcomes}"
+
+
+def _clinical_risk_cue(trial: ClinicalTrialRecord) -> str:
+    status = (trial.status or "").strip().upper()
+    if status in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}:
+        reason = _stop_reason(trial)
+        return f"High. {status} status makes the clinical path discontinuous; stop reason: {reason}."
+    if not trial.has_results:
+        return "Medium. No posted results means efficacy and safety interpretation remains unresolved in the supplied dataset."
+    if any(_phase_number(phase) >= 3 for phase in trial.phases):
+        return "Medium. Later-stage evidence is more decision-relevant, but safety and endpoint interpretation still depend on posted results."
+    return "Medium-high. Early-stage or sparse source evidence limits confidence in clinical translation."
+
+
+def _commercial_risk_cue(trial: ClinicalTrialRecord) -> str:
+    status = (trial.status or "").strip().upper()
+    if status in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}:
+        return (
+            f"High. Program continuity risk is visible from {status}; "
+            f"commercial rationale cannot be separated from the reported stop reason: {_stop_reason(trial)}."
+        )
+    if not trial.has_results:
+        return "Medium-high. Differentiation, adoption, and payer relevance are not yet supported by posted result fields."
+    if any(_phase_number(phase) >= 3 for phase in trial.phases):
+        return "Medium. Later-stage assets have clearer development maturity, while access, monitoring, and competition remain external adoption risks."
+    return "Medium-high. Early development stage leaves commercial fit and positioning largely unproven."
+
+
+def _phase_number(phase: str) -> int:
+    text = str(phase or "").upper()
+    for number in (4, 3, 2, 1):
+        if str(number) in text:
+            return number
+    return 0
+
+
+def _terminal_trial_count(trials: list[ClinicalTrialRecord]) -> int:
+    return sum(
+        1
+        for trial in trials
+        if (trial.status or "").strip().upper() in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
+    )
+
+
+def _stop_reason(trial: ClinicalTrialRecord) -> str:
+    reason = (trial.why_stopped or "").strip()
+    if reason:
+        return reason
+    if (trial.status or "").strip().upper() in {"TERMINATED", "WITHDRAWN", "SUSPENDED"}:
+        return "Source does not report a stop reason."
+    return "-"
+
+
 def _join_list(values: list[str]) -> str:
     return ", ".join(value for value in values if value) or "-"
 
@@ -897,6 +1054,36 @@ def _disease_summary_fallback(
     )
 
 
+def _industry_landscape_fallback(
+    package: DiseaseReportPackage,
+    stratum_counts: dict[str, int],
+) -> str:
+    terminal_count = _terminal_trial_count(package.clinical_trials)
+    top_sponsors = _top_items(
+        [trial.sponsor for trial in package.clinical_trials if trial.sponsor and trial.sponsor != "Unknown"],
+        limit=3,
+    )
+    sponsor_text = ", ".join(top_sponsors) if top_sponsors else "top sponsors unavailable"
+    return (
+        "Industry Landscape Summary: the supplied dataset shows a disease market shaped by "
+        f"{package.source_audit.retained_count} retained ClinicalTrials.gov records, "
+        f"{stratum_counts.get('evidence', 0)} result-bearing evidence records, "
+        f"{stratum_counts.get('foundation', 0)} foundation records, and "
+        f"{stratum_counts.get('frontier', 0)} frontier records. "
+        f"Top visible sponsors include {sponsor_text}. "
+        f"{terminal_count} stopped or paused records require source-level interpretation rather than assumed scientific or commercial causality. "
+        "Future outlook should focus on clinical differentiation, safety monitoring burden, diagnostic access, and adoption economics."
+    )
+
+
+def _top_items(values: list[str], limit: int) -> list[str]:
+    return [
+        value
+        for value, _count in Counter(values).most_common(limit)
+        if value
+    ]
+
+
 def _expansion_summary_text(
     count: int,
     expansion_condition_counts: dict[str, int],
@@ -930,6 +1117,7 @@ def _slug(value: str) -> str:
 
 __all__ = [
     "LANDSCAPE_COLUMNS",
+    "RISK_ASSESSMENT_COLUMNS",
     "RISK_COLUMNS",
     "DiseaseReportIRBuilder",
 ]

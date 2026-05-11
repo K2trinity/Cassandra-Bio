@@ -53,6 +53,14 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
         study_title=title or "Untitled Clinical Trial",
         nct_number=nct,
         status=status,
+        why_stopped=_first_text(
+            payload,
+            metadata,
+            status_module,
+            keys=("why_stopped", "whyStopped", "stop_reason", "reason_stopped"),
+            default="",
+        )
+        or "",
         phases=_split_phase_values(
             payload.get("phases")
             or payload.get("phase")

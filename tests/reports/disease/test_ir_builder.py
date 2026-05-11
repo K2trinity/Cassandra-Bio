@@ -17,6 +17,15 @@ from src.reports.disease.models import (
     SourceAudit,
 )
 
+RISK_ASSESSMENT_COLUMNS = [
+    "Candidate / Sponsor",
+    "Mechanism Or Intervention",
+    "Clinical Stage / Status",
+    "Clinical Evidence Snapshot",
+    "Safety And Clinical Risk Cue",
+    "Operational And Commercial Risk Cue",
+]
+
 
 def _profile() -> DiseaseProfile:
     return DiseaseProfile(
@@ -228,6 +237,7 @@ def test_landscape_table_uses_layer_phase_status_results_columns():
     assert "Phase" in LANDSCAPE_COLUMNS
     assert "Status" in LANDSCAPE_COLUMNS
     assert "Results" in LANDSCAPE_COLUMNS
+    assert "Stop Reason" in LANDSCAPE_COLUMNS
     assert len(tables[1]["colgroup"]) == len(LANDSCAPE_COLUMNS)
 
 
@@ -278,6 +288,7 @@ def test_landscape_table_renders_source_fields_without_llm_rewrite():
     assert "PHASE1" in values
     assert "RECRUITING" in values
     assert "No posted results" in values
+    assert "-" in values
     assert "Change in iADRS" in values
 
 
@@ -346,7 +357,8 @@ def test_company_landscape_uses_company_layer_labels():
 
 def test_disease_ir_appends_disease_fourth_summary_without_company_labels():
     narratives = DiseaseChapterNarratives(
-        disease_evidence_synthesis_summary="前三章共同总结疾病证据，不使用公司管线标签。"
+        disease_evidence_synthesis_summary="前三章共同总结疾病证据，不使用公司管线标签。",
+        industry_landscape_summary="Industry Landscape Summary: 该疾病行业仍由疗效分化、诊断分层和支付约束共同驱动。",
     )
 
     ir = DiseaseReportIRBuilder().build(_package(), narratives=narratives)
@@ -355,6 +367,7 @@ def test_disease_ir_appends_disease_fourth_summary_without_company_labels():
 
     assert chapter["chapterId"] == "disease_evidence_synthesis_summary"
     assert "前三章共同总结疾病证据" in payload
+    assert "Industry Landscape Summary" in payload
     assert "Catalyst Tracker" not in payload
     assert "Expansion Map" not in payload
     assert "Track Record" not in payload
@@ -519,3 +532,72 @@ def test_risk_and_final_summary_chapters_have_data_hierarchy_charts():
     )
     assert timeline_chart["data"]["labels"] == ["Low"]
     assert timeline_chart["data"]["datasets"][0]["data"] == [1]
+
+
+def test_landscape_and_fourth_chapter_explain_terminated_trial_context():
+    package = _package()
+    terminated = ClinicalTrialRecord(
+        study_title="Terminated Alzheimer Disease asset study",
+        nct_number="NCT_TERMINATED",
+        status="TERMINATED",
+        conditions=["Alzheimer Disease"],
+        interventions=["Asset X"],
+        sponsor="Sponsor X",
+        study_type="INTERVENTIONAL",
+        study_first_posted=date(2021, 1, 15),
+        phases=["PHASE2"],
+        has_results=False,
+        study_results="No posted results",
+        enrollment=160,
+        primary_outcome_measures=["Change in cognition score"],
+        strata=["foundation"],
+        primary_stratum="foundation",
+        why_stopped="Business decision after interim portfolio review.",
+        source_url="https://clinicaltrials.gov/study/NCT_TERMINATED",
+    )
+    package = package.model_copy(
+        update={
+            "clinical_trials": [package.clinical_trials[0], terminated],
+            "source_audit": package.source_audit.model_copy(
+                update={
+                    "retained_count": 2,
+                    "details": {
+                        "target_type": "disease",
+                        "stratum_counts": {
+                            "evidence": 0,
+                            "foundation": 1,
+                            "frontier": 1,
+                            "unclassified": 0,
+                        },
+                    },
+                }
+            ),
+        }
+    )
+    narratives = DiseaseChapterNarratives(
+        disease_evidence_synthesis_summary="前三章显示该疾病管线既有前沿探索，也有终止项目需要解释。",
+        industry_landscape_summary="Industry Landscape Summary: 阿尔茨海默病行业未来仍取决于疗效分化、安全性管理、诊断准入和支付路径。",
+    )
+
+    ir = DiseaseReportIRBuilder().build(package, narratives=narratives)
+    landscape_table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
+    terminated_row = next(
+        row
+        for row in _table_rows(landscape_table)
+        if "NCT_TERMINATED" in row
+    )
+    assert "Business decision after interim portfolio review." in terminated_row
+
+    final_summary = _chapter(ir, "disease_evidence_synthesis_summary")
+    assessment_table = next(
+        block
+        for block in final_summary["blocks"]
+        if block.get("type") == "table"
+        and block.get("caption") == "Multidimensional clinical and commercial risk assessment"
+    )
+    assert _table_headers(assessment_table) == RISK_ASSESSMENT_COLUMNS
+    assessment_rows = _table_rows(assessment_table)
+    terminated_assessment = next(row for row in assessment_rows if "Asset X" in row[0])
+    assert "TERMINATED" in terminated_assessment[2]
+    assert "Business decision after interim portfolio review." in terminated_assessment[5]
+    assert "Industry Landscape Summary" in _block_text(final_summary)

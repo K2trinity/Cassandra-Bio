@@ -21,6 +21,7 @@ markdown>=3.5.0        # Markdown to HTML Conversion
 pdfkit>=1.0.0          # HTML to PDF Conversion (fallback, requires wkhtmltopdf)
 weasyprint>=60.0       # Primary PDF renderer — CSS Paged Media standard (CJK + SVG + @page)
 reportlab>=4.0.0       # Last-resort PDF fallback (pure Python, no system deps)
+matplotlib>=3.8.0      # PDF chart/formula SVG rendering for Report Engine
 flask-cors>=4.0.0      # CORS support for API endpoints
 
 # ===== Cache & State Management =====

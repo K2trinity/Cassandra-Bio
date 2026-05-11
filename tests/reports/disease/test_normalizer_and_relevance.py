@@ -36,6 +36,26 @@ def test_normalizer_reads_status_from_nested_clinicaltrials_payload():
     assert record.primary_completion_date == date(2028, 1, 1)
 
 
+def test_normalizer_preserves_clinicaltrials_why_stopped_reason():
+    payload = {
+        "protocolSection": {
+            "identificationModule": {
+                "nctId": "NCT_STOPPED",
+                "briefTitle": "Stopped Alzheimer Disease study",
+            },
+            "statusModule": {
+                "overallStatus": "TERMINATED",
+                "whyStopped": "Business decision after interim portfolio review.",
+            },
+        }
+    }
+
+    record = normalize_trial_payload(payload)
+
+    assert record.status == "TERMINATED"
+    assert record.why_stopped == "Business decision after interim portfolio review."
+
+
 def test_normalizer_preserves_clinicaltrials_v2_results_phase_outcomes_and_strata():
     payload = {
         "hasResults": True,

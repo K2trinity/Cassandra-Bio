@@ -29,10 +29,12 @@ DISEASE_NARRATIVE_SCHEMA = {
     "properties": {
         **NARRATIVE_SCHEMA["properties"],
         "disease_evidence_synthesis_summary": {"type": "string"},
+        "industry_landscape_summary": {"type": "string"},
     },
     "required": [
         *NARRATIVE_SCHEMA["required"],
         "disease_evidence_synthesis_summary",
+        "industry_landscape_summary",
     ],
 }
 COMPANY_NARRATIVE_SCHEMA = {
@@ -73,7 +75,7 @@ class DiseaseReportNarrativeService:
                     selected_language,
                     company_mode=is_company,
                 ),
-                max_output_tokens=2400,
+                max_output_tokens=3600,
             )
         except Exception as exc:
             logger.warning(f"Disease report narrative generation failed: {exc}")
@@ -105,6 +107,9 @@ class DiseaseReportNarrativeService:
             values["disease_evidence_synthesis_summary"] = _clean_text(
                 response.get("disease_evidence_synthesis_summary")
             )
+            values["industry_landscape_summary"] = _clean_text(
+                response.get("industry_landscape_summary")
+            )
         if not any(values.values()):
             return DiseaseChapterNarratives(language=selected_language)
 
@@ -128,6 +133,7 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
         "status_distribution": dict(Counter(trial.status for trial in trials)),
         "top_sponsors": _top_values([trial.sponsor for trial in trials], limit=5),
         "stratum_counts": counts,
+        "termination_context": _termination_context(trials),
     }
     landscape: dict[str, Any] = {
         "disease_name": package.disease_profile.disease_name,
@@ -137,11 +143,13 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
         "phase_distribution": _phase_distribution(trials),
         "status_distribution": dict(Counter(trial.status for trial in trials)),
         "results_distribution": dict(Counter(trial.study_results for trial in trials)),
+        "termination_context": _termination_context(trials),
         "records": [
             {
                 "study_title": trial.study_title,
                 "nct_number": trial.nct_number,
                 "status": trial.status,
+                "why_stopped": trial.why_stopped,
                 "primary_stratum": trial.primary_stratum,
                 "strata": list(trial.strata),
                 "phases": list(trial.phases),
@@ -206,6 +214,7 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
                 "timeline": dict(Counter(record.timeline_signal for record in risk_records)),
                 "competition": dict(Counter(record.competition_signal for record in risk_records)),
             },
+            "termination_context": _termination_context(trials),
         },
     }
     if is_company:
@@ -216,6 +225,10 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
         )
     else:
         payload["disease_evidence_synthesis"] = _disease_evidence_synthesis_payload(
+            package,
+            stratum_counts=counts,
+        )
+        payload["industry_landscape_context"] = _industry_landscape_payload(
             package,
             stratum_counts=counts,
         )
@@ -241,14 +254,21 @@ def _system_instruction(
 ) -> str:
     output_language = "Chinese" if language == "zh" else "English"
     length_instruction = (
-        "160-320 Chinese characters per chapter."
+        "Executive summary: 160-320 Chinese characters. "
+        "Chapter two and three may be longer: 320-620 Chinese characters each, but remain data-grounded. "
+        "Disease synthesis: 240-420 Chinese characters. "
+        "Industry Landscape Summary: 450-800 Chinese characters with future outlook."
         if language == "zh"
-        else "90-160 English words per chapter."
+        else "Executive summary: 90-160 English words. "
+        "Chapter two and three may be longer: 160-280 English words each, but remain data-grounded. "
+        "Disease synthesis: 120-220 English words. "
+        "Industry Landscape Summary: 220-360 English words with future outlook."
     )
     instruction = (
         "You write objective biomedical report summaries from structured JSON only.\n"
         "Each returned field is rendered as the opening brief for its report chapter.\n"
         "Explain what each report section shows and what core point its data supports.\n"
+        "For TERMINATED, WITHDRAWN, or SUSPENDED records, use why_stopped when supplied; if absent, explicitly say the source does not report a stop reason.\n"
         "Be direct and visual: name the report architecture, the ClinicalTrials layers, and the phase/status/results patterns.\n"
         "Use cautious wording such as 'the supplied dataset shows' and 'records indicate'.\n"
         "Do not infer missing facts.\n"
@@ -275,6 +295,9 @@ def _system_instruction(
             "\nUse only executive_summary, clinical_trial_and_pipeline_landscape, and pipeline_timeline_and_competition_risk JSON."
             "\nDo not reuse company labels such as Catalyst Tracker, Expansion Map, or Track Record."
             "\nFrame it as a disease-level evidence synthesis, not a company pipeline view."
+            "\nFor Industry Landscape Summary, combine the supplied disease report context with cautious general biomedical industry context and a future outlook."
+            "\nClearly separate dataset-supported observations from broader industry interpretation."
+            "\nDo not invent trial-specific scientific, safety, regulatory, or commercial reasons for stopped studies."
         )
     return instruction
 
@@ -340,6 +363,8 @@ def _disease_evidence_synthesis_payload(
         "phase_distribution": _phase_distribution(package.clinical_trials),
         "status_distribution": dict(Counter(trial.status for trial in package.clinical_trials)),
         "results_distribution": dict(Counter(trial.study_results for trial in package.clinical_trials)),
+        "termination_context": _termination_context(package.clinical_trials),
+        "risk_assessment_inputs": _risk_assessment_inputs(package.clinical_trials),
         "risk_distribution": {
             "timeline": dict(Counter(record.timeline_signal for record in package.risk_records)),
             "competition": dict(Counter(record.competition_signal for record in package.risk_records)),
@@ -350,6 +375,85 @@ def _disease_evidence_synthesis_payload(
             "Do not infer efficacy, safety, approval odds, or market impact.",
         ],
     }
+
+
+def _industry_landscape_payload(
+    package: DiseaseReportPackage,
+    *,
+    stratum_counts: dict[str, int],
+) -> dict[str, Any]:
+    trials = package.clinical_trials
+    return {
+        "disease_name": package.disease_profile.disease_name,
+        "canonical_condition": package.disease_profile.canonical_condition,
+        "retained_count": package.source_audit.retained_count,
+        "stratum_counts": stratum_counts,
+        "phase_distribution": _phase_distribution(trials),
+        "status_distribution": dict(Counter(trial.status for trial in trials)),
+        "results_distribution": dict(Counter(trial.study_results for trial in trials)),
+        "top_sponsors": _top_values([trial.sponsor for trial in trials], limit=8),
+        "top_interventions": _top_values(
+            [
+                intervention
+                for trial in trials
+                for intervention in trial.interventions
+            ],
+            limit=12,
+        ),
+        "termination_context": _termination_context(trials),
+        "future_outlook_constraints": [
+            "Differentiate dataset-supported trial facts from broader industry interpretation.",
+            "Discuss clinical differentiation, safety management, diagnostic access, operating complexity, and adoption or payment constraints only at industry level.",
+            "Do not invent asset-specific reasons beyond supplied trial fields.",
+        ],
+    }
+
+
+def _termination_context(trials: list[ClinicalTrialRecord]) -> dict[str, Any]:
+    terminal_statuses = {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
+    records = []
+    for trial in trials:
+        status = (trial.status or "").strip().upper()
+        if status not in terminal_statuses:
+            continue
+        records.append(
+            {
+                "nct_number": trial.nct_number,
+                "study_title": trial.study_title,
+                "status": trial.status,
+                "why_stopped": trial.why_stopped or "Source does not report a stop reason.",
+                "sponsor": trial.sponsor,
+                "interventions": list(trial.interventions),
+                "phases": list(trial.phases),
+            }
+        )
+    return {
+        "terminated_like_count": len(records),
+        "records": records,
+        "missing_reason_count": sum(
+            1
+            for record in records
+            if record["why_stopped"] == "Source does not report a stop reason."
+        ),
+    }
+
+
+def _risk_assessment_inputs(trials: list[ClinicalTrialRecord], limit: int = 12) -> list[dict[str, Any]]:
+    return [
+        {
+            "candidate_or_intervention": ", ".join(trial.interventions) or trial.study_title,
+            "sponsor": trial.sponsor,
+            "status": trial.status,
+            "why_stopped": trial.why_stopped,
+            "phases": list(trial.phases),
+            "has_results": trial.has_results,
+            "study_results": trial.study_results,
+            "enrollment": trial.enrollment,
+            "primary_outcome_measures": list(trial.primary_outcome_measures),
+            "conditions": list(trial.conditions),
+        }
+        for trial in trials[:limit]
+    ]
 
 
 def _records_for_stratum(trials: list[Any], stratum: str, limit: int = 8) -> list[dict[str, Any]]:
@@ -369,6 +473,7 @@ def _trial_summary(trial: Any) -> dict[str, Any]:
         "study_title": trial.study_title,
         "nct_number": trial.nct_number,
         "status": trial.status,
+        "why_stopped": trial.why_stopped,
         "conditions": list(trial.conditions),
         "phase": _join_list(trial.phases),
         "results": trial.study_results,
