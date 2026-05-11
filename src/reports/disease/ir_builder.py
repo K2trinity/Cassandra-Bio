@@ -62,31 +62,31 @@ RISK_COLUMNS = [
 ]
 
 LANDSCAPE_COLGROUP = [
-    {"key": "strata", "width": "8%"},
-    {"key": "study_title", "width": "16%"},
-    {"key": "nct_number", "width": "9%"},
-    {"key": "phases", "width": "7%"},
-    {"key": "status", "width": "8%"},
-    {"key": "why_stopped", "width": "9%"},
-    {"key": "study_results", "width": "8%"},
-    {"key": "conditions", "width": "10%"},
-    {"key": "interventions", "width": "10%"},
-    {"key": "sponsor", "width": "9%"},
-    {"key": "enrollment", "width": "5%"},
-    {"key": "primary_outcome_measures", "width": "14%"},
-    {"key": "last_update_posted", "width": "7%"},
+    {"key": "strata", "width": "6%"},
+    {"key": "study_title", "width": "14%"},
+    {"key": "nct_number", "width": "7%"},
+    {"key": "phases", "width": "5%"},
+    {"key": "status", "width": "6%"},
+    {"key": "why_stopped", "width": "10%"},
+    {"key": "study_results", "width": "6%"},
+    {"key": "conditions", "width": "8%"},
+    {"key": "interventions", "width": "9%"},
+    {"key": "sponsor", "width": "8%"},
+    {"key": "enrollment", "width": "4%"},
+    {"key": "primary_outcome_measures", "width": "12%"},
+    {"key": "last_update_posted", "width": "5%"},
 ]
 
 RISK_COLGROUP = [
-    {"key": "study_title", "width": "18%"},
-    {"key": "nct_number", "width": "10%"},
-    {"key": "sponsor", "width": "12%"},
-    {"key": "status", "width": "10%"},
-    {"key": "intervention_category", "width": "12%"},
+    {"key": "study_title", "width": "16%"},
+    {"key": "nct_number", "width": "9%"},
+    {"key": "sponsor", "width": "11%"},
+    {"key": "status", "width": "9%"},
+    {"key": "intervention_category", "width": "11%"},
     {"key": "timeline_signal", "width": "9%"},
-    {"key": "timeline_evidence", "width": "15%"},
-    {"key": "competition_signal", "width": "9%"},
-    {"key": "competition_evidence", "width": "15%"},
+    {"key": "timeline_evidence", "width": "14%"},
+    {"key": "competition_signal", "width": "8%"},
+    {"key": "competition_evidence", "width": "13%"},
 ]
 
 CHART_COLORS = [

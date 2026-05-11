@@ -1065,6 +1065,77 @@ td {{
     white-space: normal;
 }}
 
+/* Wide report table overrides */
+.table-wrap--wide {{
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+    margin: 8pt 0 12pt !important;
+    overflow: visible !important;
+}}
+
+.table-wrap--wide table {{
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+    overflow: visible !important;
+    font-size: 7.3pt !important;
+    line-height: 1.24 !important;
+}}
+
+.table-wrap--layout-wide-risk-assessment-table table {{
+    font-size: 7.8pt !important;
+}}
+
+.table-wrap--wide thead {{
+    display: table-header-group !important;
+}}
+
+.table-wrap--wide tr {{
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+}}
+
+.table-wrap--wide th,
+.table-wrap--wide td {{
+    padding: 3.5pt 4pt !important;
+    max-width: none !important;
+    vertical-align: top !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: normal !important;
+    hyphens: auto !important;
+    white-space: normal !important;
+}}
+
+.table-wrap--wide th {{
+    font-size: 7.2pt !important;
+    line-height: 1.18 !important;
+}}
+
+.table-wrap--wide td {{
+    font-size: 7.3pt !important;
+    line-height: 1.24 !important;
+}}
+
+.table-wrap--layout-wide-risk-assessment-table td {{
+    font-size: 7.8pt !important;
+}}
+
+.table-wrap--wide td p,
+.table-wrap--wide th p {{
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.24 !important;
+}}
+
+.table-wrap--wide td p + p,
+.table-wrap--wide th p + p {{
+    margin-top: 2pt !important;
+}}
+
 /* Chart optimization */
 .chart-card {{
     min-height: {cfg.chart.min_height}px;

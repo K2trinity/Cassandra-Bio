@@ -208,9 +208,10 @@ def test_html_renderer_respects_table_colgroup_and_wide_class():
 def test_html_renderer_uses_wide_wrapper_for_layout_hint_without_class_or_colgroup():
     html = HTMLRenderer()._render_table(_table_block(metadata={"layout": "wide-risk-table"}))
 
-    assert '<div class="table-wrap table-wrap--wide">' in html
+    assert 'class="table-wrap table-wrap--wide table-wrap--layout-wide-risk-table"' in html
+    assert 'data-layout="wide-risk-table"' in html
     assert "<colgroup>" not in html
-    assert "<table>" in html
+    assert '<table class="layout-wide-risk-table" data-layout="wide-risk-table">' in html
 
 
 def test_html_renderer_rejects_unsafe_colgroup_width_css():
