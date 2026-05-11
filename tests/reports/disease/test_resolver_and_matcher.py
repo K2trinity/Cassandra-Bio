@@ -67,6 +67,20 @@ def test_resolver_handles_common_request_prompts():
     assert DiseaseResolver().resolve("Generate a Parkinson disease report").disease_name == expected
 
 
+def test_resolver_extracts_patient_context_condition_from_safety_prompt():
+    profile = DiseaseResolver().resolve("Assess nivolumab hepatotoxicity in melanoma patients")
+
+    assert profile.disease_name == "Melanoma"
+    assert profile.condition_terms == ["Melanoma"]
+
+
+def test_resolver_extracts_patient_context_condition_from_mechanism_prompt():
+    profile = DiseaseResolver().resolve("Evaluate CRISPR gene-editing trials in sickle cell disease patients")
+
+    assert profile.disease_name == "Sickle Cell Disease"
+    assert profile.condition_terms == ["Sickle Cell Disease"]
+
+
 def test_resolver_preserves_slash_containing_disease_name():
     profile = DiseaseResolver().resolve("HIV/AIDS report")
 

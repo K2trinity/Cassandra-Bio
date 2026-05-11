@@ -48,6 +48,10 @@ def _extract_disease_name(user_query: str) -> str:
     for candidate in (verb_stripped, stripped, text):
         if candidate not in candidates:
             candidates.append(candidate)
+    for candidate in candidates:
+        patient_context = _extract_patient_context_condition(candidate)
+        if patient_context:
+            return patient_context
     patterns = [
         r"^(?:conduct|perform|run|create|generate|write|prepare)\s+(?:a\s+|an\s+)?(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
         r"^(?:i\s+)?need\s+(?:a\s+|an\s+)?(?:comprehensive\s+|full\s+|complete\s+)?(?:disease\s+)?(?:survey|landscape|overview|review|report|analysis)\s+(?:on|of|about|for)\s+(.+)$",
@@ -62,6 +66,26 @@ def _extract_disease_name(user_query: str) -> str:
     return _clean_candidate(verb_stripped)
 
 
+def _extract_patient_context_condition(value: str) -> str | None:
+    text = str(value or "").strip()
+    patterns = [
+        r"\b(?:in|among|for)\s+(?P<condition>[A-Za-z0-9][A-Za-z0-9' /-]*?)\s+(?:patients?|subjects?)\b",
+        (
+            r"\b(?:patients?|subjects?|people)\s+"
+            r"(?:with|diagnosed\s+with|who\s+have)\s+"
+            r"(?P<condition>[A-Za-z0-9][A-Za-z0-9' /-]*?)"
+            r"(?:\s+(?:treated|receiving|undergoing|enrolled|clinical|trial|trials|study|studies)\b|[,.;]|$)"
+        ),
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            condition = _clean_candidate(match.group("condition"))
+            if condition:
+                return condition
+    return None
+
+
 def _strip_conversational_prefix(value: str) -> str:
     text = str(value or "").strip()
     while True:
@@ -73,7 +97,7 @@ def _strip_conversational_prefix(value: str) -> str:
 
 def _strip_request_verb(value: str) -> str:
     return re.sub(
-        r"^(?:conduct|perform|run|create|generate|write|prepare)\s+(?:a\s+|an\s+)?",
+        r"^(?:conduct|perform|run|create|generate|write|prepare|analyze|analyse|assess|evaluate|review|investigate)\s+(?:a\s+|an\s+)?",
         "",
         str(value or "").strip(),
         count=1,

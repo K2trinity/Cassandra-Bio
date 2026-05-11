@@ -95,6 +95,56 @@ def test_company_quick_query_selects_company_mode():
     assert "btn.dataset.targetType" in html
 
 
+def test_investigation_quick_queries_use_supported_target_prompts():
+    html = render_investigation()
+
+    assert (
+        'placeholder="Disease landscape on melanoma, focusing on immune checkpoint inhibitor safety signals"'
+        in html
+    )
+    assert (
+        'data-query="Disease landscape on melanoma, focusing on immune checkpoint inhibitor hepatotoxicity and safety signals"'
+        in html
+    )
+    assert (
+        'data-query="Disease landscape on sickle cell disease, focusing on CRISPR and gene-editing clinical trials"'
+        in html
+    )
+    assert 'data-query="Assess nivolumab hepatotoxicity in melanoma patients"' not in html
+    assert 'data-query="Evaluate CRISPR off-target effects in clinical trials"' not in html
+
+
+def test_analyze_empty_harvest_payload_explains_source_problem(monkeypatch, tmp_path):
+    fake_service = FakeWorkflowService(tmp_path)
+    monkeypatch.setattr(app_module, "_workflow_service", fake_service)
+
+    response = app.test_client().post(
+        "/api/analyze",
+        json={
+            "query": "Evaluate CRISPR off-target effects in clinical trials",
+            "analysis_target_type": "disease",
+        },
+    )
+
+    assert response.status_code == 202
+    thread = app_module.active_analysis["thread"]
+    thread.join(timeout=10)
+
+    payload = app_module.active_analysis["result_payload"]
+    assert payload["empty_source_guidance"]["status"] == "empty_source"
+    assert "prompt/target mismatch" in payload["empty_source_guidance"]["likely_issue"]
+    assert "Disease landscape on <disease>" in payload["empty_source_guidance"]["actions"][0]
+    assert "source_audit" in payload
+
+
+def test_investigation_completion_renders_empty_source_guidance():
+    html = render_investigation()
+
+    assert "function buildEmptySourceGuidanceHtml" in html
+    assert "No ClinicalTrials records were retained" in html
+    assert "data.empty_source_guidance" in html
+
+
 def test_investigation_kline_navigation_preserves_current_run_page():
     html = render_investigation()
 

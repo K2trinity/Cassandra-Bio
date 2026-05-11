@@ -279,6 +279,79 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
     })
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_empty_source_guidance(
+    *,
+    query: str,
+    analysis_target_type: str,
+    biomedical_profile: Dict[str, Any],
+    clinical_data: Dict[str, Any],
+    source_audit: Dict[str, Any],
+    harvested_count: int,
+) -> Dict[str, Any] | None:
+    trial_records = _safe_int(clinical_data.get("trial_records"))
+    retained_count = _safe_int(source_audit.get("retained_count"), trial_records)
+    raw_count = _safe_int(source_audit.get("raw_count"), _safe_int(clinical_data.get("raw_records")))
+    if harvested_count > 0 or trial_records > 0 or retained_count > 0:
+        return None
+
+    disease_areas = biomedical_profile.get("disease_areas")
+    parsed_target = (
+        biomedical_profile.get("target_name")
+        or biomedical_profile.get("company_name")
+        or (disease_areas[0] if isinstance(disease_areas, list) and disease_areas else None)
+        or biomedical_profile.get("disease_name")
+        or query
+    )
+    target_type = biomedical_profile.get("target_type") or analysis_target_type or "disease"
+
+    if raw_count > 0:
+        reason = (
+            "ClinicalTrials returned source rows, but no rows matched the parsed "
+            "disease condition after strict relevance filtering."
+        )
+        likely_issue = (
+            "Likely a prompt/target mismatch or overly narrow condition match: "
+            "the source had rows, but they did not match the parsed disease target."
+        )
+    else:
+        reason = "ClinicalTrials returned zero rows for the parsed target."
+        likely_issue = (
+            "Most often this is a prompt/target mismatch: the Investigation route "
+            "needs a named disease condition or company sponsor, not only a drug, "
+            "safety topic, mechanism, or generic clinical-trials phrase."
+        )
+
+    return {
+        "status": "empty_source",
+        "severity": "warning",
+        "source": "clinicaltrials.gov",
+        "query": query,
+        "target_type": target_type,
+        "parsed_target": parsed_target,
+        "raw_count": raw_count,
+        "retained_count": retained_count,
+        "rejected_count": _safe_int(
+            source_audit.get("rejected_count"),
+            _safe_int(clinical_data.get("rejected_records")),
+        ),
+        "reason": reason,
+        "likely_issue": likely_issue,
+        "actions": [
+            "Use Disease landscape on <disease>, focusing on <drug/safety/mechanism> for disease work.",
+            "Use Company pipeline for <company/sponsor> and select Company pipeline for sponsor work.",
+            "Upload PDFs when the evidence is document-based or ClinicalTrials has no matching public rows.",
+            "If a known disease or sponsor still returns zero, retry later and verify ClinicalTrials access.",
+        ],
+    }
+
+
 # ============================================================================
 # Custom Logger Interceptor for SocketIO Streaming
 # ============================================================================
@@ -654,6 +727,17 @@ def analyze():
             clinical_data = result.get("clinical_data") or biomedical_profile.get("clinical_data") or {}
             evidence_stats = result.get("evidence_stats") or biomedical_profile.get("evidence_stats") or {}
             extension_payloads = result.get("extension_payloads") or {}
+            disease_report_package = result.get("disease_report_package") or {}
+            source_audit = result.get("source_audit") or disease_report_package.get("source_audit") or {}
+            harvested_count = len(result.get('harvested_data', []))
+            empty_source_guidance = _build_empty_source_guidance(
+                query=query,
+                analysis_target_type=analysis_target_type,
+                biomedical_profile=biomedical_profile,
+                clinical_data=clinical_data,
+                source_audit=source_audit,
+                harvested_count=harvested_count,
+            )
 
             _emit_progress("writing", "complete", 100, "✅ Analysis complete!")
             completion_payload = {
@@ -677,7 +761,7 @@ def analyze():
                     )
                 ),
                 'summary': {
-                    'harvested_items': len(result.get('harvested_data', [])),
+                    'harvested_items': harvested_count,
                     'disease_areas': len(disease_areas),
                     'trial_records': clinical_data.get('trial_records', 0),
                     'publication_records': evidence_stats.get('publication_records', 0),
@@ -693,6 +777,8 @@ def analyze():
                 'company_entities': result.get('company_entities') or biomedical_profile.get('company_entities') or [],
                 'clinical_data': clinical_data,
                 'evidence_stats': evidence_stats,
+                'source_audit': source_audit,
+                'empty_source_guidance': empty_source_guidance,
                 'extension_payloads': extension_payloads,
                 'contract_version': result.get('dataflow_contract_version'),
             }

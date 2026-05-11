@@ -46,6 +46,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.pytest_tmp/
 cover/
 
 # Translations
@@ -244,9 +245,15 @@ node_modules/
 *.tgz
 
 # 数据库文件
-# *.db
-# *.sqlite
-# *.sqlite3
+*.db
+*.db-journal
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
 # subtitle_db
 
 # ==== UI 和 Web 相关 ====
@@ -313,6 +320,10 @@ test_results/
 tests/_test_outputs/
 tests/output/
 scripts/dev_checks/_outputs/
+
+# 本地测试/导出的比赛交付件；源文档仍可正常跟踪
+docs/competition/*_FINAL.md
+docs/competition/*_FINAL.pdf
 
 # 备份文件
 *.bak
