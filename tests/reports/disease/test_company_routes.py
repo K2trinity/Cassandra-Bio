@@ -83,6 +83,20 @@ def test_company_name_expands_and_co_suffix_for_sponsor_search():
     assert "query.spons=Eli%20Lilly%20and%20Company" in profile.expert_topic_url
 
 
+def test_company_name_uses_known_clinicaltrials_sponsor_alias_for_moderna():
+    profile = company_routes.resolve_analysis_target(
+        "company pipeline for moderna",
+        requested_target_type="company",
+    )
+
+    assert profile.target_type == "company"
+    assert profile.target_name == "Moderna, Inc."
+    assert profile.company_name == "Moderna, Inc."
+    assert profile.sponsor_query == "ModernaTX, Inc."
+    assert "query.spons=ModernaTX%2C%20Inc." in profile.expert_topic_url
+    assert "query.spons=ModernaTX%2C%20Inc." in profile.expert_full_match_url
+
+
 def test_auto_stays_disease_for_disease_prompt():
     profile = company_routes.resolve_analysis_target("conduct a comprehensive survey on Alzheimer disease")
 

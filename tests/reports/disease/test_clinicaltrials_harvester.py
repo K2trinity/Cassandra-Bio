@@ -29,19 +29,22 @@ def _nct_ids(studies):
     return [study["protocolSection"]["identificationModule"]["nctId"] for study in studies]
 
 
-def _company_profile(company_name="Vertex Pharmaceuticals"):
-    return DiseaseProfile(
-        query=f"Analyze {company_name} clinical pipeline",
-        target_type="company",
-        company_name=company_name,
-        target_name=company_name,
-        disease_name=company_name,
-        canonical_condition=company_name,
-        condition_terms=[],
-        normalized_terms=[],
-        expert_topic_url="https://clinicaltrials.gov/search?viewType=Topic",
-        expert_full_match_url="https://clinicaltrials.gov/search",
-    )
+def _company_profile(company_name="Vertex Pharmaceuticals", sponsor_query=None):
+    profile_data = {
+        "query": f"Analyze {company_name} clinical pipeline",
+        "target_type": "company",
+        "company_name": company_name,
+        "target_name": company_name,
+        "disease_name": company_name,
+        "canonical_condition": company_name,
+        "condition_terms": [],
+        "normalized_terms": [],
+        "expert_topic_url": "https://clinicaltrials.gov/search?viewType=Topic",
+        "expert_full_match_url": "https://clinicaltrials.gov/search",
+    }
+    if sponsor_query is not None:
+        profile_data["sponsor_query"] = sponsor_query
+    return DiseaseProfile(**profile_data)
 
 
 def test_condition_discovery_prefers_full_match_condition_link():
@@ -146,6 +149,36 @@ def test_company_harvester_issues_exact_sponsor_layer_queries():
         },
     ]
     assert result.raw_count == 0
+
+
+def test_company_harvester_uses_sponsor_query_without_overwriting_company_name():
+    profile = _company_profile("Moderna, Inc.", sponsor_query="ModernaTX, Inc.")
+    calls = []
+
+    def get_json(url, params):
+        calls.append((url, dict(params)))
+        if params["sort"] == "StudyFirstPostDate:desc":
+            return {
+                "studies": [
+                    _api_study(
+                        "NCT88888881",
+                        "Moderna expansion study",
+                        ["COVID-19"],
+                        "2026-03-01",
+                    )
+                ]
+            }
+        return {"studies": []}
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=10,
+    )
+
+    assert {call[1]["query.spons"] for call in calls} == {"ModernaTX, Inc."}
+    assert result.raw_count == 1
+    assert result.studies[0]["metadata"]["company_name"] == "Moderna, Inc."
+    assert result.studies[0]["metadata"]["sponsor_query"] == "ModernaTX, Inc."
 
 
 def test_company_harvester_deduplicates_across_layers_and_preserves_strata():

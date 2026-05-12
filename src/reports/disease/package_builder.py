@@ -113,6 +113,8 @@ def _audit_details(
         details["target_name"] = disease_profile.target_name
     if disease_profile.company_name:
         details["company_name"] = disease_profile.company_name
+    if disease_profile.sponsor_query and disease_profile.sponsor_query != disease_profile.company_name:
+        details["sponsor_query"] = disease_profile.sponsor_query
 
     if disease_profile.target_type == "company":
         counts = _generic_stratum_counts(records)

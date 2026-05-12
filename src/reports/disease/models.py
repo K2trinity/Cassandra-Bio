@@ -12,6 +12,7 @@ class DiseaseProfile(BaseModel):
     query: str = Field(..., min_length=1)
     target_type: Literal["disease", "company"] = "disease"
     company_name: str | None = None
+    sponsor_query: str | None = None
     target_name: str | None = None
     disease_name: str = Field(..., min_length=1)
     canonical_condition: str = Field(..., min_length=1)

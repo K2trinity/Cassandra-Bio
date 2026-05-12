@@ -202,7 +202,8 @@ class ClinicalTrialsCompanyHarvester:
         self.max_pages = max(1, int(max_pages))
 
     def fetch_raw_studies(self, profile: DiseaseProfile, max_records: int = 80) -> RawClinicalTrialsResult:
-        company_name = _company_sponsor_query(profile)
+        company_name = _company_display_name(profile)
+        sponsor_query = _company_sponsor_query(profile)
         raw_count = 0
         retained_by_nct: dict[str, dict[str, Any]] = {}
         strata_by_nct: dict[str, set[str]] = {}
@@ -226,7 +227,7 @@ class ClinicalTrialsCompanyHarvester:
                 seen_page_tokens.add(page_token)
 
                 params: dict[str, Any] = {
-                    "query.spons": company_name,
+                    "query.spons": sponsor_query,
                     **layer_params,
                     "format": "json",
                 }
@@ -248,7 +249,12 @@ class ClinicalTrialsCompanyHarvester:
                             seen_ncts_by_stratum[stratum].add(nct_number)
                     else:
                         retained_without_nct.append(
-                            _study_with_company_metadata(copy.deepcopy(study), {stratum}, company_name)
+                            _study_with_company_metadata(
+                                copy.deepcopy(study),
+                                {stratum},
+                                company_name,
+                                sponsor_query,
+                            )
                         )
 
                 page_token = _extract_next_page_token(payload)
@@ -257,7 +263,12 @@ class ClinicalTrialsCompanyHarvester:
 
         selected_nct_numbers = self._select_nct_numbers(ordered_ncts_by_stratum, max_records)
         retained = [
-            _study_with_company_metadata(study, strata_by_nct.get(nct_number, set()), company_name)
+            _study_with_company_metadata(
+                study,
+                strata_by_nct.get(nct_number, set()),
+                company_name,
+                sponsor_query,
+            )
             for nct_number in selected_nct_numbers
             if (study := retained_by_nct.get(nct_number)) is not None
         ]
@@ -516,6 +527,15 @@ def _sort_date_key(study: dict[str, Any]) -> date:
 
 
 def _company_sponsor_query(profile: DiseaseProfile) -> str:
+    return str(
+        profile.sponsor_query
+        or profile.company_name
+        or profile.target_name
+        or profile.canonical_condition
+    ).strip()
+
+
+def _company_display_name(profile: DiseaseProfile) -> str:
     return str(profile.company_name or profile.target_name or profile.canonical_condition).strip()
 
 
@@ -523,6 +543,7 @@ def _study_with_company_metadata(
     study: dict[str, Any],
     strata: set[str],
     company_name: str,
+    sponsor_query: str | None = None,
 ) -> dict[str, Any]:
     sorted_strata = [stratum for stratum in ClinicalTrialsCompanyHarvester._STRATUM_PRIORITY if stratum in strata]
     primary_stratum = sorted_strata[0] if sorted_strata else "unclassified"
@@ -531,6 +552,8 @@ def _study_with_company_metadata(
     metadata["primary_stratum"] = primary_stratum
     metadata["analysis_target_type"] = "company"
     metadata["company_name"] = company_name
+    if sponsor_query and sponsor_query != company_name:
+        metadata["sponsor_query"] = sponsor_query
     return study
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol
+from typing import NamedTuple, Protocol
 from urllib.parse import quote
 
 from .models import DiseaseProfile, DiseaseReportPackage
@@ -38,6 +38,28 @@ _DISEASE_CUE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _SPONSOR_SEARCH_BASE = "https://clinicaltrials.gov/search"
+
+
+class _CompanySponsorIdentity(NamedTuple):
+    display_name: str
+    sponsor_query: str
+
+
+_MODERNA_IDENTITY = _CompanySponsorIdentity(
+    display_name="Moderna, Inc.",
+    sponsor_query="ModernaTX, Inc.",
+)
+_KNOWN_SPONSOR_IDENTITIES = {
+    "moderna": _MODERNA_IDENTITY,
+    "moderna tx": _MODERNA_IDENTITY,
+    "moderna therapeutics": _MODERNA_IDENTITY,
+    "modernatx": _MODERNA_IDENTITY,
+    "mrna": _MODERNA_IDENTITY,
+}
+_COMPANY_LEGAL_SUFFIX_RE = re.compile(
+    r"\b(?:incorporated|inc|corp|corporation|ltd|limited|plc|llc|company|co)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def normalize_analysis_target_type(value: str | None) -> str:
@@ -100,14 +122,21 @@ def _clean_company_name(value: str) -> str:
 
 
 def _build_company_profile(user_query: str, company_name: str) -> DiseaseProfile:
-    sponsor_url = _build_sponsor_trace_url(company_name)
+    identity = _resolve_company_sponsor_identity(company_name)
+    sponsor_url = _build_sponsor_trace_url(identity.sponsor_query)
+    sponsor_query = (
+        identity.sponsor_query
+        if identity.sponsor_query != identity.display_name
+        else None
+    )
     return DiseaseProfile(
-        query=str(user_query or "").strip() or company_name,
+        query=str(user_query or "").strip() or identity.display_name,
         target_type="company",
-        company_name=company_name,
-        target_name=company_name,
-        disease_name=company_name,
-        canonical_condition=company_name,
+        company_name=identity.display_name,
+        sponsor_query=sponsor_query,
+        target_name=identity.display_name,
+        disease_name=identity.display_name,
+        canonical_condition=identity.display_name,
         condition_terms=[],
         normalized_terms=[],
         expert_topic_url=sponsor_url,
@@ -115,8 +144,24 @@ def _build_company_profile(user_query: str, company_name: str) -> DiseaseProfile
     )
 
 
-def _build_sponsor_trace_url(company_name: str) -> str:
-    return f"{_SPONSOR_SEARCH_BASE}?query.spons={quote(company_name, safe='')}"
+def _resolve_company_sponsor_identity(company_name: str) -> _CompanySponsorIdentity:
+    normalized = _clean_company_name(company_name)
+    known_identity = _KNOWN_SPONSOR_IDENTITIES.get(_company_lookup_key(normalized))
+    if known_identity is not None:
+        return known_identity
+    return _CompanySponsorIdentity(display_name=normalized, sponsor_query=normalized)
+
+
+def _company_lookup_key(value: str) -> str:
+    text = str(value or "").replace("&", " and ").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    text = _COMPANY_LEGAL_SUFFIX_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _build_sponsor_trace_url(sponsor_query: str) -> str:
+    return f"{_SPONSOR_SEARCH_BASE}?query.spons={quote(sponsor_query, safe='')}"
 
 
 __all__ = [
