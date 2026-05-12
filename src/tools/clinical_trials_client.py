@@ -310,6 +310,11 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
         # ── Interventions ────────────────────────────────────────────────────
         interventions = interventions_module.get("interventions", [])
         intervention_names = [i.get("name", "Unknown") for i in interventions]
+        intervention_types = [
+            str(i.get("type") or i.get("interventionType") or "").strip().upper()
+            for i in interventions
+            if str(i.get("type") or i.get("interventionType") or "").strip()
+        ]
         interventions_str = (
             ", ".join(intervention_names) if intervention_names else "Not specified"
         )
@@ -461,6 +466,7 @@ def _parse_clinical_trial(study: Dict) -> Optional[Dict[str, str]]:
             # Conditions & interventions
             "conditions": conditions_str,
             "interventions": interventions_str,
+            "intervention_types": intervention_types,
             # Outcome measures
             "primary_outcome_measures": primary_outcome_measures,
             "secondary_outcome_measures": secondary_outcome_measures,

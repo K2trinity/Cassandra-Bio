@@ -13,29 +13,35 @@ TERMINAL_STATUSES = {
     "WITHDRAWN",
 }
 
+INTERVENTION_TYPE_CATEGORIES = {
+    "DRUG": "drug",
+    "BIOLOGICAL": "biological",
+    "BIOLOGIC": "biological",
+    "DEVICE": "device",
+    "PROCEDURE": "procedure",
+    "BEHAVIORAL": "behavioral intervention",
+    "DIETARY_SUPPLEMENT": "dietary supplement",
+    "DIAGNOSTIC_TEST": "diagnostic test",
+    "RADIATION": "radiation",
+    "GENETIC": "genetic intervention",
+    "COMBINATION_PRODUCT": "combination product",
+    "OTHER": "other",
+}
 
-def categorize_interventions(interventions: list[str]) -> str:
+
+def categorize_interventions(
+    interventions: list[str],
+    intervention_types: list[str] | None = None,
+) -> str:
     text = _normalize_intervention_text(interventions)
-    if not text:
-        return ""
+    text_category = _category_from_intervention_text(text)
+    source_category = _category_from_intervention_types(intervention_types or [])
 
-    if _has_amyloid_term(text) and _has_antibody_term(text):
-        return "amyloid antibody"
-    if any(term in text for term in ("diagnostic", "imaging", "pet", "mri", "biomarker")):
-        return "diagnostic or imaging"
-    if "tau" in text and any(term in text for term in ("therapy", "drug", "treatment")):
-        return "tau therapy"
-    if "cell" in text or "stem cell" in text:
-        return "cell therapy"
-    if any(term in text for term in ("device", "stimulation", "wearable")):
-        return "device"
-    if any(term in text for term in ("behavioral", "cognitive behavioral", "psychotherapy")):
-        return "behavioral intervention"
-    if any(term in text for term in ("care", "caregiver", "telehealth")):
-        return "care delivery"
-    if any(term in text for term in ("small molecule", "inhibitor", "oral")):
-        return "small molecule"
-    return "other"
+    if text_category and text_category != "other":
+        if not source_category or source_category in {"drug", "biological", "other"}:
+            return text_category
+        return source_category
+    return source_category or text_category
 
 
 class RuleBasedRiskEngine:
@@ -48,7 +54,7 @@ class RuleBasedRiskEngine:
         disease_name: str,
     ) -> list[PipelineRiskRecord]:
         categories = [
-            categorize_interventions(record.interventions)
+            categorize_interventions(record.interventions, record.intervention_types)
             for record in records
         ]
         category_counts = Counter(category for category in categories if category)
@@ -142,6 +148,53 @@ class RuleBasedRiskEngine:
 def _normalize_intervention_text(interventions: list[str]) -> str:
     text = " ".join(intervention.strip().lower() for intervention in interventions)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _category_from_intervention_text(text: str) -> str:
+    if not text:
+        return ""
+
+    if _has_amyloid_term(text) and _has_antibody_term(text):
+        return "amyloid antibody"
+    if any(term in text for term in ("diagnostic", "imaging", "pet", "mri", "biomarker")):
+        return "diagnostic or imaging"
+    if "tau" in text and any(term in text for term in ("therapy", "drug", "treatment")):
+        return "tau therapy"
+    if "cell" in text or "stem cell" in text:
+        return "cell therapy"
+    if any(term in text for term in ("device", "stimulation", "wearable")):
+        return "device"
+    if any(term in text for term in ("behavioral", "cognitive behavioral", "psychotherapy")):
+        return "behavioral intervention"
+    if any(term in text for term in ("care", "caregiver", "telehealth")):
+        return "care delivery"
+    if any(term in text for term in ("small molecule", "inhibitor", "oral")):
+        return "small molecule"
+    return "other"
+
+
+def _category_from_intervention_types(intervention_types: list[str]) -> str:
+    categories: list[str] = []
+    for intervention_type in intervention_types:
+        normalized = _normalize_intervention_type(intervention_type)
+        category = INTERVENTION_TYPE_CATEGORIES.get(normalized)
+        if category and category not in categories:
+            categories.append(category)
+
+    if not categories:
+        return ""
+
+    non_other_categories = [category for category in categories if category != "other"]
+    if not non_other_categories:
+        return "other"
+    if len(non_other_categories) == 1:
+        return non_other_categories[0]
+    return "mixed intervention"
+
+
+def _normalize_intervention_type(value: str) -> str:
+    text = str(value or "").strip().upper()
+    return re.sub(r"[\s-]+", "_", text)
 
 
 def _subtract_years(value: date, years: int) -> date:

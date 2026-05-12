@@ -16,6 +16,7 @@ def _study(
     title: str,
     status: str,
     intervention: str,
+    intervention_type: str | None = None,
     first_posted: str,
     phases: list[str] | None = None,
     has_results: bool = False,
@@ -34,7 +35,12 @@ def _study(
             },
             "conditionsModule": {"conditions": [condition]},
             "armsInterventionsModule": {
-                "interventions": [{"name": intervention}],
+                "interventions": [
+                    {
+                        "name": intervention,
+                        **({"type": intervention_type} if intervention_type else {}),
+                    }
+                ],
             },
             "sponsorCollaboratorsModule": {
                 "leadSponsor": {"name": f"Sponsor {nct}"},
@@ -58,6 +64,7 @@ def _company_study(
     title: str,
     status: str,
     intervention: str,
+    intervention_type: str | None = "DRUG",
     first_posted: str,
     phase: str,
     has_results: bool = False,
@@ -78,7 +85,12 @@ def _company_study(
             },
             "conditionsModule": {"conditions": [condition]},
             "armsInterventionsModule": {
-                "interventions": [{"name": intervention}],
+                "interventions": [
+                    {
+                        "name": intervention,
+                        **({"type": intervention_type} if intervention_type else {}),
+                    }
+                ],
             },
             "sponsorCollaboratorsModule": {
                 "leadSponsor": {"name": "Vertex Pharmaceuticals"},
@@ -411,6 +423,44 @@ def test_company_pipeline_uses_sponsor_layers_without_disease_filtering(tmp_path
     assert profile["target_type"] == "company"
     assert profile["company_name"] == "Vertex Pharmaceuticals"
     assert state["report_ir"]["metadata"]["disease"]["targetType"] == "company"
+    assert {
+        record["intervention_category"]
+        for record in state["disease_report_package"]["risk_records"]
+    } == {"drug"}
+
+
+def test_disease_pipeline_uses_clinicaltrials_intervention_type_for_named_drug(tmp_path):
+    nct_number = "NCT_DISEASE_DRUG_TYPE"
+    studies = [
+        _study(
+            nct_number,
+            "Alzheimer Disease",
+            title="Named asset in Alzheimer Disease",
+            status="RECRUITING",
+            intervention="Donanemab",
+            intervention_type="DRUG",
+            first_posted="2026-01-15",
+            phases=["PHASE2"],
+        ),
+    ]
+
+    orchestrator = DiseaseReportOrchestrator(
+        clinicaltrials_get_json=lambda url, params: {"studies": studies},
+        clinicaltrials_get_text=lambda url: "",
+        renderer_adapter=CapturingRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
+        current_date_for_tests="2026-04-27",
+    )
+
+    state = orchestrator.run(
+        "conduct a comprehensive survey on Alzheimer disease",
+        output_dir=tmp_path,
+        max_trials=50,
+    )
+
+    risk_records = state["disease_report_package"]["risk_records"]
+    assert [record["nct_number"] for record in risk_records] == [nct_number]
+    assert [record["intervention_category"] for record in risk_records] == ["drug"]
 
 
 def test_company_pipeline_expands_sponsor_alias_and_defaults_to_100_records(tmp_path):

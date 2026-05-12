@@ -35,6 +35,7 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
         or conditions_module.get("conditions")
     )
     interventions = _extract_interventions(payload, metadata, interventions_module)
+    intervention_types = _extract_intervention_types(payload, metadata, interventions_module)
     sponsor = _first_text(
         payload,
         metadata,
@@ -78,6 +79,7 @@ def normalize_trial_payload(payload: dict[str, Any]) -> ClinicalTrialRecord:
         results_url=results_url or "",
         conditions=conditions,
         interventions=interventions,
+        intervention_types=intervention_types,
         sponsor=sponsor,
         study_type=study_type,
         enrollment=_int_from_sources(
@@ -211,7 +213,41 @@ def _extract_interventions(
     metadata: dict[str, Any],
     interventions_module: dict[str, Any],
 ) -> list[str]:
-    return _list_text(
+    return _list_text(_intervention_source(payload, metadata, interventions_module))
+
+
+def _extract_intervention_types(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    interventions_module: dict[str, Any],
+) -> list[str]:
+    explicit_types = _list_text(
+        payload.get("intervention_types")
+        or payload.get("intervention_type")
+        or payload.get("interventionTypes")
+        or payload.get("interventionType")
+        or metadata.get("intervention_types")
+        or metadata.get("intervention_type")
+        or metadata.get("interventionTypes")
+        or metadata.get("interventionType")
+    )
+    if explicit_types:
+        return [_canonical_intervention_type(value) for value in explicit_types]
+
+    return [
+        _canonical_intervention_type(value)
+        for value in _list_intervention_types(
+            _intervention_source(payload, metadata, interventions_module)
+        )
+    ]
+
+
+def _intervention_source(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    interventions_module: dict[str, Any],
+) -> Any:
+    return (
         payload.get("interventions")
         or payload.get("intervention")
         or metadata.get("interventions")
@@ -219,6 +255,37 @@ def _extract_interventions(
         or interventions_module.get("interventions")
         or interventions_module.get("intervention")
     )
+
+
+def _list_intervention_types(value: Any) -> list[str]:
+    if value is None or isinstance(value, str):
+        return []
+    if isinstance(value, dict):
+        nested = (
+            value.get("interventions")
+            or value.get("intervention")
+            or value.get("armsInterventionsModule")
+        )
+        if nested is not None:
+            return _list_intervention_types(nested)
+        text = _first_text(value, keys=("type", "interventionType", "category"))
+        return [text] if text else []
+
+    try:
+        iterator = iter(value)
+    except TypeError:
+        return []
+
+    values: list[str] = []
+    for item in iterator:
+        values.extend(_list_intervention_types(item))
+    return values
+
+
+def _canonical_intervention_type(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    text = re.sub(r"[\s-]+", "_", text)
+    return text
 
 
 def _split_phase_values(value: Any) -> list[str]:

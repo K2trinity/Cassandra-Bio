@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from src.tools.clinical_trials_client import fetch_trial_results, is_trial_results_candidate
+from src.tools.clinical_trials_client import (
+    _parse_clinical_trial,
+    fetch_trial_results,
+    is_trial_results_candidate,
+)
 from src.tools.multi_source_harvester import MultiSourceHarvester
 
 
@@ -19,6 +23,27 @@ class _FakeResponse:
 
 
 class ClinicalTrialsResultsFlowTest(unittest.TestCase):
+    def test_parse_clinical_trial_preserves_intervention_types(self):
+        parsed = _parse_clinical_trial(
+            {
+                "protocolSection": {
+                    "identificationModule": {
+                        "nctId": "NCT_TYPES",
+                        "briefTitle": "Typed intervention trial",
+                    },
+                    "armsInterventionsModule": {
+                        "interventions": [
+                            {"type": "DRUG", "name": "VX-147"},
+                            {"type": "BIOLOGICAL", "name": "LY3841136"},
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(parsed["interventions"], "VX-147, LY3841136")
+        self.assertEqual(parsed["intervention_types"], ["DRUG", "BIOLOGICAL"])
+
     def test_is_trial_results_candidate_requires_terminal_status_and_has_results(self):
         self.assertTrue(
             is_trial_results_candidate(

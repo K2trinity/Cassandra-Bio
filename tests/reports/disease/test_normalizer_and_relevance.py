@@ -36,6 +36,28 @@ def test_normalizer_reads_status_from_nested_clinicaltrials_payload():
     assert record.primary_completion_date == date(2028, 1, 1)
 
 
+def test_normalizer_preserves_clinicaltrials_intervention_types():
+    payload = {
+        "protocolSection": {
+            "identificationModule": {"nctId": "NCT06500009", "briefTitle": "Company asset trial"},
+            "statusModule": {"overallStatus": "RECRUITING"},
+            "conditionsModule": {"conditions": ["Cystic Fibrosis"]},
+            "armsInterventionsModule": {
+                "interventions": [
+                    {"type": "DRUG", "name": "VX-147"},
+                    {"type": "BIOLOGICAL", "name": "LY3841136"},
+                    {"type": "DIAGNOSTIC_TEST", "name": "Pharmacodynamic assay"},
+                ],
+            },
+        },
+    }
+
+    record = normalize_trial_payload(payload)
+
+    assert record.interventions == ["VX-147", "LY3841136", "Pharmacodynamic assay"]
+    assert record.intervention_types == ["DRUG", "BIOLOGICAL", "DIAGNOSTIC_TEST"]
+
+
 def test_normalizer_preserves_clinicaltrials_why_stopped_reason():
     payload = {
         "protocolSection": {

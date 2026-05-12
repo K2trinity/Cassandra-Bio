@@ -10,6 +10,7 @@ def _trial(
     status: str = "RECRUITING",
     posted: date | None = date(2026, 1, 1),
     interventions: list[str] | None = None,
+    intervention_types: list[str] | None = None,
 ) -> ClinicalTrialRecord:
     return ClinicalTrialRecord(
         study_title=f"Study {nct_number}",
@@ -17,6 +18,7 @@ def _trial(
         status=status,
         conditions=["Alzheimer Disease"],
         interventions=interventions or ["Investigational amyloid monoclonal antibody"],
+        intervention_types=intervention_types or [],
         sponsor=f"Sponsor {nct_number}",
         study_type="INTERVENTIONAL",
         study_first_posted=posted,
@@ -43,6 +45,42 @@ def test_categorize_interventions_covers_taxonomy_examples():
 
     for interventions, expected in examples:
         assert categorize_interventions(interventions) == expected
+
+
+def test_categorize_interventions_uses_clinicaltrials_source_types_for_named_assets():
+    examples = [
+        (["VX-147"], ["DRUG"], "drug"),
+        (["LY3841136"], ["BIOLOGICAL"], "biological"),
+        (["At-home monitoring patch"], ["DEVICE"], "device"),
+        (["Sponsor dietary product"], ["DIETARY_SUPPLEMENT"], "dietary supplement"),
+        (["Pharmacodynamic assay"], ["DIAGNOSTIC_TEST"], "diagnostic test"),
+        (["Gene editing regimen"], ["GENETIC"], "genetic intervention"),
+        (["Procedure arm"], ["PROCEDURE"], "procedure"),
+        (["Radiation arm"], ["RADIATION"], "radiation"),
+        (["Combination product"], ["COMBINATION_PRODUCT"], "combination product"),
+    ]
+
+    for interventions, intervention_types, expected in examples:
+        assert categorize_interventions(interventions, intervention_types) == expected
+
+
+def test_clinicaltrials_types_keep_company_pipeline_drugs_out_of_other_category():
+    records = [
+        _trial("NCTVX00001", interventions=["VX-147"], intervention_types=["DRUG"]),
+        _trial("NCTLY00001", interventions=["LY3841136"], intervention_types=["BIOLOGICAL"]),
+        _trial("NCTDEV0001", interventions=["At-home monitoring patch"], intervention_types=["DEVICE"]),
+    ]
+
+    risks = RuleBasedRiskEngine(current_date=date(2026, 4, 27)).build(
+        records,
+        "Vertex Pharmaceuticals",
+    )
+
+    assert [risk.intervention_category for risk in risks] == [
+        "drug",
+        "biological",
+        "device",
+    ]
 
 
 def test_old_non_terminal_trial_yields_high_timeline_with_evidence():

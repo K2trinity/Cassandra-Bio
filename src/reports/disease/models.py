@@ -34,6 +34,7 @@ class ClinicalTrialRecord(BaseModel):
     results_url: str = ""
     conditions: list[str] = Field(default_factory=list)
     interventions: list[str] = Field(default_factory=list)
+    intervention_types: list[str] = Field(default_factory=list)
     sponsor: str = "Unknown"
     study_type: str = "Unknown"
     enrollment: int | None = None
