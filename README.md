@@ -9,9 +9,9 @@ The deployed app is served from the Cassandra-Bio repository and currently uses 
 As checked on 2026-05-13, the active research universe is:
 
 - `universe_id`: `biotech_us_v1`
-- latest snapshot date: `2026-05-10`
-- current active universe count: `12`
-- tickers: `ALNY`, `AMGN`, `BEAM`, `BIIB`, `BMRN`, `CRSP`, `EDIT`, `GILD`, `MRNA`, `NTLA`, `REGN`, `VRTX`
+- latest snapshot date: `2026-05-13`
+- current active universe count: `37`
+- tickers: `AARD`, `ABEO`, `ABOS`, `ABUS`, `ABVC`, `ACAD`, `ACRS`, `ACRV`, `ACTU`, `ACXP`, `ADCT`, `ADIL`, `ADPT`, `ADXN`, `AEON`, `AGIO`, `AGMB`, `AKBA`, `AKTS`, `AKTX`, `ALDX`, `ALGS`, `ALLO`, `ALLR`, `ALMR`, `ALNY`, `AMGN`, `BEAM`, `BIIB`, `BMRN`, `CRSP`, `EDIT`, `GILD`, `MRNA`, `NTLA`, `REGN`, `VRTX`
 
 Inspect the local universe count:
 
@@ -19,18 +19,22 @@ Inspect the local universe count:
 @'
 import duckdb
 con = duckdb.connect("data/research/cassandra_research.duckdb", read_only=True)
-print(con.execute("""
-    select universe_id, snapshot_date, count(*) as active_count, snapshot_id
-    from universe_members
+latest = con.execute("""
+    select max(member_from)
+    from universe_membership
     where universe_id = 'biotech_us_v1'
-      and is_active = true
-      and snapshot_date = (
-          select max(snapshot_date)
-          from universe_members
-          where universe_id = 'biotech_us_v1'
-      )
-    group by universe_id, snapshot_date, snapshot_id
-""").fetchall())
+""").fetchone()[0]
+tickers = [
+    row[0]
+    for row in con.execute("""
+        select ticker
+        from universe_membership
+        where universe_id = 'biotech_us_v1'
+          and member_from = ?
+        order by ticker
+    """, [latest]).fetchall()
+]
+print({"snapshot_date": str(latest), "active_count": len(tickers), "tickers": tickers})
 '@ | C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -
 ```
 
@@ -72,6 +76,22 @@ Generated disease and company reports are persisted to SQLite in `report_documen
 
 Use the resumable ingestion script to fetch additional current-universe market/provider data in small batches while respecting provider rate limits:
 
+First expand the universe snapshot itself. This writes only the DuckDB universe catalog and does not call Tiingo, SEC, or FMP:
+
+```powershell
+C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe scripts/ingest_universe_company_data.py `
+  --snapshot-date 2026-05-13 `
+  --start-date 2026-05-01 `
+  --end-date 2026-05-13 `
+  --expand-from-nasdaq-trader `
+  --max-expansion-tickers 25 `
+  --write-universe-only
+```
+
+`--expand-from-nasdaq-trader` reads Nasdaq Trader's public symbol directories with a one-request-per-second limiter, filters active common-stock names by biotech/pharma keywords, dedupes against the latest DuckDB snapshot, and prints `universe_expansion.added_tickers`. Use `--dry-run` to preview without writing. For a manually audited list, pass one or more `--universe-expansion-csv` files with columns `ticker`, `company_name`, `exchange`, and `asset_type`; optional columns include `industry`, `cik`, `source_weight`, `cusip`, `isin`, and `source`.
+
+Then fetch company stock/provider data in small resumable batches:
+
 ```powershell
 C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe scripts/ingest_universe_company_data.py `
   --snapshot-date 2026-05-13 `
@@ -90,9 +110,12 @@ Useful controls:
 - `--no-resume`: disable checkpoint reuse for a deliberately fresh run.
 - `--max-provider-attempts`: cap retries per provider request.
 - `--max-retry-sleep-seconds`: cap sleep time after rate-limit responses.
+- `--write-universe-only`: write the expanded universe snapshot and skip provider calls.
+- `--expand-from-nasdaq-trader`: add current active-listed biotech/pharma keyword matches from Nasdaq Trader.
+- `--universe-expansion-csv PATH`: add audited universe rows from CSV.
 - `--replace-event-links`: rewrite existing event-price link partitions for the produced snapshot.
 
-The script reads the latest `biotech_us_v1` universe snapshot, keeps the full universe snapshot stable, filters each batch through `include_tickers`, retries transient provider failures, and prints one JSON summary without secrets.
+The script reads the latest `biotech_us_v1` universe snapshot, optionally expands it before planning batches, keeps provider downloads scoped to selected tickers, retries transient provider failures, and prints one JSON summary without secrets.
 
 ## Event Alignment And K-Line Labels
 
