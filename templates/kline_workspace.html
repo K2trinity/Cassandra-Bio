@@ -29,7 +29,8 @@
         <div class="ticker-control" data-role="ticker-selector">
             <label for="ticker-search">Ticker</label>
             <form id="ticker-form" class="ticker-form">
-                <input id="ticker-search" name="symbol" value="{{ current_ticker }}" autocomplete="off" spellcheck="false" inputmode="latin">
+                <input id="ticker-search" name="symbol" value="{{ current_ticker }}" autocomplete="off" spellcheck="false" inputmode="latin" list="ticker-options">
+                <datalist id="ticker-options"></datalist>
                 <button type="submit">Open</button>
             </form>
         </div>

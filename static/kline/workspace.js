@@ -76,6 +76,10 @@
     return refresh ? url + "?refresh=1" : url;
   }
 
+  function tickerOptionsApiUrl() {
+    return "/api/kline/tickers";
+  }
+
   function fetchWorkspace(ticker, options) {
     options = options || {};
     var request = browserFetch();
@@ -91,6 +95,41 @@
         throw new Error((result.body && result.body.error) || "Workspace unavailable.");
       }
       return result.body;
+    });
+  }
+
+  function loadTickerOptions() {
+    var list = byId("ticker-options");
+    var request = browserFetch();
+    if (!list || !request) {
+      return;
+    }
+    request(tickerOptionsApiUrl()).then(function (response) {
+      return response.json().then(function (body) {
+        return { ok: response.ok, body: body };
+      });
+    }).then(function (result) {
+      if (result.ok && Array.isArray(result.body)) {
+        renderTickerOptions(list, result.body);
+      }
+    }).catch(function () {
+      // The free-form ticker input still works if the suggestion list cannot load.
+    });
+  }
+
+  function renderTickerOptions(list, companies) {
+    list.replaceChildren();
+    companies.forEach(function (company) {
+      var ticker = String((company && company.ticker) || "").trim().toUpperCase();
+      if (!ticker) {
+        return;
+      }
+      var option = document.createElement("option");
+      option.value = ticker;
+      if (company && company.name) {
+        option.label = ticker + " - " + company.name;
+      }
+      list.appendChild(option);
     });
   }
 
@@ -1429,6 +1468,7 @@
   function init() {
     bindTickerForm();
     bindTabs();
+    loadTickerOptions();
     window.addEventListener("beforeunload", function () {
       if (activeState && typeof activeState.chartCleanup === "function") {
         activeState.chartCleanup();

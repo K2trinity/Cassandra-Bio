@@ -90,6 +90,8 @@ def test_kline_page_renders_lightweight_shell_without_workspace_fetch(monkeypatc
     assert 'data-ticker="MRNA"' in html
     assert 'id="kline-workspace-data" type="application/json"' not in html
     assert 'data-role="ticker-selector"' in html
+    assert 'list="ticker-options"' in html
+    assert 'id="ticker-options"' in html
     assert 'id="source-strip"' in html
     assert 'id="company-name"' in html
     assert 'id="last-close"' in html
@@ -180,6 +182,7 @@ def test_kline_workspace_static_js_exposes_real_backtest_strategy_controls():
     )
 
     for expected in [
+        "/api/kline/tickers",
         "/api/backtest/options",
         "strategy_id",
         "multifactor_score",
