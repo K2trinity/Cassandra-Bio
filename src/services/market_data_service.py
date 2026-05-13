@@ -1,7 +1,9 @@
 """Market data service with 24-hour cache freshness logic."""
 
+import copy
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 import pandas as pd
@@ -9,6 +11,8 @@ import pandas as pd
 from src.backtest.price_snapshot import load_prices_daily_ohlc
 from src.backtest.data_loader import load_ohlc, refresh_ohlc, DATA_DIR
 from src.backtest.research_db import RESEARCH_DB_PATH, RESEARCH_DIR
+
+_RESEARCH_SNAPSHOT_PAYLOAD_CACHE: dict[tuple[Any, ...], dict] = {}
 
 
 def _is_cache_stale(path: Path, max_age_hours: int) -> bool:
@@ -122,6 +126,7 @@ def _latest_research_snapshot_payload(ticker: str) -> dict | None:
     db_path = Path(RESEARCH_DB_PATH)
     if not db_path.exists():
         return None
+    normalized_ticker = str(ticker or "").strip().upper()
 
     import duckdb
 
@@ -147,14 +152,28 @@ def _latest_research_snapshot_payload(ticker: str) -> dict | None:
     finally:
         conn.close()
 
+    if not snapshots:
+        return None
+
+    output_root = Path(RESEARCH_DIR) / "prices_daily"
+    cache_key = _research_snapshot_payload_cache_key(
+        normalized_ticker,
+        db_path,
+        output_root,
+        snapshots,
+    )
+    cached_payload = _RESEARCH_SNAPSHOT_PAYLOAD_CACHE.get(cache_key)
+    if cached_payload is not None:
+        return copy.deepcopy(cached_payload)
+
     best_payload: dict | None = None
     best_row_count = 0
     for data_snapshot_id, created_at in snapshots:
         try:
             frame = load_prices_daily_ohlc(
-                ticker,
+                normalized_ticker,
                 data_snapshot_id=str(data_snapshot_id),
-                output_root=Path(RESEARCH_DIR) / "prices_daily",
+                output_root=output_root,
                 source="tiingo",
             )
         except Exception as exc:  # noqa: BLE001
@@ -171,7 +190,28 @@ def _latest_research_snapshot_payload(ticker: str) -> dict | None:
                 "last_updated": created_at,
             }
             best_row_count = len(rows)
-    return best_payload
+    if best_payload is None:
+        return None
+    _RESEARCH_SNAPSHOT_PAYLOAD_CACHE[cache_key] = copy.deepcopy(best_payload)
+    return copy.deepcopy(best_payload)
+
+
+def _research_snapshot_payload_cache_key(
+    ticker: str,
+    db_path: Path,
+    output_root: Path,
+    snapshots: list[tuple[object, object]],
+) -> tuple[Any, ...]:
+    snapshot_signature = tuple(
+        (str(data_snapshot_id), str(created_at))
+        for data_snapshot_id, created_at in snapshots
+    )
+    return (
+        ticker,
+        str(db_path.resolve()),
+        str(output_root.resolve()),
+        snapshot_signature,
+    )
 
 
 def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:

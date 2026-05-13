@@ -25,11 +25,13 @@ from src.backtest.multifactor_strategy import (
     normalize_real_multifactor_strategy_config,
 )
 from src.backtest.strategy_registry import EVENT_BASELINE, MULTIFACTOR_SCORE
+from src.kline.providers.catalyst_provider import CatalystEventProvider
 from src.kline.ticker_resolver import TickerResolver
 from src.kline.workspace_service import KlineWorkspaceService
 
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
+catalyst_event_provider = CatalystEventProvider()
 resolver = TickerResolver()
 
 BACKTEST_STRATEGY_OPTIONS = (
@@ -97,16 +99,10 @@ def api_kline_tickers():
 def api_kline_events(symbol: str):
     """Return Phase 2 event points for a symbol."""
     try:
-        workspace = workspace_service.build_workspace(symbol, cache_only=True)
+        company = resolver.resolve(symbol)
+        events, _statuses = catalyst_event_provider.load(company.ticker, cache_only=True)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    event_layer_kinds = {"catalysts", "news", "macro"}
-    events = [
-        event
-        for layer in workspace.layers
-        if layer.kind in event_layer_kinds
-        for event in layer.points
-    ]
     return jsonify([event.to_dict() for event in events])
 
 

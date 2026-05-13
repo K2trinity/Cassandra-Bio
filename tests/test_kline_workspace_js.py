@@ -92,7 +92,7 @@ def test_workspace_js_allows_absolute_web_source_url():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_workspace_js_fetches_workspace_when_inline_payload_missing():
+def test_workspace_js_fetches_workspace_without_auto_refresh_when_inline_payload_missing():
     result = _run_workspace_script(r"""
         const requests = [];
         installWorkspaceShell('MRNA');
@@ -124,14 +124,14 @@ def test_workspace_js_fetches_workspace_when_inline_payload_missing():
         if (requests[0] !== '/api/kline/workspace/MRNA') {
           throw new Error('expected first request to load workspace API, got ' + requests.join(','));
         }
-        if (!requests.includes('/api/kline/workspace/MRNA?refresh=1')) {
-          throw new Error('expected background refresh request, got ' + requests.join(','));
+        if (requests.includes('/api/kline/workspace/MRNA?refresh=1')) {
+          throw new Error('workspace load should not auto-refresh heavy event payloads: ' + requests.join(','));
         }
-        if (document.getElementById('company-name').textContent !== 'Moderna refreshed') {
-          throw new Error('refreshed workspace was not rendered after async refresh');
+        if (document.getElementById('company-name').textContent !== 'Moderna cached') {
+          throw new Error('cached workspace was not retained after initial load');
         }
-        if (chartConfigs.length < 2) {
-          throw new Error('expected cached and refreshed chart renders, got ' + chartConfigs.length);
+        if (chartConfigs.length !== 1) {
+          throw new Error('expected one initial chart render, got ' + chartConfigs.length);
         }
         """)
 

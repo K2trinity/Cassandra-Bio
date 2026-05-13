@@ -496,3 +496,83 @@ class TestGetOhlcRows:
             "2026-05-08",
             "2026-05-09",
         ]
+
+    def test_cached_ohlc_rows_with_status_reuses_research_snapshot_payload(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Repeated K-line opens should not rescan research parquet partitions."""
+        from src.backtest.research_db import initialize_research_database
+        from src.services import market_data_service
+
+        research_dir = tmp_path / "research"
+        db_path = initialize_research_database(research_dir / "cassandra_research.duckdb")
+        import duckdb
+
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(
+                """
+                INSERT INTO data_snapshots (
+                    data_snapshot_id,
+                    snapshot_date,
+                    price_source,
+                    event_source_db,
+                    universe_id,
+                    bias_profile,
+                    price_partition_root,
+                    event_snapshot_hash,
+                    security_master_hash,
+                    coverage_json,
+                    created_at
+                )
+                VALUES (
+                    'snap_cached',
+                    '2026-05-13',
+                    'tiingo',
+                    'events.db',
+                    'biotech_us_v1',
+                    'current_constituents_only',
+                    'data/research/prices_daily',
+                    'events',
+                    'security',
+                    '{}',
+                    '2026-05-13T01:00:00'
+                )
+                """
+            )
+        finally:
+            conn.close()
+
+        calls = []
+
+        def fake_load_prices_daily_ohlc(ticker, *, data_snapshot_id, output_root, source):
+            calls.append((ticker, data_snapshot_id, str(output_root), source))
+            return pd.DataFrame(
+                [
+                    {
+                        "date": pd.Timestamp("2026-05-11"),
+                        "open": 10.0,
+                        "high": 12.0,
+                        "low": 9.0,
+                        "close": 11.0,
+                        "volume": 1000,
+                    }
+                ]
+            )
+
+        monkeypatch.setattr(market_data_service, "RESEARCH_DB_PATH", db_path)
+        monkeypatch.setattr(market_data_service, "RESEARCH_DIR", research_dir)
+        monkeypatch.setattr(
+            market_data_service,
+            "load_prices_daily_ohlc",
+            fake_load_prices_daily_ohlc,
+        )
+
+        first = market_data_service.get_cached_ohlc_rows_with_status("MRNA")
+        first["rows"][0]["close"] = 999.0
+        second = market_data_service.get_cached_ohlc_rows_with_status("MRNA")
+
+        assert len(calls) == 1
+        assert second["rows"][0]["close"] == 11.0

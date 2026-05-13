@@ -283,13 +283,7 @@ def test_kline_tickers_api_uses_research_universe(client, monkeypatch, tmp_path)
 
 
 def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
-    from src.kline.models import (
-        KlineCompany,
-        KlineEvent,
-        KlineLayer,
-        KlinePanelState,
-        KlinePriceSeries,
-    )
+    from src.kline.models import KlineDataStatus, KlineEvent
 
     clinical = KlineEvent.example("MRNA")
     clinical.id = "clinical-1"
@@ -320,52 +314,15 @@ def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
         source="gdelt",
     )
 
-    class FakeWorkspaceService:
-        def build_workspace(self, symbol: str, cache_only: bool = False):
-            return KlineWorkspacePayload(
-                ticker="MRNA",
-                company=KlineCompany.example("MRNA"),
-                price=KlinePriceSeries.empty(),
-                layers=[
-                    KlineLayer(
-                        id="candles",
-                        kind="candles",
-                        label="Candles",
-                        visible_by_default=True,
-                        status="empty",
-                    ),
-                    KlineLayer(
-                        id="catalysts",
-                        kind="catalysts",
-                        label="Catalysts",
-                        visible_by_default=True,
-                        status="ready",
-                        points=[clinical],
-                    ),
-                    KlineLayer(
-                        id="news",
-                        kind="news",
-                        label="News",
-                        visible_by_default=True,
-                        status="ready",
-                        points=[news],
-                    ),
-                    KlineLayer(
-                        id="macro",
-                        kind="macro",
-                        label="Macro",
-                        visible_by_default=False,
-                        status="ready",
-                        points=[macro],
-                    ),
-                ],
-                panels=KlinePanelState(),
-                data_status=[],
-                warnings=[],
-                capabilities=[],
-            )
+    class FakeCatalystProvider:
+        def load(self, ticker: str, cache_only: bool = False):
+            assert ticker == "MRNA"
+            assert cache_only is True
+            return [clinical, news, macro], [
+                KlineDataStatus(source="clinicaltrials", status="ready", item_count=3)
+            ]
 
-    monkeypatch.setattr(kline_routes, "workspace_service", FakeWorkspaceService())
+    monkeypatch.setattr(kline_routes, "catalyst_event_provider", FakeCatalystProvider())
     client = app.test_client()
 
     response = client.get("/api/kline/events/MRNA")
@@ -373,6 +330,44 @@ def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
 
     assert response.status_code == 200
     assert [event["id"] for event in body] == ["clinical-1", "news-1", "macro-1"]
+
+
+def test_kline_events_api_does_not_build_full_workspace(monkeypatch):
+    from src.kline.models import KlineDataStatus, KlineEvent
+
+    class FailingWorkspaceService:
+        def build_workspace(self, *args, **kwargs):
+            raise AssertionError("workspace should not be built for event-only endpoint")
+
+    class FakeCatalystProvider:
+        def load(self, ticker: str, cache_only: bool = False):
+            assert ticker == "MRNA"
+            assert cache_only is True
+            return [
+                KlineEvent(
+                    id="clinical-1",
+                    ticker=ticker,
+                    date="2026-04-20",
+                    type="trial_results_posted",
+                    category="clinical",
+                    title="Results posted",
+                    summary="Results posted",
+                    sentiment="positive",
+                    priority=1,
+                    confidence="high",
+                    source="clinicaltrials",
+                )
+            ], [KlineDataStatus(source="clinicaltrials", status="ready", item_count=1)]
+
+    monkeypatch.setattr(kline_routes, "workspace_service", FailingWorkspaceService())
+    monkeypatch.setattr(kline_routes, "catalyst_event_provider", FakeCatalystProvider())
+    client = app.test_client()
+
+    response = client.get("/api/kline/events/MRNA")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert [event["id"] for event in body] == ["clinical-1"]
 
 
 def test_obsolete_kline_surface_files_are_removed():

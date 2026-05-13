@@ -1514,7 +1514,6 @@
     renderLoading(ticker);
     fetchWorkspace(ticker).then(function (loadedWorkspace) {
       renderWorkspace(loadedWorkspace);
-      refreshWorkspace(loadedWorkspace.ticker || ticker);
     }).catch(function (error) {
       renderLoadError(error && error.message);
     });

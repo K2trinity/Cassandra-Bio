@@ -49,6 +49,7 @@ _PUBLIC_FACTOR_ATTRIBUTION_DENYLIST = {
     "positive_demo_expected",
     "synthetic",
 }
+DEFAULT_WORKSPACE_EVENT_DISPLAY_LIMIT = 250
 
 
 class KlineWorkspaceService:
@@ -58,11 +59,13 @@ class KlineWorkspaceService:
         ohlc_provider: OHLCProvider | None = None,
         catalyst_provider: CatalystEventProvider | None = None,
         backtest_provider: BacktestResultProvider | None = None,
+        event_display_limit: int = DEFAULT_WORKSPACE_EVENT_DISPLAY_LIMIT,
     ):
         self.resolver = resolver or TickerResolver()
         self.ohlc_provider = ohlc_provider or OHLCProvider()
         self.catalyst_provider = catalyst_provider or CatalystEventProvider()
         self.backtest_provider = backtest_provider or BacktestResultProvider()
+        self.event_display_limit = max(1, int(event_display_limit))
 
     def build_workspace(
         self,
@@ -89,14 +92,72 @@ class KlineWorkspaceService:
         ]
 
         hard_events, news_events, macro_events = _split_event_layers(catalysts)
+        hard_events_display, hard_events_truncated = _limit_event_points(
+            hard_events,
+            self.event_display_limit,
+        )
+        news_events_display, news_events_truncated = _limit_event_points(
+            news_events,
+            self.event_display_limit,
+        )
+        macro_events_display, macro_events_truncated = _limit_event_points(
+            macro_events,
+            self.event_display_limit,
+        )
         layers = [
             _candles_layer(price),
-            _events_layer("catalysts", "catalysts", "Catalysts", hard_events, True),
-            _events_layer("news", "news", "News", news_events, True),
-            _events_layer("macro", "macro", "Macro", macro_events, False),
+            _events_layer(
+                "catalysts",
+                "catalysts",
+                "Catalysts",
+                hard_events_display,
+                True,
+                total_count=len(hard_events),
+            ),
+            _events_layer(
+                "news",
+                "news",
+                "News",
+                news_events_display,
+                True,
+                total_count=len(news_events),
+            ),
+            _events_layer(
+                "macro",
+                "macro",
+                "Macro",
+                macro_events_display,
+                False,
+                total_count=len(macro_events),
+            ),
             _backtest_layer(last_backtest),
         ]
         data_status = price_statuses + catalyst_statuses + backtest_statuses
+        display_warnings = _event_display_warnings(
+            (
+                (
+                    "catalysts",
+                    "Catalysts",
+                    len(hard_events),
+                    len(hard_events_display),
+                    hard_events_truncated,
+                ),
+                (
+                    "news",
+                    "News",
+                    len(news_events),
+                    len(news_events_display),
+                    news_events_truncated,
+                ),
+                (
+                    "macro",
+                    "Macro",
+                    len(macro_events),
+                    len(macro_events_display),
+                    macro_events_truncated,
+                ),
+            )
+        )
 
         return KlineWorkspacePayload(
             ticker=ticker,
@@ -108,7 +169,7 @@ class KlineWorkspaceService:
                 last_backtest_run_id=_run_id(last_backtest),
             ),
             data_status=data_status,
-            warnings=_warnings_from_statuses(data_status),
+            warnings=display_warnings + _warnings_from_statuses(data_status),
             capabilities=disabled_future_capabilities(),
         )
 
@@ -177,7 +238,17 @@ def _events_layer(
     label: str,
     events: list[KlineEvent],
     visible_by_default: bool,
+    total_count: int | None = None,
 ) -> KlineLayer:
+    total = len(events) if total_count is None else total_count
+    displayed = len(events)
+    summary = {
+        "count": total,
+        "displayed_count": displayed,
+        "truncated": displayed < total,
+    }
+    if displayed < total:
+        summary["omitted_count"] = total - displayed
     return KlineLayer(
         id=layer_id,
         kind=kind,
@@ -185,8 +256,58 @@ def _events_layer(
         visible_by_default=visible_by_default,
         status="ready" if events else "empty",
         points=events,
-        summary={"count": len(events)},
+        summary=summary,
     )
+
+
+def _limit_event_points(
+    events: list[KlineEvent],
+    limit: int,
+) -> tuple[list[KlineEvent], bool]:
+    if len(events) <= limit:
+        return events, False
+    selected = sorted(
+        events,
+        key=lambda event: (
+            _event_priority_rank(event),
+            _event_recency_rank(event),
+            event.id,
+        ),
+    )[:limit]
+    return sorted(selected, key=lambda event: (event.date, event.id)), True
+
+
+def _event_priority_rank(event: KlineEvent) -> tuple[int, int]:
+    try:
+        priority = int(event.priority)
+    except (TypeError, ValueError):
+        priority = 9
+    return (priority, 0 if event.backtest_eligible is not False else 1)
+
+
+def _event_recency_rank(event: KlineEvent) -> int:
+    digits = "".join(char for char in str(event.date or "") if char.isdigit())
+    try:
+        return -int(digits[:8] or "0")
+    except ValueError:
+        return 0
+
+
+def _event_display_warnings(
+    layer_stats: tuple[tuple[str, str, int, int, bool], ...],
+) -> list[KlineWarning]:
+    warnings: list[KlineWarning] = []
+    for layer_id, label, total, displayed, truncated in layer_stats:
+        if not truncated:
+            continue
+        warnings.append(
+            KlineWarning(
+                code=f"{layer_id}_display_limited",
+                message=f"Showing {displayed} of {total} {label.lower()} events on the initial chart.",
+                source=layer_id,
+            )
+        )
+    return warnings
 
 
 def _split_event_layers(

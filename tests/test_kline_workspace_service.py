@@ -580,6 +580,56 @@ def test_workspace_payload_contains_phase2_layers_and_future_capabilities():
     } in payload["capabilities"]
 
 
+def test_workspace_payload_limits_initial_event_points_and_preserves_total_counts():
+    contracts = _contracts()
+
+    class ManyEventProvider:
+        def load(self, ticker: str, cache_only: bool = False):
+            return [
+                contracts.KlineEvent(
+                    id=f"evt-{index:03d}",
+                    ticker=ticker,
+                    date=f"2026-04-{(index % 28) + 1:02d}",
+                    type="trial_status_change",
+                    category="clinical",
+                    title=f"Event {index}",
+                    summary=f"Event {index}",
+                    sentiment="neutral",
+                    priority=2,
+                    confidence="medium",
+                    source="clinicaltrials",
+                )
+                for index in range(305)
+            ], [
+                contracts.KlineDataStatus(
+                    source="clinicaltrials",
+                    status="ready",
+                    item_count=305,
+                )
+            ]
+
+    service = contracts.KlineWorkspaceService(
+        resolver=contracts.TickerResolver(),
+        ohlc_provider=FakeOHLCProvider(
+            contracts.KlineDataStatus,
+            contracts.KlinePriceSeries,
+        ),
+        catalyst_provider=ManyEventProvider(),
+        backtest_provider=FakeBacktestProvider(),
+    )
+
+    payload = service.build_workspace("MRNA").to_dict()
+    catalyst_layer = next(
+        layer for layer in payload["layers"] if layer["kind"] == "catalysts"
+    )
+
+    assert len(catalyst_layer["points"]) == 250
+    assert catalyst_layer["summary"]["count"] == 305
+    assert catalyst_layer["summary"]["displayed_count"] == 250
+    assert catalyst_layer["summary"]["truncated"] is True
+    assert payload["warnings"][0]["code"] == "catalysts_display_limited"
+
+
 def test_workspace_cache_only_mode_delegates_to_cache_only_providers():
     contracts = _contracts()
     service = _service(contracts)
