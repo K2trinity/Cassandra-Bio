@@ -157,12 +157,6 @@
         text-align: right;
         transition: right 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .step-pct-label {
-        font-size: 0.65rem;
-        color: #64748b;
-        margin-top: 2px;
-        font-variant-numeric: tabular-nums;
-    }
     .step-state-badge {
         display: inline-block;
         font-size: 0.6rem;
@@ -176,6 +170,98 @@
     .badge-active    { background: #064e3b; color: #34d399; }
     .badge-complete  { background: #14532d; color: #86efac; }
     .badge-error     { background: #4c0519; color: #fca5a5; }
+    .workflow-timeline {
+        display: grid;
+        gap: 14px;
+    }
+    .workflow-node-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+    }
+    .workflow-node-row-final {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .parallel-node-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        border: 1px solid rgba(14, 165, 233, 0.24);
+        background: rgba(8, 47, 73, 0.18);
+        border-radius: 8px;
+        padding: 12px;
+    }
+    .workflow-step-card {
+        min-height: 116px;
+        border: 1px solid #334155;
+        background: #020617;
+        border-radius: 8px;
+        padding: 12px;
+        transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .workflow-step-card[data-status="active"] {
+        border-color: #22d3ee;
+        background: rgba(8, 47, 73, 0.42);
+    }
+    .workflow-step-card[data-status="complete"] {
+        border-color: #22c55e;
+        background: rgba(20, 83, 45, 0.22);
+    }
+    .workflow-step-card[data-status="error"] {
+        border-color: #ef4444;
+        background: rgba(76, 5, 25, 0.35);
+    }
+    .step-node-marker {
+        display: inline-flex;
+        height: 28px;
+        width: 28px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        border: 1px solid #475569;
+        background: #1e293b;
+        color: #94a3b8;
+        font-size: 0.72rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+    }
+    .workflow-step-card[data-status="active"] .step-node-marker {
+        border-color: #22d3ee;
+        background: #155e75;
+        color: #cffafe;
+    }
+    .workflow-step-card[data-status="complete"] .step-node-marker {
+        border-color: #22c55e;
+        background: #15803d;
+        color: #dcfce7;
+    }
+    .workflow-step-card[data-status="error"] .step-node-marker {
+        border-color: #ef4444;
+        background: #991b1b;
+        color: #fee2e2;
+    }
+    .step-complete-note {
+        display: none;
+        margin-top: 8px;
+        color: #86efac;
+        font-size: 0.72rem;
+        font-weight: 700;
+    }
+    .workflow-step-card[data-status="complete"] .step-complete-note {
+        display: block;
+    }
+    @media (max-width: 900px) {
+        .workflow-node-row,
+        .parallel-node-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 640px) {
+        .workflow-node-row,
+        .parallel-node-row {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
 
     /* ── Connection Status Bar ── */
     .conn-bar {
@@ -387,45 +473,53 @@
                     <span id="progressPctBadge" class="progress-pct-badge">0%</span>
                 </div>
 
-                <section data-testid="workflow-timeline" class="relative mt-8">
-                    <div class="absolute left-0 right-0 top-5 h-px bg-slate-700"></div>
-                    <div id="progressBar" class="absolute left-0 top-5 h-px bg-cyan-400 transition-all duration-500" style="width: 0%"></div>
-                    <div class="relative grid grid-cols-3 gap-3">
-                        <div class="step-item flex min-w-0 flex-col items-center text-center" data-step="harvest" data-stage-id="collect" data-step-pct="0">
-                            <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full border-2 border-slate-600 bg-slate-700 transition-all">
-                                <svg class="h-5 w-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                                </svg>
+                <section data-testid="workflow-timeline" class="workflow-timeline mt-8" aria-label="Workflow nodes">
+                    <div class="workflow-node-row">
+                        {% for step in workflow_steps if step.group == "setup" %}
+                        <div class="step-item workflow-step-card" data-step="{{ step.id }}" data-node-id="{{ step.id }}" data-stage-id="{{ step.stage }}" data-status="pending">
+                            <div class="flex items-start justify-between gap-3">
+                                <span class="step-node-marker">{{ loop.index }}</span>
+                                <span class="step-state-badge badge-pending" id="badge-{{ step.id }}">PENDING</span>
                             </div>
-                            <span class="text-sm font-medium text-slate-300">Harvesting</span>
-                            <span class="mt-1 text-xs text-slate-500">PubMed + Trials</span>
-                            <span class="step-pct-label" id="pct-harvest">-</span>
-                            <span class="step-state-badge badge-pending" id="badge-harvest">PENDING</span>
+                            <div class="mt-3">
+                                <div class="step-label text-sm font-semibold text-slate-100">{{ step.label }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ step.detail }}</div>
+                                <div class="step-complete-note" id="note-{{ step.id }}">Completed</div>
+                            </div>
                         </div>
+                        {% endfor %}
+                    </div>
 
-                        <div class="step-item flex min-w-0 flex-col items-center text-center" data-step="handoff" data-stage-id="handoff">
-                            <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full border-2 border-slate-600 bg-slate-700 transition-all">
-                                <svg class="h-5 w-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h4a2 2 0 012 2v0a2 2 0 002 2h0a2 2 0 012 2v4m0-10h4m0 0v4m0-4l-5 5m-6 6H5a2 2 0 01-2-2v-4"></path>
-                                </svg>
+                    <div data-testid="parallel-workflow-nodes" class="parallel-node-row" aria-label="Parallel analysis nodes">
+                        {% for step in workflow_steps if step.group == "parallel" %}
+                        <div class="step-item workflow-step-card" data-step="{{ step.id }}" data-node-id="{{ step.id }}" data-stage-id="{{ step.stage }}" data-status="pending">
+                            <div class="flex items-start justify-between gap-3">
+                                <span class="step-node-marker">P{{ loop.index }}</span>
+                                <span class="step-state-badge badge-pending" id="badge-{{ step.id }}">PENDING</span>
                             </div>
-                            <span class="text-sm font-medium text-slate-300">Handoff</span>
-                            <span class="mt-1 text-xs text-slate-500">Extension Slot</span>
-                            <span class="step-pct-label" id="pct-handoff">-</span>
-                            <span class="step-state-badge badge-pending" id="badge-handoff">PENDING</span>
+                            <div class="mt-3">
+                                <div class="step-label text-sm font-semibold text-slate-100">{{ step.label }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ step.detail }}</div>
+                                <div class="step-complete-note" id="note-{{ step.id }}">Completed</div>
+                            </div>
                         </div>
+                        {% endfor %}
+                    </div>
 
-                        <div class="step-item flex min-w-0 flex-col items-center text-center" data-step="writing" data-stage-id="write">
-                            <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full border-2 border-slate-600 bg-slate-700 transition-all">
-                                <svg class="h-5 w-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
-                                </svg>
+                    <div class="workflow-node-row workflow-node-row-final">
+                        {% for step in workflow_steps if step.group == "final" %}
+                        <div class="step-item workflow-step-card" data-step="{{ step.id }}" data-node-id="{{ step.id }}" data-stage-id="{{ step.stage }}" data-status="pending">
+                            <div class="flex items-start justify-between gap-3">
+                                <span class="step-node-marker">{{ loop.index }}</span>
+                                <span class="step-state-badge badge-pending" id="badge-{{ step.id }}">PENDING</span>
                             </div>
-                            <span class="text-sm font-medium text-slate-300">Writing</span>
-                            <span class="mt-1 text-xs text-slate-500">Final Report</span>
-                            <span class="step-pct-label" id="pct-writing">-</span>
-                            <span class="step-state-badge badge-pending" id="badge-writing">PENDING</span>
+                            <div class="mt-3">
+                                <div class="step-label text-sm font-semibold text-slate-100">{{ step.label }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ step.detail }}</div>
+                                <div class="step-complete-note" id="note-{{ step.id }}">Completed</div>
+                            </div>
                         </div>
+                        {% endfor %}
                     </div>
                 </section>
             </section>
@@ -579,6 +673,10 @@
 
 {% block scripts %}
 <script>
+    const workflowSteps = {{ workflow_steps|tojson }};
+    const workflowStepIds = workflowSteps.map((step) => step.id);
+    let completedStepLogKeys = new Set();
+
     // ===== SPA Tab Management Functions =====
     
     // Load Reports from final_reports directory
@@ -1154,14 +1252,15 @@
         resultsSection.classList.add('hidden');
         logContainer.innerHTML = '';
         
-        // Reset step badges + progress bar
-        ['harvest','handoff','writing'].forEach(s => {
+        // Reset workflow node badges; only the top bar carries percentage progress.
+        completedStepLogKeys.clear();
+        workflowStepIds.forEach(s => {
             const b = document.getElementById(`badge-${s}`);
-            const p = document.getElementById(`pct-${s}`);
             if (b) { b.className = 'step-state-badge badge-pending'; b.textContent = 'PENDING'; }
-            if (p) p.textContent = '—';
-            const el = document.querySelector(`[data-step="${s}"] div`);
-            if (el) el.className = 'w-10 h-10 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center mb-2 transition-all';
+            const el = document.querySelector(`[data-step="${s}"]`);
+            if (el) el.dataset.status = 'pending';
+            const note = document.getElementById(`note-${s}`);
+            if (note) note.textContent = 'Completed';
         });
         updateProgressBar(0, 'Initializing analysis pipeline...', false);
         // Reset elapsed timer
@@ -1246,51 +1345,41 @@
         }
     });
     
-    // Step progress tracking — v2: precise % + badge
+    // Step progress tracking: nodes show state only; the top bar shows percentage.
+    function markStepCompleteNotice(stepEl, step, pct) {
+        const note = document.getElementById(`note-${step}`);
+        if (note) {
+            note.textContent = typeof pct === 'number' ? `Completed at ${pct}%` : 'Completed';
+        }
+        const label = stepEl.querySelector('.step-label')?.textContent?.trim() || step;
+        const key = step;
+        if (!completedStepLogKeys.has(key)) {
+            completedStepLogKeys.add(key);
+            addLog('success', `Node complete: ${label}`);
+        }
+    }
+
     function updateStep(step, status, pct) {
         const stepEl = document.querySelector(`[data-step="${step}"]`);
         if (!stepEl) return;
-        const circle = stepEl.querySelector('div');
-        const svg = circle ? circle.querySelector('svg') : null;
-        
-        // Bubble color
-        if (circle) {
-            circle.className = 'w-10 h-10 rounded-full flex items-center justify-center mb-2 transition-all ' +
-                (status === 'active'   ? 'bg-emerald-600 border-2 border-emerald-400 pulse-safe' :
-                 status === 'complete' ? 'bg-emerald-600 border-2 border-emerald-400' :
-                 status === 'error'    ? 'bg-red-700 border-2 border-red-500' :
-                                        'bg-slate-700 border-2 border-slate-600');
-            if (status === 'complete') {
-                circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>';
-            } else if (status === 'error') {
-                circle.innerHTML = '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
-            } else if (svg) {
-                svg.classList.remove('text-gray-500');
-                svg.classList.add('text-white');
-            }
-        }
+        const previousStatus = stepEl.dataset.status || 'pending';
+        const nextStatus = status || 'pending';
+        stepEl.dataset.status = nextStatus;
+        if (typeof pct === 'number') stepEl.dataset.stepPct = String(pct);
         
         // State badge
         const badge = document.getElementById(`badge-${step}`);
         if (badge) {
             badge.className = 'step-state-badge ' +
-                (status === 'active'   ? 'badge-active'  :
-                 status === 'complete' ? 'badge-complete' :
-                 status === 'error'    ? 'badge-error'    : 'badge-pending');
-            badge.textContent = status.toUpperCase();
+                (nextStatus === 'active'   ? 'badge-active'  :
+                 nextStatus === 'complete' ? 'badge-complete' :
+                 nextStatus === 'error'    ? 'badge-error'    : 'badge-pending');
+            badge.textContent = nextStatus.toUpperCase();
         }
-        
-        // Percentage label below step
-        if (typeof pct === 'number') {
-            const pctEl = document.getElementById(`pct-${step}`);
-            if (pctEl) pctEl.textContent = pct + '%';
+
+        if (nextStatus === 'complete' && previousStatus !== 'complete') {
+            markStepCompleteNotice(stepEl, step, pct);
         }
-        
-        // Overall progress bar (legacy position-based)
-        const steps = ['harvest', 'handoff', 'writing'];
-        const idx = steps.indexOf(step);
-        const legacy = ((idx + 1) / steps.length) * 100;
-        document.getElementById('progressBar').style.width = `${legacy}%`;
     }
     
     // Precise progress bar update

@@ -72,6 +72,90 @@ from src.kline.routes import kline_bp
 
 app.register_blueprint(kline_bp)
 
+VALID_ANALYSIS_TARGET_TYPES = {"auto", "disease", "company"}
+
+WORKFLOW_STEPS = (
+    {
+        "id": "intake",
+        "stage": "intake",
+        "label": "Intake routing",
+        "detail": "Query + target mode",
+        "group": "setup",
+    },
+    {
+        "id": "harvest",
+        "stage": "collect",
+        "label": "Evidence harvest",
+        "detail": "ClinicalTrials + sources",
+        "group": "setup",
+    },
+    {
+        "id": "evidence_review",
+        "stage": "review",
+        "label": "Evidence review",
+        "detail": "Normalize + filter",
+        "group": "setup",
+    },
+    {
+        "id": "extension_slots",
+        "stage": "slots",
+        "label": "Slot preparation",
+        "detail": "Report contract payload",
+        "group": "setup",
+    },
+    {
+        "id": "evidence_synthesis",
+        "stage": "analysis",
+        "label": "Evidence synthesis",
+        "detail": "Signals + summaries",
+        "group": "parallel",
+    },
+    {
+        "id": "clinical_analysis",
+        "stage": "analysis",
+        "label": "Clinical analysis",
+        "detail": "Trial status + risk",
+        "group": "parallel",
+    },
+    {
+        "id": "quality_assessment",
+        "stage": "analysis",
+        "label": "Quality assessment",
+        "detail": "Coverage + confidence",
+        "group": "parallel",
+    },
+    {
+        "id": "writing",
+        "stage": "write",
+        "label": "Report writing",
+        "detail": "Markdown + HTML + PDF",
+        "group": "final",
+    },
+)
+WORKFLOW_STEP_IDS = tuple(step["id"] for step in WORKFLOW_STEPS)
+WORKFLOW_STEP_BY_ID = {step["id"]: step for step in WORKFLOW_STEPS}
+WORKFLOW_NODE_PROGRESS = {
+    "harvester": (
+        ("harvest", "complete", 34, "Node complete: Evidence harvest."),
+        ("evidence_review", "active", 36, "Reviewing and normalizing source evidence..."),
+    ),
+    "extension_handoff": (
+        ("evidence_review", "complete", 48, "Node complete: Evidence review."),
+        ("extension_slots", "complete", 58, "Node complete: Slot preparation."),
+        ("evidence_synthesis", "complete", 68, "Node complete: Evidence synthesis."),
+        ("clinical_analysis", "complete", 76, "Node complete: Clinical analysis."),
+        ("quality_assessment", "complete", 84, "Node complete: Quality assessment."),
+        ("writing", "active", 86, "Composing the final report..."),
+    ),
+    "writer": (
+        ("writing", "complete", 96, "Node complete: Report writing."),
+    ),
+}
+
+
+def _default_step_status() -> Dict[str, str]:
+    return {step_id: "pending" for step_id in WORKFLOW_STEP_IDS}
+
 
 # Global state for tracking active analysis
 active_analysis: Dict[str, Any] = {
@@ -87,11 +171,7 @@ active_analysis: Dict[str, Any] = {
     "task_id": None,          # UUID for this task
     "progress": 0,            # 0–100 integer
     "current_step": None,     # current step name
-    "step_status": {          # per-step status
-        "harvest": "pending",
-        "handoff": "pending",
-        "writing": "pending",
-    },
+    "step_status": _default_step_status(),
     "started_at": None,
     "completed_at": None,
 }
@@ -107,8 +187,6 @@ _current_task_id: Optional[str] = None  # task_id of the currently running analy
 
 # Thread pool for parallel analysis sub-tasks
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cassandra-worker")
-
-VALID_ANALYSIS_TARGET_TYPES = {"auto", "disease", "company"}
 
 
 def _normalize_analysis_target_type(value: Any) -> str:
@@ -130,6 +208,7 @@ def _reset_active_analysis():
     active_analysis["progress"] = active_analysis.get("progress", 0)
     active_analysis["result_payload"] = None
     active_analysis["analysis_target_type"] = "auto"
+    active_analysis["step_status"] = _default_step_status()
 
 
 def _start_thread_watchdog(thread: threading.Thread, task_id: Optional[str] = None, timeout: int = 3600) -> None:
@@ -256,12 +335,15 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
     发送统一的进度事件（百分比 + 步骤 + 状态）。
     同时更新 active_analysis 进度字段。
     """
+    active_analysis.setdefault("step_status", _default_step_status())
+    step_meta = WORKFLOW_STEP_BY_ID.get(step, {})
     active_analysis["progress"] = pct
     active_analysis["current_step"] = step
     if step in active_analysis["step_status"]:
         active_analysis["step_status"][step] = status
     _emit_event("progress", {
         "step": step,
+        "step_label": step_meta.get("label", step),
         "status": status,
         "percentage": pct,
         "message": message,
@@ -271,6 +353,7 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
     })
     _emit_event("step", {
         "step": step,
+        "step_label": step_meta.get("label", step),
         "status": status,
         "percentage": pct,
         "task_id": active_analysis.get("task_id"),
@@ -420,7 +503,7 @@ def root_redirect():
 @app.route('/investigation')
 def index():
     """Mission Control - Main Dashboard"""
-    return render_template('index.html')
+    return render_template('index.html', workflow_steps=WORKFLOW_STEPS)
 
 
 @app.route('/config')
@@ -539,12 +622,8 @@ def analyze():
         "error": None,
         "task_id": str(_uuid.uuid4()),
         "progress": 0,
-        "current_step": "harvest",
-        "step_status": {
-            "harvest": "pending",
-            "handoff": "pending",
-            "writing": "pending",
-        },
+        "current_step": "intake",
+        "step_status": _default_step_status(),
         "started_at": datetime.now().isoformat(),
         "completed_at": None,
     }
@@ -554,13 +633,6 @@ def analyze():
     with event_history_lock:
         event_history.clear()
     
-    # ── Node → (step_id, pct_start, pct_end, label) mapping ──
-    _NODE_PROGRESS = {
-        "harvester": ("harvest", 3, 56, "🌾 BioHarvest: collecting PubMed / trials..."),
-        "extension_handoff": ("handoff", 58, 76, "🧩 Extension Handoff: preparing insertion slots..."),
-        "writer": ("writing", 78, 96, "✍️  ReportWriter: composing final report..."),
-    }
-
     # Define background task
     # Capture the task_id so this thread can detect if it has been superseded
     _this_task_id = active_analysis["task_id"]
@@ -570,12 +642,14 @@ def analyze():
         global active_analysis
 
         try:
-            _emit_progress("harvest", "active", 3, "🌾 Starting BioHarvest data collection...")
+            _emit_progress("intake", "active", 3, "Preparing analysis request...")
+            _emit_progress("intake", "complete", 8, "Node complete: Intake routing.")
+            _emit_progress("harvest", "active", 10, "Starting evidence harvest...")
             logger.info("🔬 Starting Cassandra streaming workflow...")
 
             # ── Ticker thread: smoothly animates within the current node's pct range ──
             _ticker_stop = threading.Event()
-            _current_range = [3, 28]  # mutable via list
+            _current_range = [10, 34]  # mutable via list
 
             def _ticker():
                 while not _ticker_stop.is_set():
@@ -626,20 +700,11 @@ def analyze():
                     active_analysis["result_payload"] = None
                     return
                 result = partial_state  # keep last partial as fallback
-                if node_name in _NODE_PROGRESS:
-                    step_id, pct_lo, pct_hi, msg = _NODE_PROGRESS[node_name]
-                    _current_range[0] = pct_hi
-                    _current_range[1] = pct_hi + 2  # allow ticker above node completion
-                    _emit_progress(step_id, "complete", pct_hi, msg)
-                    # Mark the *next* step active immediately so badge flips
-                    _steps_order = ["harvest", "handoff", "writing"]
-                    try:
-                        nxt_idx = _steps_order.index(step_id) + 1
-                        if nxt_idx < len(_steps_order):
-                            _emit_progress(_steps_order[nxt_idx], "active",
-                                           pct_hi + 1, "")
-                    except ValueError:
-                        pass
+                if node_name in WORKFLOW_NODE_PROGRESS:
+                    for step_id, status, pct, msg in WORKFLOW_NODE_PROGRESS[node_name]:
+                        _current_range[0] = pct
+                        _current_range[1] = min(99, pct + 2)  # allow ticker above node completion
+                        _emit_progress(step_id, status, pct, msg)
 
             _ticker_stop.set()
 
@@ -647,7 +712,7 @@ def analyze():
             # If streaming somehow missed the final_report, fall back to sync invoke
             if result is None or not result.get("final_report"):
                 logger.warning("⚠️  Stream gave no final_report — running sync invoke as fallback...")
-                _emit_progress("writing", "active", 78, "✍️  Re-running writer (stream fallback)...")
+                _emit_progress("writing", "active", 86, "Re-running writer (stream fallback)...")
                 result = _workflow_service.run(
                     user_query=query,
                     pdf_paths=pdf_paths if pdf_paths else None,
@@ -860,9 +925,7 @@ def reset_analysis():
     active_analysis["analysis_target_type"] = "auto"
     active_analysis["progress"] = 0
     active_analysis["current_step"] = None
-    active_analysis["step_status"] = {
-        "harvest": "pending", "handoff": "pending", "writing": "pending"
-    }
+    active_analysis["step_status"] = _default_step_status()
     with event_history_lock:
         event_history.clear()
 

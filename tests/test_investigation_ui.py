@@ -16,8 +16,27 @@ class FakeWorkflowService:
 
     def stream(self, **kwargs):
         self.stream_calls.append(kwargs)
+        yield "harvester", {
+            "status": "harvest_complete",
+            "clinical_data": {},
+            "evidence_stats": {},
+            "extension_payloads": {},
+            "harvested_data": [],
+            "disease_areas": [],
+        }
+        yield "extension_handoff", {
+            "status": "handoff_complete",
+            "handoff_complete": True,
+            "clinical_data": {},
+            "evidence_stats": {},
+            "extension_payloads": {},
+            "harvested_data": [],
+            "disease_areas": [],
+        }
         yield "writer", {
             "status": "writer_complete",
+            "handoff_complete": True,
+            "writer_complete": True,
             "final_report": "# Target mode report\nBody",
             "final_report_markdown": "# Target mode report\nBody",
             "final_report_path": str(self.markdown_path),
@@ -65,8 +84,40 @@ def test_investigation_page_exposes_operator_workflow_regions():
     ]:
         assert marker in html
 
-    for stage_id in ["collect", "handoff", "write"]:
+    for stage_id in ["intake", "collect", "review", "slots", "analysis", "write"]:
         assert f'data-stage-id="{stage_id}"' in html
+
+
+def test_investigation_page_uses_fine_grained_workflow_nodes_without_link_progress_bar():
+    html = render_investigation()
+
+    for step in [
+        "intake",
+        "harvest",
+        "evidence_review",
+        "extension_slots",
+        "evidence_synthesis",
+        "clinical_analysis",
+        "quality_assessment",
+        "writing",
+    ]:
+        assert f'data-step="{step}"' in html
+        assert f'id="badge-{step}"' in html
+        assert f'id="note-{step}"' in html
+
+    assert 'data-testid="parallel-workflow-nodes"' in html
+    assert 'id="progressBar"' not in html
+    assert "getElementById('progressBar')" not in html
+    assert ">Handoff<" not in html
+
+
+def test_investigation_workflow_nodes_announce_completion_in_ui_and_logs():
+    html = render_investigation()
+
+    assert "step-complete-note" in html
+    assert "completedStepLogKeys" in html
+    assert "markStepCompleteNotice" in html
+    assert "Node complete:" in html
 
 
 def test_investigation_page_exposes_target_mode_controls():
