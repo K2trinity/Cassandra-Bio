@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+from pathlib import Path
 import re
 
 from src.kline.models import KlineCompany
@@ -90,6 +92,9 @@ _LEGAL_ENTITY_SUFFIX_RE = re.compile(
 
 
 class TickerResolver:
+    def __init__(self, db_path: str | Path | None = None):
+        self.db_path = Path(db_path) if db_path is not None else None
+
     def normalize(self, value: object) -> str | None:
         ticker = str(value or "").strip().upper()
         if not ticker or "/" in ticker or "\\" in ticker:
@@ -103,14 +108,15 @@ class TickerResolver:
         if ticker is None:
             raise ValueError("invalid ticker: use 1-16 letters, numbers, dots, or hyphens")
 
-        company = _UNIVERSE.get(ticker)
+        company = self._company_map().get(ticker)
         if company is not None:
             return _copy_company(company)
 
         return KlineCompany(ticker=ticker, name=ticker)
 
     def list_universe(self) -> list[KlineCompany]:
-        return [_copy_company(_UNIVERSE[ticker]) for ticker in sorted(_UNIVERSE)]
+        universe = self._company_map()
+        return [_copy_company(universe[ticker]) for ticker in sorted(universe)]
 
     def resolve_company_in_universe(self, value: object) -> KlineCompany | None:
         """Resolve a company name or alias only when it exists in the K-line universe."""
@@ -125,6 +131,12 @@ class TickerResolver:
                     return company
         return None
 
+    def _company_map(self) -> dict[str, KlineCompany]:
+        research_universe = _load_research_universe(self.db_path)
+        if not research_universe:
+            return {ticker: _copy_company(company) for ticker, company in _UNIVERSE.items()}
+        return research_universe
+
 
 def _copy_company(company: KlineCompany) -> KlineCompany:
     return replace(company, aliases=list(company.aliases))
@@ -135,3 +147,69 @@ def _company_lookup_key(value: object) -> str:
     words = re.findall(r"[a-z0-9]+", text)
     filtered = [word for word in words if not _LEGAL_ENTITY_SUFFIX_RE.fullmatch(word)]
     return " ".join(filtered).strip()
+
+
+def _load_research_universe(db_path: Path | None) -> dict[str, KlineCompany]:
+    path = db_path or _default_research_db_path()
+    if not path.exists():
+        return {}
+
+    import duckdb
+
+    try:
+        conn = duckdb.connect(str(path), read_only=True)
+    except duckdb.Error:
+        return {}
+    try:
+        row = conn.execute(
+            """
+            SELECT source_payload_json
+            FROM universe_snapshots
+            WHERE universe_id = 'biotech_us_v1'
+            ORDER BY as_of_date DESC, created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    except duckdb.Error:
+        return {}
+    finally:
+        conn.close()
+    if row is None:
+        return {}
+
+    try:
+        payloads = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+    companies: dict[str, KlineCompany] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        asset_type = str(payload.get("asset_type") or "").strip().lower().replace("_", " ")
+        if asset_type not in {"common stock", "common", "stock", "equity"}:
+            continue
+        ticker = str(payload.get("ticker") or "").strip().upper()
+        if not TICKER_PATTERN.fullmatch(ticker):
+            continue
+        static_company = _UNIVERSE.get(ticker)
+        industry = str(payload.get("industry") or "")
+        name = str(payload.get("company_name") or "").strip() or ticker
+        companies[ticker] = KlineCompany(
+            ticker=ticker,
+            name=name,
+            aliases=list(static_company.aliases) if static_company else [],
+            sector="Healthcare",
+            is_biotech=(
+                bool(static_company and static_company.is_biotech)
+                or "biotech" in industry.lower()
+                or "pharmaceutical" in industry.lower()
+            ),
+        )
+    return companies
+
+
+def _default_research_db_path() -> Path:
+    from src.backtest.research_db import RESEARCH_DB_PATH
+
+    return Path(RESEARCH_DB_PATH)

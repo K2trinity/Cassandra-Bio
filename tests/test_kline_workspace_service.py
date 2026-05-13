@@ -148,6 +148,43 @@ def test_ticker_resolver_returns_copies_for_known_symbols():
     ]
 
 
+def test_ticker_resolver_reads_latest_research_universe_snapshot(tmp_path):
+    from src.backtest.universe_builder import UniverseSourceRow, build_universe_snapshot
+    from src.backtest.universe_catalog import write_universe_snapshot
+
+    contracts = _contracts()
+    db_path = tmp_path / "cassandra_research.duckdb"
+    snapshot = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="RARE",
+                company_name="Ultragenyx Pharmaceutical Inc.",
+                exchange="NASDAQ",
+                asset_type="common_stock",
+                source="nasdaq_trader_keyword",
+                industry="Biotechnology",
+            ),
+            UniverseSourceRow(
+                ticker="XBI",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="etf",
+                source="xbi",
+            ),
+        ],
+        as_of_date="2026-05-13",
+    )
+    write_universe_snapshot(snapshot, db_path=db_path)
+
+    resolver = contracts.TickerResolver(db_path=db_path)
+
+    assert [company.ticker for company in resolver.list_universe()] == ["RARE"]
+    resolved = resolver.resolve("rare")
+    assert resolved.ticker == "RARE"
+    assert resolved.name == "Ultragenyx Pharmaceutical Inc."
+    assert resolved.is_biotech is True
+
+
 def test_ohlc_provider_returns_error_status_for_malformed_rows():
     contracts = _contracts()
     provider = contracts.OHLCProvider(

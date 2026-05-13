@@ -284,3 +284,103 @@ class TestGetOhlcRows:
             "status": "empty",
             "message": "no cached OHLC available",
         }
+
+    def test_cached_ohlc_rows_with_status_reads_latest_tiingo_research_snapshot(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """K-line cache-first loads should use the research Tiingo snapshot."""
+        from src.backtest.price_snapshot import write_prices_daily_frame
+        from src.backtest.research_db import initialize_research_database
+        from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+        from src.services import market_data_service
+
+        research_dir = tmp_path / "research"
+        db_path = initialize_research_database(research_dir / "cassandra_research.duckdb")
+        import duckdb
+
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(
+                """
+                INSERT INTO data_snapshots (
+                    data_snapshot_id,
+                    snapshot_date,
+                    price_source,
+                    event_source_db,
+                    universe_id,
+                    bias_profile,
+                    price_partition_root,
+                    event_snapshot_hash,
+                    security_master_hash,
+                    coverage_json,
+                    created_at
+                )
+                VALUES (
+                    'snap_20260513_tiingo',
+                    '2026-05-13',
+                    'tiingo',
+                    'events.db',
+                    'biotech_us_v1',
+                    'current_constituents_only',
+                    'data/research/prices_daily',
+                    'events',
+                    'security',
+                    '{}',
+                    CURRENT_TIMESTAMP
+                )
+                """
+            )
+        finally:
+            conn.close()
+        frame = normalize_tiingo_eod_prices(
+            [
+                {
+                    "date": "2026-05-11T00:00:00.000Z",
+                    "open": 10.0,
+                    "high": 12.0,
+                    "low": 9.0,
+                    "close": 11.0,
+                    "volume": 1000,
+                    "adjOpen": 10.0,
+                    "adjHigh": 12.0,
+                    "adjLow": 9.0,
+                    "adjClose": 11.0,
+                    "adjVolume": 1000,
+                    "divCash": 0.0,
+                    "splitFactor": 1.0,
+                }
+            ],
+            ticker="RARE",
+            data_snapshot_id="snap_20260513_tiingo",
+        )
+        write_prices_daily_frame(frame, output_root=research_dir / "prices_daily")
+        monkeypatch.setattr(market_data_service, "RESEARCH_DB_PATH", db_path)
+        monkeypatch.setattr(market_data_service, "RESEARCH_DIR", research_dir)
+        monkeypatch.setattr(market_data_service, "DATA_DIR", tmp_path / "ohlc")
+        monkeypatch.setattr(
+            market_data_service,
+            "refresh_ohlc",
+            lambda ticker: (_ for _ in ()).throw(AssertionError("refresh called")),
+        )
+        monkeypatch.setattr(
+            market_data_service,
+            "load_ohlc",
+            lambda ticker: (_ for _ in ()).throw(AssertionError("load called")),
+        )
+
+        result = market_data_service.get_cached_ohlc_rows_with_status("RARE")
+
+        assert result["status"] == "ready"
+        assert result["message"] == "research snapshot snap_20260513_tiingo"
+        assert result["rows"] == [
+            {
+                "date": "2026-05-11",
+                "open": 10.0,
+                "high": 12.0,
+                "low": 9.0,
+                "close": 11.0,
+                "volume": 1000.0,
+            }
+        ]

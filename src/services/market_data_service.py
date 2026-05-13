@@ -6,7 +6,9 @@ from pathlib import Path
 from loguru import logger
 import pandas as pd
 
+from src.backtest.price_snapshot import load_prices_daily_ohlc
 from src.backtest.data_loader import load_ohlc, refresh_ohlc, DATA_DIR
+from src.backtest.research_db import RESEARCH_DB_PATH, RESEARCH_DIR
 
 
 def _is_cache_stale(path: Path, max_age_hours: int) -> bool:
@@ -35,6 +37,10 @@ def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
     status metadata. If no usable cache exists, return an error payload so the
     workspace can render a source status instead of crashing the route.
     """
+    research_payload = _latest_research_snapshot_payload(ticker)
+    if research_payload is not None:
+        return research_payload
+
     cache_path = DATA_DIR / f"{ticker}.parquet"
     is_stale = _is_cache_stale(cache_path, max_age_hours)
     had_cache = cache_path.exists()
@@ -64,6 +70,10 @@ def get_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
 
 def get_cached_ohlc_rows_with_status(ticker: str, max_age_hours: int = 24) -> dict:
     """Return cached OHLC rows without downloading or refreshing data."""
+    research_payload = _latest_research_snapshot_payload(ticker)
+    if research_payload is not None:
+        return research_payload
+
     cache_path = DATA_DIR / f"{ticker}.parquet"
     if not cache_path.exists():
         return {
@@ -106,6 +116,59 @@ def _stale_payload(ticker: str, message: str) -> dict:
         "status": "stale",
         "message": message,
     }
+
+
+def _latest_research_snapshot_payload(ticker: str) -> dict | None:
+    db_path = Path(RESEARCH_DB_PATH)
+    if not db_path.exists():
+        return None
+
+    import duckdb
+
+    try:
+        conn = duckdb.connect(str(db_path), read_only=True)
+    except duckdb.Error:
+        return None
+    try:
+        snapshots = conn.execute(
+            """
+            SELECT
+                CAST(data_snapshot_id AS VARCHAR),
+                CAST(created_at AS VARCHAR)
+            FROM data_snapshots
+            WHERE price_source = 'tiingo'
+              AND universe_id = 'biotech_us_v1'
+            ORDER BY snapshot_date DESC NULLS LAST, created_at DESC NULLS LAST
+            LIMIT 10
+            """
+        ).fetchall()
+    except duckdb.Error:
+        return None
+    finally:
+        conn.close()
+
+    for data_snapshot_id, created_at in snapshots:
+        try:
+            frame = load_prices_daily_ohlc(
+                ticker,
+                data_snapshot_id=str(data_snapshot_id),
+                output_root=Path(RESEARCH_DIR) / "prices_daily",
+                source="tiingo",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"Failed to load research OHLC for {ticker} from {data_snapshot_id}: {exc}"
+            )
+            continue
+        rows = _serialize_ohlc_frame(frame)
+        if rows:
+            return {
+                "rows": rows,
+                "status": "ready",
+                "message": f"research snapshot {data_snapshot_id}",
+                "last_updated": created_at,
+            }
+    return None
 
 
 def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:

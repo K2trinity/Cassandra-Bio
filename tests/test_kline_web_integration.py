@@ -230,6 +230,43 @@ def test_kline_workspace_api_refresh_query_forces_source_refresh(monkeypatch):
     assert body["ticker"] == "MRNA"
 
 
+def test_kline_tickers_api_uses_research_universe(client, monkeypatch, tmp_path):
+    from src.backtest.universe_builder import UniverseSourceRow, build_universe_snapshot
+    from src.backtest.universe_catalog import write_universe_snapshot
+    from src.kline.ticker_resolver import TickerResolver
+
+    db_path = tmp_path / "cassandra_research.duckdb"
+    snapshot = build_universe_snapshot(
+        [
+            UniverseSourceRow(
+                ticker="RARE",
+                company_name="Ultragenyx Pharmaceutical Inc.",
+                exchange="NASDAQ",
+                asset_type="common_stock",
+                source="nasdaq_trader_keyword",
+                industry="Biotechnology",
+            ),
+            UniverseSourceRow(
+                ticker="XBI",
+                company_name="SPDR S&P Biotech ETF",
+                exchange="NYSEARCA",
+                asset_type="etf",
+                source="xbi",
+            ),
+        ],
+        as_of_date="2026-05-13",
+    )
+    write_universe_snapshot(snapshot, db_path=db_path)
+    monkeypatch.setattr(kline_routes, "resolver", TickerResolver(db_path=db_path))
+
+    response = client.get("/api/kline/tickers")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert [item["ticker"] for item in body] == ["RARE"]
+    assert body[0]["name"] == "Ultragenyx Pharmaceutical Inc."
+
+
 def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
     from src.kline.models import (
         KlineCompany,
