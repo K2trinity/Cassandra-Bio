@@ -147,6 +147,8 @@ def _latest_research_snapshot_payload(ticker: str) -> dict | None:
     finally:
         conn.close()
 
+    best_payload: dict | None = None
+    best_row_count = 0
     for data_snapshot_id, created_at in snapshots:
         try:
             frame = load_prices_daily_ohlc(
@@ -161,14 +163,15 @@ def _latest_research_snapshot_payload(ticker: str) -> dict | None:
             )
             continue
         rows = _serialize_ohlc_frame(frame)
-        if rows:
-            return {
+        if len(rows) > best_row_count:
+            best_payload = {
                 "rows": rows,
                 "status": "ready",
                 "message": f"research snapshot {data_snapshot_id}",
                 "last_updated": created_at,
             }
-    return None
+            best_row_count = len(rows)
+    return best_payload
 
 
 def get_ohlc_rows(ticker: str, max_age_hours: int = 24) -> list[dict]:

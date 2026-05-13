@@ -384,3 +384,115 @@ class TestGetOhlcRows:
                 "volume": 1000.0,
             }
         ]
+
+    def test_cached_ohlc_rows_with_status_prefers_best_research_coverage(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """A partial latest snapshot should not hide fuller recent coverage."""
+        from src.backtest.price_snapshot import write_prices_daily_frame
+        from src.backtest.research_db import initialize_research_database
+        from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
+        from src.services import market_data_service
+
+        research_dir = tmp_path / "research"
+        db_path = initialize_research_database(research_dir / "cassandra_research.duckdb")
+        import duckdb
+
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(
+                """
+                INSERT INTO data_snapshots (
+                    data_snapshot_id,
+                    snapshot_date,
+                    price_source,
+                    event_source_db,
+                    universe_id,
+                    bias_profile,
+                    price_partition_root,
+                    event_snapshot_hash,
+                    security_master_hash,
+                    coverage_json,
+                    created_at
+                )
+                VALUES
+                (
+                    'snap_20260510_full',
+                    '2026-05-10',
+                    'tiingo',
+                    'events.db',
+                    'biotech_us_v1',
+                    'current_constituents_only',
+                    'data/research/prices_daily',
+                    'events',
+                    'security',
+                    '{}',
+                    '2026-05-10T01:00:00'
+                ),
+                (
+                    'snap_20260513_partial',
+                    '2026-05-13',
+                    'tiingo',
+                    'events.db',
+                    'biotech_us_v1',
+                    'current_constituents_only',
+                    'data/research/prices_daily',
+                    'events',
+                    'security',
+                    '{}',
+                    '2026-05-13T01:00:00'
+                )
+                """
+            )
+        finally:
+            conn.close()
+
+        def tiingo_row(date: str, close: float) -> dict:
+            return {
+                "date": f"{date}T00:00:00.000Z",
+                "open": close - 1,
+                "high": close + 1,
+                "low": close - 2,
+                "close": close,
+                "volume": 1000,
+                "adjOpen": close - 1,
+                "adjHigh": close + 1,
+                "adjLow": close - 2,
+                "adjClose": close,
+                "adjVolume": 1000,
+                "divCash": 0.0,
+                "splitFactor": 1.0,
+            }
+
+        full_frame = normalize_tiingo_eod_prices(
+            [
+                tiingo_row("2026-05-07", 10.0),
+                tiingo_row("2026-05-08", 11.0),
+                tiingo_row("2026-05-09", 12.0),
+            ],
+            ticker="MRNA",
+            data_snapshot_id="snap_20260510_full",
+        )
+        partial_frame = normalize_tiingo_eod_prices(
+            [tiingo_row("2026-05-12", 13.0)],
+            ticker="MRNA",
+            data_snapshot_id="snap_20260513_partial",
+        )
+        write_prices_daily_frame(
+            pd.concat([full_frame, partial_frame], ignore_index=True),
+            output_root=research_dir / "prices_daily",
+        )
+        monkeypatch.setattr(market_data_service, "RESEARCH_DB_PATH", db_path)
+        monkeypatch.setattr(market_data_service, "RESEARCH_DIR", research_dir)
+
+        result = market_data_service.get_cached_ohlc_rows_with_status("MRNA")
+
+        assert result["status"] == "ready"
+        assert result["message"] == "research snapshot snap_20260510_full"
+        assert [row["date"] for row in result["rows"]] == [
+            "2026-05-07",
+            "2026-05-08",
+            "2026-05-09",
+        ]
