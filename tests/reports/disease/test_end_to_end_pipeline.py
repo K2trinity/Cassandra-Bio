@@ -396,7 +396,7 @@ def test_company_pipeline_uses_sponsor_layers_without_disease_filtering(tmp_path
         "Vertex Pharmaceuticals",
         "Vertex Pharmaceuticals",
     ]
-    assert [call["pageSize"] for call in calls] == [30, 50, 30]
+    assert [call["pageSize"] for call in calls] == [30, 50, 20]
     assert [call.get("sort") for call in calls] == [
         "PrimaryCompletionDate:asc",
         "StudyFirstPostDate:desc",

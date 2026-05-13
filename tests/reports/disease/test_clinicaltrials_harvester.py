@@ -307,6 +307,107 @@ def test_company_harvester_scales_layer_queries_and_selection_for_large_modes():
     assert sum(nct_id.startswith("NCTTRK") for nct_id in nct_ids) == 50
 
 
+def test_company_harvester_fills_pro_mode_from_broad_sponsor_portfolio_when_layers_are_sparse():
+    profile = _company_profile("Moderna, Inc.", sponsor_query="ModernaTX, Inc.")
+    calls = []
+
+    def make_many(prefix, count, offset=0):
+        return [
+            _api_study(
+                f"NCT{prefix}{offset + index:05d}",
+                f"{prefix} study {offset + index}",
+                [f"{prefix} Condition"],
+                f"2026-01-{((offset + index) % 28) + 1:02d}",
+            )
+            for index in range(count)
+        ]
+
+    def get_json(url, params):
+        calls.append(dict(params))
+        if params.get("sort") == "PrimaryCompletionDate:asc":
+            return {"studies": make_many("CAT", 20)}
+        if params.get("sort") == "StudyFirstPostDate:desc":
+            return {"studies": make_many("EXP", 20)}
+        if params.get("filter.advanced") == "AREA[HasResults]true":
+            return {"studies": make_many("TRK", 20)}
+        if params.get("sort") == "LastUpdatePostDate:desc":
+            page_token = int(params.get("pageToken") or 0)
+            next_token = str(page_token + 1) if page_token < 4 else None
+            return {
+                "studies": make_many("BRD", 100, offset=page_token * 100),
+                "nextPageToken": next_token,
+            }
+        raise AssertionError(f"unexpected params: {params}")
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=500,
+    )
+
+    broad_calls = [
+        call
+        for call in calls
+        if call.get("sort") == "LastUpdatePostDate:desc"
+        and "filter.advanced" not in call
+    ]
+    assert len(broad_calls) == 5
+    assert {call["query.spons"] for call in broad_calls} == {"ModernaTX, Inc."}
+    assert {call["pageSize"] for call in broad_calls} == {100}
+    assert len(_nct_ids(result.studies)) == 500
+    assert len(set(_nct_ids(result.studies))) == 500
+    assert sum(nct_id.startswith("NCTBRD") for nct_id in _nct_ids(result.studies)) == 440
+    broad_metadata = result.studies[-1]["metadata"]
+    assert broad_metadata["company_name"] == "Moderna, Inc."
+    assert broad_metadata["sponsor_query"] == "ModernaTX, Inc."
+    assert broad_metadata["primary_stratum"] == "unclassified"
+
+
+def test_company_harvester_uses_company_context_terms_when_sponsor_portfolio_is_still_sparse():
+    profile = _company_profile("Moderna, Inc.", sponsor_query="ModernaTX, Inc.")
+    calls = []
+
+    def make_many(prefix, count, offset=0):
+        return [
+            _api_study(
+                f"NCT{prefix}{offset + index:05d}",
+                f"{prefix} study {offset + index}",
+                [f"{prefix} Condition"],
+                f"2026-01-{((offset + index) % 28) + 1:02d}",
+            )
+            for index in range(count)
+        ]
+
+    def get_json(url, params):
+        calls.append(dict(params))
+        if params.get("sort") == "PrimaryCompletionDate:asc":
+            return {"studies": make_many("CAT", 20)}
+        if params.get("sort") == "StudyFirstPostDate:desc":
+            return {"studies": make_many("EXP", 20)}
+        if params.get("filter.advanced") == "AREA[HasResults]true":
+            return {"studies": make_many("TRK", 20)}
+        if params.get("query.spons") == "ModernaTX, Inc.":
+            return {"studies": make_many("SPN", 40)}
+        if params.get("query.term") == "Moderna":
+            page_token = int(params.get("pageToken") or 0)
+            next_token = str(page_token + 1) if page_token < 3 else None
+            return {
+                "studies": make_many("CTX", 100, offset=page_token * 100),
+                "nextPageToken": next_token,
+            }
+        raise AssertionError(f"unexpected params: {params}")
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=500,
+    )
+
+    term_calls = [call for call in calls if call.get("query.term") == "Moderna"]
+    assert len(term_calls) == 4
+    assert {call["pageSize"] for call in term_calls} == {100}
+    assert len(_nct_ids(result.studies)) == 500
+    assert sum(nct_id.startswith("NCTCTX") for nct_id in _nct_ids(result.studies)) == 400
+
+
 def test_harvester_queries_each_literal_condition_term_and_deduplicates_retained_ncts():
     profile = DiseaseResolver().resolve("Alzheimer disease")
     calls = []

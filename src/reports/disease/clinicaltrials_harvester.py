@@ -165,6 +165,8 @@ class ClinicalTrialsDiseaseHarvester:
 
 
 class ClinicalTrialsCompanyHarvester:
+    _BROAD_PORTFOLIO_MIN_RECORDS = 101
+    _BROAD_PORTFOLIO_PAGE_SIZE = 100
     _LAYER_QUERIES: tuple[tuple[str, dict[str, Any]], ...] = (
         (
             "catalyst",
@@ -263,7 +265,42 @@ class ClinicalTrialsCompanyHarvester:
                 if not page_token:
                     break
 
+        if (
+            int(max_records) >= self._BROAD_PORTFOLIO_MIN_RECORDS
+            and len(retained_by_nct) + len(retained_without_nct) < int(max_records)
+        ):
+            raw_count += self._fetch_broad_portfolio(
+                sponsor_query=sponsor_query,
+                company_name=company_name,
+                max_records=max_records,
+                retained_by_nct=retained_by_nct,
+                strata_by_nct=strata_by_nct,
+                retained_without_nct=retained_without_nct,
+            )
+
+        if (
+            int(max_records) >= self._BROAD_PORTFOLIO_MIN_RECORDS
+            and len(retained_by_nct) + len(retained_without_nct) < int(max_records)
+        ):
+            for search_term in _company_context_search_terms(company_name, sponsor_query):
+                if len(retained_by_nct) + len(retained_without_nct) >= int(max_records):
+                    break
+                raw_count += self._fetch_company_context_portfolio(
+                    search_term=search_term,
+                    company_name=company_name,
+                    sponsor_query=sponsor_query,
+                    max_records=max_records,
+                    retained_by_nct=retained_by_nct,
+                    strata_by_nct=strata_by_nct,
+                    retained_without_nct=retained_without_nct,
+                )
+
         selected_nct_numbers = self._select_nct_numbers(ordered_ncts_by_stratum, max_records)
+        selected_nct_numbers = self._append_remaining_nct_numbers(
+            selected_nct_numbers,
+            retained_by_nct,
+            max_records,
+        )
         retained = [
             _study_with_company_metadata(
                 study,
@@ -282,6 +319,119 @@ class ClinicalTrialsCompanyHarvester:
             raw_count=raw_count,
             rejected_nct_numbers=[],
         )
+
+    def _fetch_broad_portfolio(
+        self,
+        *,
+        sponsor_query: str,
+        company_name: str,
+        max_records: int,
+        retained_by_nct: dict[str, dict[str, Any]],
+        strata_by_nct: dict[str, set[str]],
+        retained_without_nct: list[dict[str, Any]],
+    ) -> int:
+        raw_count = 0
+        page_token: str | None = None
+        seen_page_tokens: set[str | None] = set()
+        pages_fetched = 0
+        limit = max(0, int(max_records))
+
+        while pages_fetched < self.max_pages and len(retained_by_nct) + len(retained_without_nct) < limit:
+            if page_token in seen_page_tokens:
+                break
+            seen_page_tokens.add(page_token)
+
+            params: dict[str, Any] = {
+                "query.spons": sponsor_query,
+                "sort": "LastUpdatePostDate:desc",
+                "pageSize": self._BROAD_PORTFOLIO_PAGE_SIZE,
+                "format": "json",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            payload = self._get_json(CTGOV_STUDIES_URL, params)
+            studies = _extract_study_rows(payload)
+            raw_count += len(studies)
+            pages_fetched += 1
+
+            for study in studies:
+                nct_number = _extract_nct_number(study)
+                if nct_number:
+                    retained_by_nct.setdefault(nct_number, copy.deepcopy(study))
+                    strata_by_nct.setdefault(nct_number, set())
+                else:
+                    retained_without_nct.append(
+                        _study_with_company_metadata(
+                            copy.deepcopy(study),
+                            set(),
+                            company_name,
+                            sponsor_query,
+                        )
+                    )
+
+            page_token = _extract_next_page_token(payload)
+            if not page_token:
+                break
+
+        return raw_count
+
+    def _fetch_company_context_portfolio(
+        self,
+        *,
+        search_term: str,
+        company_name: str,
+        sponsor_query: str,
+        max_records: int,
+        retained_by_nct: dict[str, dict[str, Any]],
+        strata_by_nct: dict[str, set[str]],
+        retained_without_nct: list[dict[str, Any]],
+    ) -> int:
+        raw_count = 0
+        page_token: str | None = None
+        seen_page_tokens: set[str | None] = set()
+        pages_fetched = 0
+        limit = max(0, int(max_records))
+
+        while pages_fetched < self.max_pages and len(retained_by_nct) + len(retained_without_nct) < limit:
+            if page_token in seen_page_tokens:
+                break
+            seen_page_tokens.add(page_token)
+
+            params: dict[str, Any] = {
+                "query.term": search_term,
+                "sort": "LastUpdatePostDate:desc",
+                "pageSize": self._BROAD_PORTFOLIO_PAGE_SIZE,
+                "format": "json",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            payload = self._get_json(CTGOV_STUDIES_URL, params)
+            studies = _extract_study_rows(payload)
+            raw_count += len(studies)
+            pages_fetched += 1
+
+            for study in studies:
+                nct_number = _extract_nct_number(study)
+                if nct_number:
+                    retained_by_nct.setdefault(nct_number, copy.deepcopy(study))
+                    strata_by_nct.setdefault(nct_number, set())
+                else:
+                    retained_without_nct.append(
+                        _study_with_company_metadata(
+                            copy.deepcopy(study),
+                            set(),
+                            company_name,
+                            sponsor_query,
+                        )
+                    )
+
+            page_token = _extract_next_page_token(payload)
+            if not page_token:
+                break
+
+        return raw_count
 
     @staticmethod
     def _requests_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -337,6 +487,27 @@ class ClinicalTrialsCompanyHarvester:
                     continue
                 selected.append(nct_number)
                 selected_set.add(nct_number)
+        return selected
+
+    @staticmethod
+    def _append_remaining_nct_numbers(
+        selected_nct_numbers: list[str],
+        retained_by_nct: dict[str, dict[str, Any]],
+        max_records: int,
+    ) -> list[str]:
+        limit = max(0, int(max_records))
+        if len(selected_nct_numbers) >= limit:
+            return selected_nct_numbers
+
+        selected = list(selected_nct_numbers)
+        selected_set = set(selected)
+        for nct_number in retained_by_nct:
+            if len(selected) >= limit:
+                break
+            if nct_number in selected_set:
+                continue
+            selected.append(nct_number)
+            selected_set.add(nct_number)
         return selected
 
 
@@ -553,6 +724,38 @@ def _company_sponsor_query(profile: DiseaseProfile) -> str:
 
 def _company_display_name(profile: DiseaseProfile) -> str:
     return str(profile.company_name or profile.target_name or profile.canonical_condition).strip()
+
+
+_COMPANY_LEGAL_SUFFIX_RE = re.compile(
+    r"^(?:incorporated|inc|corp|corporation|ltd|limited|plc|llc|company|co|ag|sa|nv)$",
+    flags=re.IGNORECASE,
+)
+
+
+def _company_context_search_terms(company_name: str, sponsor_query: str) -> list[str]:
+    terms: list[str] = []
+    for value in (company_name, sponsor_query):
+        _append_company_search_term(terms, _strip_company_legal_suffix(value))
+        _append_company_search_term(terms, value)
+    return terms
+
+
+def _append_company_search_term(terms: list[str], value: object) -> None:
+    text = re.sub(r"\s+", " ", str(value or "").strip(" .,;"))
+    if len(text) < 3:
+        return
+    if text.lower() in {term.lower() for term in terms}:
+        return
+    terms.append(text)
+
+
+def _strip_company_legal_suffix(value: object) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", str(value or "").replace("&", " and "))
+    while words and _COMPANY_LEGAL_SUFFIX_RE.fullmatch(words[-1]):
+        words.pop()
+    if words and words[-1].lower() == "and":
+        words.pop()
+    return " ".join(words)
 
 
 def _study_with_company_metadata(
