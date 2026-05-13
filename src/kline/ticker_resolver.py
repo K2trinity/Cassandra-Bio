@@ -29,7 +29,7 @@ _UNIVERSE: dict[str, KlineCompany] = {
     "VRTX": KlineCompany(
         ticker="VRTX",
         name="Vertex Pharmaceuticals Incorporated",
-        aliases=["Vertex Pharmaceuticals"],
+        aliases=["Vertex", "Vertex Pharmaceuticals"],
         is_biotech=True,
     ),
     "REGN": KlineCompany(
@@ -104,11 +104,23 @@ class TickerResolver:
         return ticker
 
     def resolve(self, value: object) -> KlineCompany:
-        ticker = self.normalize(value)
-        if ticker is None:
+        raw_value = str(value or "").strip()
+        if "/" in raw_value or "\\" in raw_value:
             raise ValueError("invalid ticker: use 1-16 letters, numbers, dots, or hyphens")
 
-        company = self._company_map().get(ticker)
+        universe = self._company_map()
+        ticker = self.normalize(value)
+        if ticker is None:
+            company = _resolve_company_in_map(value, universe)
+            if company is not None:
+                return _copy_company(company)
+            raise ValueError("invalid ticker: use 1-16 letters, numbers, dots, or hyphens")
+
+        company = universe.get(ticker)
+        if company is not None:
+            return _copy_company(company)
+
+        company = _resolve_company_in_map(value, universe)
         if company is not None:
             return _copy_company(company)
 
@@ -120,16 +132,8 @@ class TickerResolver:
 
     def resolve_company_in_universe(self, value: object) -> KlineCompany | None:
         """Resolve a company name or alias only when it exists in the K-line universe."""
-        normalized_value = _company_lookup_key(value)
-        if not normalized_value:
-            return None
-
-        for company in self.list_universe():
-            candidates = [company.ticker, company.name, *company.aliases]
-            for candidate in candidates:
-                if _company_lookup_key(candidate) == normalized_value:
-                    return company
-        return None
+        company = _resolve_company_in_map(value, self._company_map())
+        return _copy_company(company) if company is not None else None
 
     def _company_map(self) -> dict[str, KlineCompany]:
         research_universe = _load_research_universe(self.db_path)
@@ -147,6 +151,37 @@ def _company_lookup_key(value: object) -> str:
     words = re.findall(r"[a-z0-9]+", text)
     filtered = [word for word in words if not _LEGAL_ENTITY_SUFFIX_RE.fullmatch(word)]
     return " ".join(filtered).strip()
+
+
+def _resolve_company_in_map(
+    value: object,
+    universe: dict[str, KlineCompany],
+) -> KlineCompany | None:
+    normalized_value = _company_lookup_key(value)
+    if not normalized_value:
+        return None
+
+    exact_matches: dict[str, KlineCompany] = {}
+    prefix_matches: dict[str, KlineCompany] = {}
+    for company in universe.values():
+        candidates = [company.ticker, company.name, *company.aliases]
+        for candidate in candidates:
+            key = _company_lookup_key(candidate)
+            if key == normalized_value:
+                exact_matches[company.ticker] = company
+            elif _is_unique_name_prefix(normalized_value, key):
+                prefix_matches[company.ticker] = company
+
+    matches = exact_matches or prefix_matches
+    if len(matches) == 1:
+        return next(iter(matches.values()))
+    return None
+
+
+def _is_unique_name_prefix(query: str, candidate: str) -> bool:
+    if len(query) < 3 or not candidate.startswith(query):
+        return False
+    return len(candidate) == len(query) or candidate[len(query)] == " "
 
 
 def _load_research_universe(db_path: Path | None) -> dict[str, KlineCompany]:

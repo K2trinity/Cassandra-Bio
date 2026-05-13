@@ -162,6 +162,17 @@ def test_kline_path_like_symbol_uses_invalid_ticker_page():
     assert "invalid ticker: use 1-16 letters, numbers, dots, or hyphens" in html
 
 
+def test_kline_company_text_alias_resolves_to_real_ticker():
+    client = app.test_client()
+
+    response = client.get("/kline/vertex")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-ticker="VRTX"' in html
+    assert "Vertex Pharmaceuticals" in html
+
+
 def test_kline_workspace_static_js_uses_phase1_contracts_only():
     workspace_js = (Path(PROJECT_ROOT) / "static" / "kline" / "workspace.js").read_text(
         encoding="utf-8",

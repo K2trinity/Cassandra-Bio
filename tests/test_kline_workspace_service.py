@@ -125,6 +125,14 @@ def test_ticker_resolver_normalizes_known_symbol():
     assert company.is_biotech is True
 
 
+def test_ticker_resolver_maps_vertex_company_text_to_vrtx():
+    contracts = _contracts()
+    resolver = contracts.TickerResolver()
+
+    assert resolver.resolve("vertex").ticker == "VRTX"
+    assert resolver.resolve("Vertex Pharmaceuticals").ticker == "VRTX"
+
+
 def test_ticker_resolver_rejects_path_like_symbols():
     contracts = _contracts()
     resolver = contracts.TickerResolver()
