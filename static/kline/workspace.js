@@ -434,20 +434,27 @@
     }
 
     events.forEach(function (event) {
+      var reportDerived = isReportDerivedEvent(event);
       var card = makeElement("button", {
         type: "button",
-        className: "event-card is-" + safeToken(event.category || event.type)
+        className: "event-card is-" + safeToken(event.category || event.type) + (reportDerived ? " is-report" : "")
       });
       card.dataset.eventId = event.id;
       card.classList.toggle("is-selected", event.id === state.selectedEventId);
 
+      if (reportDerived) {
+        card.appendChild(makeElement("span", {
+          className: "event-origin-badge",
+          text: "Report"
+        }));
+      }
       card.appendChild(makeElement("strong", {
         className: "event-title",
         text: event.title || event.catalyst || event.type || "Catalyst"
       }));
       card.appendChild(makeElement("span", {
         className: "event-meta",
-        text: [event.date, event.source, event.confidence].filter(Boolean).join(" · ")
+        text: [event.date, eventSourceLabel(event), event.confidence].filter(Boolean).join(" · ")
       }));
       if (event.summary) {
         card.appendChild(makeElement("p", { className: "event-summary", text: event.summary }));
@@ -467,6 +474,20 @@
   function appendDefinition(list, term, value) {
     list.appendChild(makeElement("dt", { text: term }));
     list.appendChild(makeElement("dd", { text: value == null || value === "" ? "-" : String(value) }));
+  }
+
+  function isReportDerivedEvent(event) {
+    return Boolean(event && event.metadata && (
+      event.metadata.derived_from_report === true || event.metadata.report_bridge === true
+    ));
+  }
+
+  function eventSourceLabel(event) {
+    var source = event && event.source ? String(event.source) : "";
+    if (!isReportDerivedEvent(event)) {
+      return source;
+    }
+    return source ? source + " · from report" : "from report";
   }
 
   function eventMetadataValue(event, key) {
@@ -510,6 +531,11 @@
     appendDefinition(list, "Date", selected.date);
     appendDefinition(list, "Category", selected.category || selected.type);
     appendDefinition(list, "Source", selected.source);
+    if (isReportDerivedEvent(selected)) {
+      appendDefinition(list, "Origin", "Report");
+      appendDefinition(list, "Report company", eventMetadataValue(selected, "report_company_name"));
+      appendDefinition(list, "Report path", eventMetadataValue(selected, "report_path"));
+    }
     appendDefinition(list, "Source entity", selected.source_entity);
     appendDefinition(list, "Identifiers", (selected.source_ids || []).join(", "));
     appendDefinition(list, "Confidence", selected.confidence || "medium");

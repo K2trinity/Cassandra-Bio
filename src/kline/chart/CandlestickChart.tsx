@@ -12,6 +12,7 @@ interface PlacedEvent extends BiotechEvent {
   impactScore?: number;
   sourceTier?: string;
   backtestEligible?: boolean;
+  reportDerived?: boolean;
 }
 
 interface Props {
@@ -282,6 +283,10 @@ function getEventBacktestEligible(event: BiotechEvent): boolean | undefined {
   return undefined;
 }
 
+function isReportDerivedEvent(event: BiotechEvent): boolean {
+  return event.metadata?.derived_from_report === true || event.metadata?.report_bridge === true;
+}
+
 function getEventSourceTier(event: BiotechEvent): string | undefined {
   if (typeof event.source_tier === 'string' && event.source_tier.trim()) {
     return event.source_tier.trim();
@@ -393,6 +398,19 @@ export default function CandlestickChart({
       ctx.beginPath();
       ctx.arc(p.px * dpr, p.py * dpr, radius * dpr, 0, Math.PI * 2);
       ctx.fill();
+
+      if (p.reportDerived) {
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = isHover || isHighlighted ? 0.95 : Math.max(alpha, 0.55);
+        ctx.strokeStyle = 'rgba(248, 250, 252, 0.78)';
+        ctx.lineWidth = 1.15 * dpr;
+        ctx.setLineDash([2.5 * dpr, 2 * dpr]);
+        ctx.beginPath();
+        ctx.arc(p.px * dpr, p.py * dpr, (radius + 3.2) * dpr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       const sourceTierStyle = getSourceTierStyle(p.sourceTier);
       if (sourceTierStyle) {
@@ -661,6 +679,7 @@ export default function CandlestickChart({
         const impactScore = getEventImpactScore(evt);
         const sourceTier = getEventSourceTier(evt);
         const backtestEligible = getEventBacktestEligible(evt);
+        const reportDerived = isReportDerivedEvent(evt);
         const radius = getEventRadius(evt.priority, evt.price_impact, impactScore);
         const candleLowY = y(ohlc.low);
         const py = margin.top + candleLowY + 6 + i * eSpacing;
@@ -678,6 +697,7 @@ export default function CandlestickChart({
           impactScore,
           sourceTier,
           backtestEligible,
+          reportDerived,
         });
       }
     }
@@ -876,6 +896,7 @@ export default function CandlestickChart({
               const impactScore = hit.impactScore ?? getEventImpactScore(hit);
               const sourceTier = hit.sourceTier || getEventSourceTier(hit);
               const backtestEligible = hit.backtestEligible ?? getEventBacktestEligible(hit);
+              const reportDerived = hit.reportDerived ?? isReportDerivedEvent(hit);
               tooltip.replaceChildren();
               const title = document.createElement('div');
               title.className = 'pt-title';
@@ -902,7 +923,14 @@ export default function CandlestickChart({
               const backtest = document.createElement('span');
               backtest.className = 'pt-backtest';
               backtest.textContent = `Backtest: ${backtestEligible === true ? 'eligible' : 'visual only'}`;
-              meta.append(type, impact, tier, confidence, score, backtest);
+              if (reportDerived) {
+                const origin = document.createElement('span');
+                origin.className = 'pt-origin';
+                origin.textContent = 'Origin: Report';
+                meta.append(type, origin, impact, tier, confidence, score, backtest);
+              } else {
+                meta.append(type, impact, tier, confidence, score, backtest);
+              }
               tooltip.append(title, meta);
               tooltip.style.display = 'block';
               tooltip.style.left = '0px';

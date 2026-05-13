@@ -169,6 +169,26 @@ def test_investigation_submit_sends_target_mode_form_data():
     assert "formData.append('analysis_target_type'" in html
 
 
+def test_investigation_page_exposes_report_mode_controls():
+    html = render_investigation()
+
+    assert 'data-testid="report-depth-mode"' in html
+    assert 'name="report_mode"' in html
+    assert 'value="fast"' in html
+    assert 'value="medium"' in html
+    assert 'value="pro"' in html
+    assert "Fast 100" in html
+    assert "Medium 250" in html
+    assert "Pro 500" in html
+
+
+def test_investigation_submit_sends_report_mode_form_data():
+    html = render_investigation()
+
+    assert "function selectedReportMode" in html
+    assert "formData.append('report_mode'" in html
+
+
 def test_company_quick_query_selects_company_mode():
     html = render_investigation()
 
@@ -303,6 +323,7 @@ def test_analyze_accepts_json_target_mode_and_forwards_to_workflow(monkeypatch, 
         json={
             "query": "Analyze Vertex Pharmaceuticals clinical pipeline",
             "analysis_target_type": "company",
+            "report_mode": "medium",
         },
     )
 
@@ -311,7 +332,9 @@ def test_analyze_accepts_json_target_mode_and_forwards_to_workflow(monkeypatch, 
     thread.join(timeout=10)
 
     assert fake_service.stream_calls[0]["analysis_target_type"] == "company"
+    assert fake_service.stream_calls[0]["report_mode"] == "medium"
     assert app_module.active_analysis["analysis_target_type"] == "company"
+    assert app_module.active_analysis["report_mode"] == "medium"
     assert app_module.active_analysis["result_payload"]["analysis_target_type"] == "company"
 
 
@@ -324,6 +347,7 @@ def test_analyze_accepts_form_target_mode_and_forwards_to_workflow(monkeypatch, 
         data={
             "query": "Analyze Alzheimer disease landscape",
             "analysis_target_type": "disease",
+            "report_mode": "pro",
         },
     )
 
@@ -332,6 +356,7 @@ def test_analyze_accepts_form_target_mode_and_forwards_to_workflow(monkeypatch, 
     thread.join(timeout=10)
 
     assert fake_service.stream_calls[0]["analysis_target_type"] == "disease"
+    assert fake_service.stream_calls[0]["report_mode"] == "pro"
 
 
 def test_analyze_rejects_invalid_target_mode(monkeypatch, tmp_path):
@@ -348,4 +373,22 @@ def test_analyze_rejects_invalid_target_mode(monkeypatch, tmp_path):
 
     assert response.status_code == 400
     assert response.get_json()["message"] == "Invalid analysis_target_type"
+    assert fake_service.stream_calls == []
+
+
+def test_analyze_rejects_invalid_report_mode(monkeypatch, tmp_path):
+    fake_service = FakeWorkflowService(tmp_path)
+    monkeypatch.setattr(app_module, "_workflow_service", fake_service)
+
+    response = app.test_client().post(
+        "/api/analyze",
+        json={
+            "query": "Analyze Alzheimer disease landscape",
+            "analysis_target_type": "disease",
+            "report_mode": "deep",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid report_mode" in response.get_json()["message"]
     assert fake_service.stream_calls == []

@@ -375,6 +375,20 @@
                         <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-cyan-500 peer-checked:text-slate-950">Company pipeline</span>
                     </label>
                 </div>
+                <div data-testid="report-depth-mode" class="mt-3 grid grid-cols-3 overflow-hidden rounded-lg border border-slate-700 bg-slate-950 p-1 text-sm">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="report_mode" value="fast" class="peer sr-only" checked>
+                        <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-fuchsia-400 peer-checked:text-slate-950">Fast 100</span>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="report_mode" value="medium" class="peer sr-only">
+                        <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-fuchsia-400 peer-checked:text-slate-950">Medium 250</span>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="report_mode" value="pro" class="peer sr-only">
+                        <span class="block rounded-md px-3 py-2 text-center font-semibold text-slate-400 transition peer-checked:bg-fuchsia-400 peer-checked:text-slate-950">Pro 500</span>
+                    </label>
+                </div>
                 <details data-testid="prompt-pattern-guide" class="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
                     <summary class="cursor-pointer select-none font-semibold text-cyan-200">View prompt patterns</summary>
                     <div class="mt-3 grid gap-3">
@@ -1078,6 +1092,11 @@
         return targetModeInput ? targetModeInput.value : 'disease';
     }
 
+    function selectedReportMode() {
+        const reportModeInput = document.querySelector('input[name="report_mode"]:checked');
+        return reportModeInput ? reportModeInput.value : 'fast';
+    }
+
     function getPromptPatternWarning(query, targetType) {
         const normalizedQuery = (query || '').trim();
         if (!normalizedQuery) return '';
@@ -1301,6 +1320,7 @@
             const formData = new FormData();
             formData.append('query', query);
             formData.append('analysis_target_type', analysisTargetType);
+            formData.append('report_mode', selectedReportMode());
             uploadedFiles.forEach(file => formData.append('files', file));
             if (promptPatternWarning) {
                 addLog('warning', promptPatternWarning);

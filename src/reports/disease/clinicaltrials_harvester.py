@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .condition_matcher import conditions_full_match, normalize_condition_text
 from .models import DiseaseProfile
+from .report_modes import company_layer_quotas
 
 
 CTGOV_STUDIES_URL = "https://clinicaltrials.gov/api/v2/studies"
@@ -207,17 +208,18 @@ class ClinicalTrialsCompanyHarvester:
         raw_count = 0
         retained_by_nct: dict[str, dict[str, Any]] = {}
         strata_by_nct: dict[str, set[str]] = {}
+        layer_queries = self._layer_queries(max_records)
         ordered_ncts_by_stratum: dict[str, list[str]] = {
             stratum: []
-            for stratum, _params in self._LAYER_QUERIES
+            for stratum, _params in layer_queries
         }
         seen_ncts_by_stratum: dict[str, set[str]] = {
             stratum: set()
-            for stratum, _params in self._LAYER_QUERIES
+            for stratum, _params in layer_queries
         }
         retained_without_nct: list[dict[str, Any]] = []
 
-        for stratum, layer_params in self._LAYER_QUERIES:
+        for stratum, layer_params in layer_queries:
             page_token: str | None = None
             seen_page_tokens: set[str | None] = set()
             pages_fetched = 0
@@ -288,6 +290,19 @@ class ClinicalTrialsCompanyHarvester:
         return response.json()
 
     @classmethod
+    def _layer_queries(
+        cls,
+        max_records: int,
+    ) -> tuple[tuple[str, dict[str, Any]], ...]:
+        quotas = company_layer_quotas(max_records)
+        queries = []
+        for stratum, layer_params in cls._LAYER_QUERIES:
+            params = dict(layer_params)
+            params["pageSize"] = quotas.get(stratum, params["pageSize"])
+            queries.append((stratum, params))
+        return tuple(queries)
+
+    @classmethod
     def _select_nct_numbers(
         cls,
         ordered_ncts_by_stratum: dict[str, list[str]],
@@ -299,8 +314,9 @@ class ClinicalTrialsCompanyHarvester:
         if limit == 0:
             return selected
 
-        for stratum, layer_params in cls._LAYER_QUERIES:
-            quota = min(int(layer_params.get("pageSize", limit)), limit - len(selected))
+        quotas = company_layer_quotas(limit)
+        for stratum, _layer_params in cls._LAYER_QUERIES:
+            quota = min(int(quotas.get(stratum, limit)), limit - len(selected))
             for nct_number in ordered_ncts_by_stratum.get(stratum, []):
                 if len(selected) >= limit or quota <= 0:
                     break

@@ -61,6 +61,41 @@ MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             """,
         ),
     ),
+    (
+        "20260513_001_report_documents",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS report_documents (
+                report_id TEXT PRIMARY KEY,
+                dedupe_key TEXT NOT NULL UNIQUE,
+                query TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                report_mode TEXT NOT NULL,
+                package_json TEXT NOT NULL,
+                narratives_json TEXT NOT NULL,
+                artifact_paths_json TEXT NOT NULL,
+                source_audit_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_report_documents_target
+            ON report_documents(target_type, target_name, report_mode, created_at)
+            """,
+        ),
+    ),
+    (
+        "20260513_002_report_documents_updated_at",
+        (
+            "ALTER TABLE report_documents ADD COLUMN updated_at TEXT",
+            """
+            UPDATE report_documents
+            SET updated_at = COALESCE(updated_at, created_at, datetime('now'))
+            """,
+        ),
+    ),
 )
 
 

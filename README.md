@@ -1,62 +1,139 @@
-# Cassandra
+# Cassandra-Bio
 
-Biomedical evidence collection and report generation platform built on Flask + LangGraph.
+Cassandra-Bio is a Flask-based biomedical research workspace for disease and company reports, current-universe market data ingestion, event-to-price alignment, K-line review, and backtest analysis.
 
-## Overview
+The deployed app is served from the Cassandra-Bio repository and currently uses persisted server data under `/home/ubuntu/cassandra-bio/data`.
 
-Cassandra focuses on three things:
+## Current Data State
 
-- structured biomedical source collection (PubMed / ClinicalTrials / Europe PMC / optional FDA)
-- deterministic workflow orchestration with explicit state transitions
-- final report generation with traceable references and export support
+As checked on 2026-05-13, the active research universe is:
 
-Current backend workflow is:
+- `universe_id`: `biotech_us_v1`
+- latest snapshot date: `2026-05-10`
+- current active universe count: `12`
+- tickers: `ALNY`, `AMGN`, `BEAM`, `BIIB`, `BMRN`, `CRSP`, `EDIT`, `GILD`, `MRNA`, `NTLA`, `REGN`, `VRTX`
 
-```text
-START -> harvester -> extension_handoff -> evidence_synthesizer -> clinical_analyzer -> quality_assessor -> writer -> END
+Inspect the local universe count:
+
+```powershell
+@'
+import duckdb
+con = duckdb.connect("data/research/cassandra_research.duckdb", read_only=True)
+print(con.execute("""
+    select universe_id, snapshot_date, count(*) as active_count, snapshot_id
+    from universe_members
+    where universe_id = 'biotech_us_v1'
+      and is_active = true
+      and snapshot_date = (
+          select max(snapshot_date)
+          from universe_members
+          where universe_id = 'biotech_us_v1'
+      )
+    group by universe_id, snapshot_date, snapshot_id
+""").fetchall())
+'@ | C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -
 ```
 
-Key runtime notes:
+Inspect the event and report database:
 
-- `harvester` emits the normalized record list plus `data_layers`, `source_payloads`, and `frontend_payload`.
-- `extension_handoff` initializes extension slots (`slot_a`, `slot_b`, `slot_c`, `slot_kline`).
-- the three middle analyzers write their outputs into `extension_payloads`.
-- `writer_node` forwards those slots as `synthesis_sections`, but the current `ReportWriterAgent.write_report()` drops `**extra_payload`, so the generic writer still mainly consumes `harvest_data` and `compiled_context_text`.
-- disease survey reports are generated from `harvest_data["results"] -> aggregate_survey_data() -> DiseaseSurveyState -> compose_disease_survey_report_bundle()`.
+```powershell
+@'
+import sqlite3
+con = sqlite3.connect("data/events.db")
+for table in ["biotech_events", "event_source_documents", "event_extraction_runs", "report_documents"]:
+    try:
+        print(table, con.execute(f"select count(*) from {table}").fetchone()[0])
+    except sqlite3.Error as exc:
+        print(table, exc)
+'@ | C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -
+```
 
-The web UI is intentionally coarser than the backend graph and still shows three stages: `harvest / handoff / writing`.
+On the server, Docker Compose mounts `./data:/app/data`, so `data/events.db` and `data/research/cassandra_research.duckdb` are deployed databases, not container-only files.
 
-For a code-level walkthrough, see `docs/competition/architecture/DATA_FLOW_ARCHITECTURE.md`.
+## Report Modes
 
-## Key Capabilities
+The report workflow supports three depth modes through the web UI and `/api/analyze`:
 
-- unified harvest output contract with source payload projection
-- uninterrupted workflow compilation and execution
-- six-node linear backend pipeline with explicit shared state
-- markdown + HTML + PDF report output
-- disease survey aggregation and rendering pipeline
-- extension slot production in the graph for future writer integration
+- `fast`: retains up to 100 records. This is the default and matches the previous quick report size.
+- `medium`: retains up to 250 records.
+- `pro`: retains up to 500 records.
+
+Company reports preserve the same layer shape at larger sizes:
+
+- catalyst tracker: 30%
+- expansion map: 50%
+- track record: 20%
+
+For Gemini 3.1 Pro summarization, the package keeps aggregate counts for the full retained set, while the narrative payload sends representative records only. This keeps `medium` and `pro` usable without pushing every retained row into the LLM prompt.
+
+Generated disease and company reports are persisted to SQLite in `report_documents`. The store uses a stable content dedupe key, so re-running the same report package with regenerated wording or different output paths does not insert a duplicate row.
+
+## Current-Universe Data Ingestion
+
+Use the resumable ingestion script to fetch additional current-universe market/provider data in small batches while respecting provider rate limits:
+
+```powershell
+C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe scripts/ingest_universe_company_data.py `
+  --snapshot-date 2026-05-13 `
+  --start-date 2018-01-01 `
+  --end-date 2026-05-13 `
+  --providers tiingo,sec,fmp `
+  --batch-size 3 `
+  --resume `
+  --align-events
+```
+
+Useful controls:
+
+- `--limit-tickers N`: run a safe partial batch first.
+- `--dry-run`: inspect planned batches without writing provider data.
+- `--no-resume`: disable checkpoint reuse for a deliberately fresh run.
+- `--max-provider-attempts`: cap retries per provider request.
+- `--max-retry-sleep-seconds`: cap sleep time after rate-limit responses.
+- `--replace-event-links`: rewrite existing event-price link partitions for the produced snapshot.
+
+The script reads the latest `biotech_us_v1` universe snapshot, keeps the full universe snapshot stable, filters each batch through `include_tickers`, retries transient provider failures, and prints one JSON summary without secrets.
+
+## Event Alignment And K-Line Labels
+
+When `--align-events` is enabled, the ingestion script loads trusted events from `data/events.db`, aligns them to the generated price snapshot, and writes event-price links. Existing link partitions are skipped unless `--replace-event-links` is supplied.
+
+Company reports also bridge selected report-derived clinical events into K-line. The persisted event metadata includes:
+
+- `derived_from_report`
+- `report_bridge`
+- `report_company_name`
+- `report_path`
+- `report_target_type`
+
+The K-line UI keeps the original event `source` and `category`, but visually marks report-derived events:
+
+- catalyst cards show a `Report` badge and `from report` source label.
+- event details show `Origin: Report`, report company, and report path.
+- the canvas chart draws an outer ring and tooltip origin label for report-derived markers.
 
 ## Quick Start
 
-### 1) Prerequisites
+### Prerequisites
 
 - Python 3.11
 - Google Cloud project with Vertex AI enabled
 - `gcloud` CLI configured for ADC
+- optional provider credentials for live ingestion, such as Tiingo/FMP/SEC-compatible settings used by the existing ingestion stack
 
-### 2) Install
+### Install
 
-```bash
+```powershell
 C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pip install -r requirements.txt
 ```
 
 Use the project Python 3.11 interpreter above. Do not run the app from `F:/miniconda/python.exe`, because that base environment does not include the backtest data dependencies such as `yfinance`.
 
-### 3) Configure
+### Configure
 
-```bash
+```powershell
 copy .env.example .env
+gcloud auth application-default login
 ```
 
 Set at least:
@@ -64,92 +141,78 @@ Set at least:
 - `GOOGLE_CLOUD_PROJECT`
 - `GOOGLE_CLOUD_LOCATION`
 
-Authenticate locally:
+### Run
 
-```bash
-gcloud auth application-default login
-```
-
-### 4) Run
-
-Web app:
-
-```bash
+```powershell
 C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe app.py
 ```
 
-CLI run:
+Open:
 
-```bash
-C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe main.py "summarize latest progress on EGFR inhibitors in NSCLC"
+```text
+http://127.0.0.1:5000/investigation
 ```
 
 ## Runtime Architecture
 
-### Workflow Layer
-
-- graph builder: `src/graph/workflow.py`
-- shared state: `src/graph/state.py`
-- node adapters: `src/graph/nodes/`
-
-### Orchestration Layer
-
-- supervisor entry: `src/agents/supervisor.py`
-- service facade: `src/services/workflow_service.py`
-
-### App Layer
-
-- Flask + Socket.IO server: `app.py`
-- web templates: `templates/`
-
-## Dataflow Contract
-
-Core schema validation lives in:
-
-- `src/graph/contracts.py`
-
-Harvester output, extension slot payloads, and writer input are validated before report generation.
-
-## Project Layout
-
-```text
-Cassandra/
-  app.py
-  main.py
-  config.py
-  src/
-    agents/
-    graph/
-    services/
-    tools/
-    report_engine/
-    report_core/
-  templates/
-  tests/
-  docs/
-```
+- Flask + Socket.IO web app: `app.py`
+- report workflow facade: `src/services/workflow_service.py`
+- disease/company orchestrator: `src/reports/disease/orchestrator.py`
+- report modes: `src/reports/disease/report_modes.py`
+- report persistence: `src/reports/disease/report_store.py`
+- provider ingestion executor: `src/data_ingestion/download_executor.py`
+- provider retry policy: `src/data_ingestion/retry_policy.py`
+- current-universe ingestion CLI: `scripts/ingest_universe_company_data.py`
+- K-line static workspace: `static/kline/workspace.js`
+- K-line React chart bundle: `src/kline/`
 
 ## Testing
 
-Run full tests:
+Run the focused checks for the current universe/report/K-line work:
 
-```bash
+```powershell
+C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pytest `
+  tests/test_provider_retry_policy.py `
+  tests/test_biotech_download_executor.py `
+  tests/test_ingest_universe_company_data_cli.py `
+  tests/reports/disease/test_report_modes.py `
+  tests/reports/disease/test_report_store.py `
+  tests/reports/disease/test_clinicaltrials_harvester.py `
+  tests/reports/disease/test_workflow_service.py `
+  tests/test_investigation_ui.py `
+  tests/test_kline_workspace_js.py `
+  tests/reports/disease/test_report_kline_bridge.py `
+  -q --basetemp=.pytest_tmp/final
+```
+
+Build the K-line chart bundle:
+
+```powershell
+cd src/kline
+npm run build
+```
+
+Run the full Python test suite:
+
+```powershell
 C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pytest tests
 ```
 
-Run selected integrity checks:
+## Server Update Path
 
-```bash
-C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pytest tests/test_dataflow_integrity.py
-C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pytest tests/test_writer_slot_consumption.py
-C:/Users/16830/AppData/Local/Programs/Python/Python311/python.exe -m pytest tests/test_report_writer_agent.py
+The production-style server path is:
+
+```text
+ubuntu@165.154.4.149:/home/ubuntu/cassandra-bio
 ```
 
-## Notes
+The public investigation URL is:
 
-- Existing compatibility adapters under `src/engines/` are kept to reduce migration risk.
-- Legacy terms may still appear in historical logs or generated report artifacts; these are not used by the active workflow chain.
-- `extension_payloads` are produced and forwarded today, but full writer-side consumption is still a follow-up integration task.
+```text
+http://cassandra-bio.165.154.4.149.sslip.io/investigation
+```
+
+Before pulling on the server, inspect the worktree and preserve server-only files such as `.dockerignore`, Docker Compose files, data, logs, final reports, and secret mounts. Prefer `git pull --ff-only` when the server worktree has no conflicting tracked edits.
 
 ## License
 

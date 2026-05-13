@@ -9,6 +9,7 @@ from loguru import logger
 from src.llms import create_report_client
 
 from .models import ClinicalTrialRecord, DiseaseChapterNarratives, DiseaseReportPackage
+from .report_modes import get_report_mode_config
 
 
 NARRATIVE_SCHEMA = {
@@ -119,6 +120,9 @@ class DiseaseReportNarrativeService:
 def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
     trials = package.clinical_trials
     risk_records = package.risk_records
+    mode_config = get_report_mode_config(package.source_audit.details.get("report_mode"))
+    representative_trials = trials[: mode_config.narrative_record_cap]
+    representative_risk_records = risk_records[: mode_config.narrative_risk_record_cap]
     target_metadata = _target_metadata(package)
     counts = _stratum_counts(package)
     expansion_condition_counts = _expansion_condition_counts(package)
@@ -139,6 +143,7 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
         "disease_name": package.disease_profile.disease_name,
         **target_metadata,
         "trial_count": len(trials),
+        "representative_record_count": len(representative_trials),
         "stratum_counts": counts,
         "phase_distribution": _phase_distribution(trials),
         "status_distribution": dict(Counter(trial.status for trial in trials)),
@@ -165,7 +170,7 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
                 "secondary_outcome_measures": list(trial.secondary_outcome_measures),
                 "enrollment": trial.enrollment,
             }
-            for trial in trials
+            for trial in representative_trials
         ],
     }
     if is_company:
@@ -208,8 +213,10 @@ def build_narrative_payload(package: DiseaseReportPackage) -> dict[str, Any]:
                     "competition_signal": record.competition_signal,
                     "competition_evidence": record.competition_evidence,
                 }
-                for record in risk_records
+                for record in representative_risk_records
             ],
+            "risk_record_count": len(risk_records),
+            "representative_risk_record_count": len(representative_risk_records),
             "risk_distribution": {
                 "timeline": dict(Counter(record.timeline_signal for record in risk_records)),
                 "competition": dict(Counter(record.competition_signal for record in risk_records)),

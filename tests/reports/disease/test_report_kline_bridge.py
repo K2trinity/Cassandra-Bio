@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import uuid
 
 import pytest
 
@@ -112,9 +113,10 @@ def test_company_report_bridge_inserts_stable_trusted_events_for_kline_universe(
     from src.reports.disease.report_kline_bridge import ReportKlineBridge
 
     package = _package()
+    report_path = "/reports/lly-company-report.md"
 
-    first = ReportKlineBridge().run(package)
-    second = ReportKlineBridge().run(package)
+    first = ReportKlineBridge().run(package, report_path=report_path)
+    second = ReportKlineBridge().run(package, report_path=report_path)
 
     assert first["status"] == "ready"
     assert first["ticker"] == "LLY"
@@ -124,6 +126,7 @@ def test_company_report_bridge_inserts_stable_trusted_events_for_kline_universe(
     assert first["inserted_event_count"] == first["event_count"]
     assert second["status"] == "ready"
     assert second["event_count"] == first["event_count"]
+    assert second["inserted_event_count"] == 0
 
     events = get_trusted_events_for_chart("LLY")
     assert len(events) == first["event_count"]
@@ -134,8 +137,57 @@ def test_company_report_bridge_inserts_stable_trusted_events_for_kline_universe(
     assert all(event["source"] == "clinicaltrials" for event in events)
     assert all(event["source_ids"] for event in events)
     assert all(event["source_url"] for event in events)
+    assert all(event["metadata"]["derived_from_report"] is True for event in events)
     assert all(event["metadata"]["report_bridge"] is True for event in events)
+    assert all(event["metadata"]["report_bridge_source_event_id"] for event in events)
     assert all(event["metadata"]["report_company_name"] == "Eli Lilly and Company" for event in events)
+    assert all(event["metadata"]["report_path"] == report_path for event in events)
+    assert all(event["metadata"]["report_target_type"] == "company" for event in events)
+    assert all(str(event["source_run_id"]).startswith("report_bridge:LLY:") for event in events)
+
+
+def test_report_bridge_namespaces_ids_without_overwriting_direct_clinical_events():
+    from src.backtest import events_db
+    from src.reports.disease.report_kline_bridge import ReportKlineBridge
+
+    direct_event_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "LLY|NCT00000001|trial_results_posted|2026-04-20",
+        )
+    )
+    events_db.init_db()
+    events_db.insert_event(
+        {
+            "id": direct_event_id,
+            "date": "2026-04-20",
+            "type": "trial_results_posted",
+            "priority": 1,
+            "ticker": "LLY",
+            "disease_area": "Alzheimer Disease",
+            "catalyst": "Direct ClinicalTrials event",
+            "sentiment": "positive",
+            "source": "clinicaltrials",
+            "source_ids": ["NCT00000001"],
+            "metadata": {"origin": "direct_ingestion"},
+        }
+    )
+
+    result = ReportKlineBridge().run(_package(), report_path="/reports/lly-company-report.md")
+
+    assert result["status"] == "ready"
+    rows = events_db.get_events_for_chart("LLY")
+    direct = [row for row in rows if row["id"] == direct_event_id]
+    report_rows = [
+        row
+        for row in rows
+        if row["metadata"].get("report_bridge_source_event_id") == direct_event_id
+    ]
+    assert len(rows) == result["event_count"] + 1
+    assert len(direct) == 1
+    assert direct[0]["metadata"] == {"origin": "direct_ingestion"}
+    assert len(report_rows) == 1
+    assert report_rows[0]["id"] != direct_event_id
 
 
 def test_report_bridge_skips_disease_reports_without_persisting_events():

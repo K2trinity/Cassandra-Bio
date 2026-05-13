@@ -1347,6 +1347,61 @@ def test_workspace_js_details_renders_phase2_event_metadata():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_labels_report_derived_events_without_rewriting_source():
+    result = _run_workspace_script(r"""
+        const workspace = makeWorkspace({
+          panels: { selected_event_id: 'evt-report-1' },
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            points: [{
+              id: 'evt-report-1',
+              date: '2026-04-20',
+              type: 'trial_results_posted',
+              category: 'clinical',
+              title: 'Report bridge event',
+              priority: 1,
+              sentiment: 'positive',
+              confidence: 'high',
+              source: 'clinicaltrials',
+              metadata: {
+                report_bridge: true,
+                report_company_name: 'Eli Lilly and Company',
+                report_path: '/tmp/report.md'
+              }
+            }]
+          }]
+        });
+        installWorkspace(workspace);
+        runWorkspace();
+
+        if (workspace.layers[0].points[0].source !== 'clinicaltrials') {
+          throw new Error('source was rewritten: ' + workspace.layers[0].points[0].source);
+        }
+        if (workspace.layers[0].points[0].category !== 'clinical') {
+          throw new Error('category was rewritten: ' + workspace.layers[0].points[0].category);
+        }
+
+        const catalystText = document.querySelector('[data-panel="catalysts"]').textContent;
+        if (!catalystText.includes('Report')) {
+          throw new Error('report badge missing from catalyst card: ' + catalystText);
+        }
+        if (!catalystText.includes('clinicaltrials · from report')) {
+          throw new Error('report source label missing from catalyst card: ' + catalystText);
+        }
+
+        const detailsText = document.querySelector('[data-panel="details"]').textContent;
+        ['Origin', 'Report', 'Report company', 'Eli Lilly and Company', 'Report path', '/tmp/report.md'].forEach((expected) => {
+          if (!detailsText.includes(expected)) {
+            throw new Error('report origin detail missing ' + expected + ' from ' + detailsText);
+          }
+        });
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def _dom_harness() -> str:
     return textwrap.dedent(r"""
         const fs = require('fs');

@@ -19,7 +19,9 @@ from .normalizer import normalize_trial_payload
 from .package_builder import DiseaseReportPackageBuilder
 from .pipeline import DAGPipeline, PipelineStage
 from .relevance import DiseaseRelevanceGate
+from .report_modes import get_report_mode_config, normalize_report_mode
 from .report_kline_bridge import ReportKlineBridge
+from .report_store import ReportStore
 from .renderer_adapter import DiseaseReportRendererAdapter
 from .resolver import DiseaseResolver
 from .risk_engine import RuleBasedRiskEngine
@@ -28,6 +30,7 @@ from .risk_engine import RuleBasedRiskEngine
 ANALYSIS_FOCUS = "DISEASE_REPORT_PIPELINE"
 COMPANY_ANALYSIS_FOCUS = "COMPANY_CLINICALTRIALS_PIPELINE"
 DEFAULT_COMPANY_MAX_TRIALS = 100
+DEFAULT_REPORT_MAX_TRIALS = 500
 
 
 class DiseaseReportOrchestrator:
@@ -42,6 +45,8 @@ class DiseaseReportOrchestrator:
         company_route_provider: Any | None = None,
         narrative_service: Any | None = None,
         report_kline_bridge: Any | None = None,
+        report_store: Any | None = None,
+        report_database_path: str | None = None,
     ) -> None:
         self.max_workers = max(1, int(max_workers))
         self.resolver = DiseaseResolver()
@@ -63,14 +68,17 @@ class DiseaseReportOrchestrator:
         self.ir_builder = DiseaseReportIRBuilder()
         self.renderer_adapter = renderer_adapter or DiseaseReportRendererAdapter()
         self.report_kline_bridge = report_kline_bridge or ReportKlineBridge()
+        self.report_store = report_store or ReportStore(report_database_path)
+        self.report_database_path = str(self.report_store.db_path)
 
     def run(
         self,
         user_query: str,
         output_dir: str = "final_reports",
-        max_trials: int = 50,
+        max_trials: int = DEFAULT_REPORT_MAX_TRIALS,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ) -> dict[str, Any]:
         final_state: dict[str, Any] | None = None
         for _node_name, state in self.stream(
@@ -79,6 +87,7 @@ class DiseaseReportOrchestrator:
             max_trials=max_trials,
             narrative_language=narrative_language,
             analysis_target_type=analysis_target_type,
+            report_mode=report_mode,
         ):
             final_state = state
         if final_state is None:
@@ -94,15 +103,19 @@ class DiseaseReportOrchestrator:
         self,
         user_query: str,
         output_dir: str = "final_reports",
-        max_trials: int = 50,
+        max_trials: int = DEFAULT_REPORT_MAX_TRIALS,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ) -> Iterator[tuple[str, dict[str, Any]]]:
+        mode_config = get_report_mode_config(report_mode)
         context: dict[str, Any] = {
             "analysis_target_type": analysis_target_type,
             "max_trials": max_trials,
             "narrative_language": narrative_language,
             "output_dir": output_dir,
+            "report_mode": mode_config.mode,
+            "report_mode_config": mode_config,
             "user_query": user_query,
         }
         yield from self._build_pipeline().run(context)
@@ -132,6 +145,7 @@ class DiseaseReportOrchestrator:
     def _run_harvest_stage(self, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         user_query = context["user_query"]
         max_trials = context["max_trials"]
+        mode_config = context["report_mode_config"]
         analysis_target_type = context["analysis_target_type"]
         profile = resolve_analysis_target(
             user_query,
@@ -139,9 +153,12 @@ class DiseaseReportOrchestrator:
             disease_resolver=self.resolver,
         )
 
-        record_limit = max_trials
+        record_limit = min(int(max_trials), mode_config.retained_record_limit)
         if profile.target_type == "company":
-            record_limit = _company_record_limit(max_trials)
+            record_limit = _company_record_limit(
+                max_trials,
+                report_mode_limit=mode_config.retained_record_limit,
+            )
             raw_result = self.company_harvester.fetch_raw_studies(profile, max_records=record_limit)
             normalized_records = self._normalize_records(raw_result.studies)
             retained_records = normalized_records
@@ -192,6 +209,7 @@ class DiseaseReportOrchestrator:
             risk_records=context["risk_records"],
             max_records=context["record_limit"],
         )
+        package = _package_with_report_mode(package, context["report_mode"])
         package = self.company_route_provider.enrich(package)
         package_state = self._build_package_state(
             candidate_state=context["harvest_state"],
@@ -207,6 +225,7 @@ class DiseaseReportOrchestrator:
             **package_state,
             "status": "handoff_complete",
             "handoff_complete": True,
+            "report_mode": context["report_mode"],
             "disease_report_package": package.model_dump(mode="json"),
             "disease_report_narratives": narratives.model_dump(mode="json"),
         }
@@ -228,10 +247,32 @@ class DiseaseReportOrchestrator:
             output_dir=context["output_dir"],
             project_name=package.disease_profile.disease_name,
         )
+        artifact_paths = {
+            "markdown_path": artifacts.markdown_path,
+            "html_path": artifacts.html_path,
+            "pdf_path": artifacts.pdf_path,
+            "ir_path": artifacts.ir_path,
+        }
+        target_name = (
+            package.disease_profile.target_name
+            or package.disease_profile.company_name
+            or package.disease_profile.disease_name
+        )
+        report_store_result = self.report_store.save(
+            package=package,
+            narratives=narratives,
+            artifact_paths=artifact_paths,
+            query=context["user_query"],
+            target_type=package.disease_profile.target_type,
+            target_name=target_name,
+            report_mode=context["report_mode"],
+            source_audit=package.source_audit,
+        )
         writer_state = {
             **context["handoff_state"],
             "status": "writer_complete",
             "writer_complete": True,
+            "report_mode": context["report_mode"],
             "final_report": artifacts.markdown_content,
             "final_report_markdown": artifacts.markdown_content,
             "final_report_path": artifacts.markdown_path,
@@ -239,6 +280,8 @@ class DiseaseReportOrchestrator:
             "final_report_pdf_path": artifacts.pdf_path,
             "final_report_ir_path": artifacts.ir_path,
             "report_ir": report_ir,
+            "report_store": report_store_result,
+            "report_database": self.report_database_path,
         }
         context.update({"report_ir": report_ir, "writer_state": writer_state})
         return "writer", writer_state
@@ -405,8 +448,19 @@ def _unique_values(values: list[str]) -> list[str]:
     return unique
 
 
-def _company_record_limit(max_trials: int) -> int:
-    return max(DEFAULT_COMPANY_MAX_TRIALS, int(max_trials))
+def _company_record_limit(max_trials: int, *, report_mode_limit: int) -> int:
+    requested_limit = max(DEFAULT_COMPANY_MAX_TRIALS, int(max_trials))
+    return min(requested_limit, int(report_mode_limit))
+
+
+def _package_with_report_mode(package: Any, report_mode: str) -> Any:
+    audit = package.source_audit
+    details = {**audit.details, "report_mode": normalize_report_mode(report_mode)}
+    return package.model_copy(
+        update={
+            "source_audit": audit.model_copy(update={"details": details}),
+        }
+    )
 
 
 __all__ = ["ANALYSIS_FOCUS", "DiseaseReportOrchestrator"]

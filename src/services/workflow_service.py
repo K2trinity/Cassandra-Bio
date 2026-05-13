@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Generator, Optional, Tuple
 
 from src.reports.disease.orchestrator import DiseaseReportOrchestrator
+from src.reports.disease.report_modes import normalize_report_mode
 
 
 class WorkflowService:
@@ -20,9 +21,17 @@ class WorkflowService:
 
     @staticmethod
     def _supports_target_mode(method: Callable[..., Any]) -> bool:
+        return WorkflowService._supports_parameter(method, "analysis_target_type")
+
+    @staticmethod
+    def _supports_report_mode(method: Callable[..., Any]) -> bool:
+        return WorkflowService._supports_parameter(method, "report_mode")
+
+    @staticmethod
+    def _supports_parameter(method: Callable[..., Any], parameter_name: str) -> bool:
         parameters = inspect.signature(method).parameters
         return (
-            "analysis_target_type" in parameters
+            parameter_name in parameters
             or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
         )
 
@@ -34,8 +43,10 @@ class WorkflowService:
         thread_id: Optional[str] = None,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ) -> Dict[str, Any]:
         _ = (pdf_paths, checkpointer, thread_id)
+        normalized_report_mode = normalize_report_mode(report_mode)
         orchestrator = self.orchestrator_factory()
         run_kwargs = {
             "user_query": user_query,
@@ -44,6 +55,8 @@ class WorkflowService:
         }
         if self._supports_target_mode(orchestrator.run):
             run_kwargs["analysis_target_type"] = analysis_target_type
+        if self._supports_report_mode(orchestrator.run):
+            run_kwargs["report_mode"] = normalized_report_mode
         return orchestrator.run(**run_kwargs)
 
     def stream(
@@ -57,8 +70,10 @@ class WorkflowService:
         allow_interrupts: bool = False,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         _ = (pdf_paths, checkpointer, thread_id, interrupt_before, allow_interrupts)
+        normalized_report_mode = normalize_report_mode(report_mode)
         orchestrator = self.orchestrator_factory()
         stream_kwargs = {
             "user_query": user_query,
@@ -67,6 +82,8 @@ class WorkflowService:
         }
         if self._supports_target_mode(orchestrator.stream):
             stream_kwargs["analysis_target_type"] = analysis_target_type
+        if self._supports_report_mode(orchestrator.stream):
+            stream_kwargs["report_mode"] = normalized_report_mode
         for node_name, state in orchestrator.stream(**stream_kwargs):
             if progress_callback is not None:
                 progress_callback(node_name, state)

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
-import time
 from typing import Any
 
 from src.backtest.price_snapshot import append_prices_daily_frame
@@ -41,12 +40,10 @@ from src.data_ingestion.provider_config import load_provider_config
 from src.data_ingestion.provider_log import record_provider_fetch
 from src.data_ingestion.provider_result import ProviderResult
 from src.data_ingestion.rate_limit import FixedWindowRateLimit, RateLimitDecision
+from src.data_ingestion.retry_policy import RetryPolicy, fetch_with_retry
 from src.data_ingestion.sec_client import SecClient
 from src.data_ingestion.tiingo_client import TiingoClient
 from src.data_ingestion.tiingo_prices import normalize_tiingo_eod_prices
-
-MAX_RUNTIME_LIMIT_SLEEP_SECONDS = 2.0
-
 
 @dataclass(frozen=True)
 class DownloadRequest:
@@ -57,6 +54,9 @@ class DownloadRequest:
     dry_run: bool = True
     resume: bool = True
     limit_tickers: int | None = None
+    include_tickers: tuple[str, ...] | None = None
+    max_provider_attempts: int = 3
+    max_retry_sleep_seconds: float = 30.0
     universe_id: str = BIOTECH_US_UNIVERSE_ID
     research_dir: str | Path = RESEARCH_DIR
     daily_fmp_budget: int = 240
@@ -67,6 +67,16 @@ class DownloadRequest:
             "providers",
             tuple(_provider_name(provider) for provider in self.providers),
         )
+        if self.include_tickers is not None:
+            object.__setattr__(
+                self,
+                "include_tickers",
+                tuple(_normalize_ticker(ticker) for ticker in self.include_tickers),
+            )
+        if self.max_provider_attempts < 1:
+            raise ValueError("max_provider_attempts must be at least 1")
+        if self.max_retry_sleep_seconds < 0:
+            raise ValueError("max_retry_sleep_seconds must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -118,7 +128,7 @@ def run_download(
         as_of_date=request.snapshot_date,
     )
     selected_members = _limited_members(
-        universe_snapshot.members,
+        _included_members(universe_snapshot.members, request.include_tickers),
         request.limit_tickers,
     )
     data_snapshot_id = _build_snapshot_id(request, universe_snapshot.universe_snapshot_id)
@@ -320,6 +330,8 @@ def _execute_tiingo_unit(
             "period_start": unit.period_start,
             "period_end": unit.period_end,
         },
+        max_provider_attempts=request.max_provider_attempts,
+        max_retry_sleep_seconds=request.max_retry_sleep_seconds,
         fetch=lambda: client.fetch_daily_prices(
             ticker=unit.ticker,
             start_date=request.start_date,
@@ -428,6 +440,8 @@ def _execute_sec_unit(
         db_path=db_path,
         rate_limiters=rate_limiters,
         metadata={"ticker": unit.ticker, "cik": cik},
+        max_provider_attempts=request.max_provider_attempts,
+        max_retry_sleep_seconds=request.max_retry_sleep_seconds,
         fetch=lambda: client.fetch_submissions(cik),
     )
     early = _early_result_from_provider_status(
@@ -448,6 +462,8 @@ def _execute_sec_unit(
         db_path=db_path,
         rate_limiters=rate_limiters,
         metadata={"ticker": unit.ticker, "cik": cik},
+        max_provider_attempts=request.max_provider_attempts,
+        max_retry_sleep_seconds=request.max_retry_sleep_seconds,
         fetch=lambda: client.fetch_companyfacts(cik),
     )
     early = _early_result_from_provider_status(
@@ -529,6 +545,8 @@ def _execute_fmp_unit(
         db_path=db_path,
         rate_limiters=rate_limiters,
         metadata={"ticker": unit.ticker},
+        max_provider_attempts=request.max_provider_attempts,
+        max_retry_sleep_seconds=request.max_retry_sleep_seconds,
         fetch=lambda: client.fetch_profile(unit.ticker),
     )
     early = _early_result_from_provider_status(
@@ -564,6 +582,8 @@ def _execute_fmp_unit(
             db_path=db_path,
             rate_limiters=rate_limiters,
             metadata={"ticker": unit.ticker},
+            max_provider_attempts=request.max_provider_attempts,
+            max_retry_sleep_seconds=request.max_retry_sleep_seconds,
             fetch=fetch,
         )
         if _is_fmp_statement_entitlement_failure(result):
@@ -655,55 +675,56 @@ def _fetch_with_runtime_limit(
     db_path: Path,
     rate_limiters: Mapping[str, Any],
     metadata: Mapping[str, Any],
+    max_provider_attempts: int,
+    max_retry_sleep_seconds: float,
     fetch: Callable[[], ProviderResult],
+    sleeper: Callable[[float], None] | None = None,
 ) -> ProviderResult:
-    limiter = rate_limiters.get(_provider_name(provider))
-    decision = _allow_provider_request(limiter, provider)
     request_hash = _stable_endpoint_request_hash(unit, endpoint)
-    if not decision.allowed:
-        result = ProviderResult(
-            status="rate_limited",
-            request_hash=request_hash,
-            message="runtime rate limit exhausted",
-            retry_after_seconds=decision.retry_after_seconds,
-        )
-        _record_provider_result(
-            provider=provider,
-            endpoint=endpoint,
-            result=result,
-            metadata=metadata,
-            db_path=db_path,
-        )
-        return result
+    policy = RetryPolicy(
+        max_attempts=max_provider_attempts,
+        max_sleep_seconds=max_retry_sleep_seconds,
+    )
 
-    try:
-        result = fetch()
-    except Exception as exc:
-        result = ProviderResult(
-            status="failed",
-            request_hash=request_hash,
-            message=str(exc),
-        )
+    def attempt() -> ProviderResult:
+        limiter = rate_limiters.get(_provider_name(provider))
+        decision = _allow_provider_request(limiter, provider)
+        if not decision.allowed:
+            return ProviderResult(
+                status="rate_limited",
+                request_hash=request_hash,
+                message="runtime rate limit exhausted",
+                retry_after_seconds=decision.retry_after_seconds,
+            )
+        try:
+            return fetch()
+        except Exception as exc:
+            return ProviderResult(
+                status="failed",
+                request_hash=request_hash,
+                message=str(exc),
+            )
+
+    outcome = fetch_with_retry(attempt, policy=policy, sleeper=sleeper)
     _record_provider_result(
         provider=provider,
         endpoint=endpoint,
-        result=result,
-        metadata=metadata,
+        result=outcome.result,
+        metadata={
+            **dict(metadata),
+            "provider_attempts": outcome.attempts,
+            "retry_sleep_seconds": list(outcome.sleep_seconds),
+        },
         db_path=db_path,
+        retry_count=outcome.retry_count,
     )
-    return result
+    return outcome.result
 
 
 def _allow_provider_request(limiter: Any | None, provider: str) -> RateLimitDecision:
     if limiter is None:
         return RateLimitDecision(allowed=True, retry_after_seconds=0.0)
     decision = limiter.allow(provider)
-    if decision.allowed:
-        return decision
-    retry_after = float(decision.retry_after_seconds or 0.0)
-    if 0.0 < retry_after <= MAX_RUNTIME_LIMIT_SLEEP_SECONDS:
-        time.sleep(retry_after)
-        return limiter.allow(provider)
     return decision
 
 
@@ -714,6 +735,7 @@ def _record_provider_result(
     result: ProviderResult,
     metadata: Mapping[str, Any],
     db_path: Path,
+    retry_count: int = 0,
 ) -> None:
     payload = dict(metadata)
     if result.retry_after_seconds is not None:
@@ -723,6 +745,7 @@ def _record_provider_result(
         endpoint=endpoint,
         request_hash=result.request_hash,
         status=result.status,
+        retry_count=retry_count,
         message=result.message,
         metadata=payload,
         db_path=db_path,
@@ -885,6 +908,16 @@ def _limited_members(
     if limit_tickers < 0:
         raise ValueError("limit_tickers must be non-negative")
     return tuple(members[:limit_tickers])
+
+
+def _included_members(
+    members: Sequence[UniverseMember],
+    include_tickers: Sequence[str] | None,
+) -> tuple[UniverseMember, ...]:
+    if include_tickers is None:
+        return tuple(members)
+    included = {_normalize_ticker(ticker) for ticker in include_tickers}
+    return tuple(member for member in members if member.ticker in included)
 
 
 def _build_snapshot_id(request: DownloadRequest, universe_snapshot_id: str) -> str:
@@ -1086,6 +1119,13 @@ def _provider_name(provider: str) -> str:
     if not name:
         raise ValueError("provider must be non-empty")
     return name
+
+
+def _normalize_ticker(ticker: str) -> str:
+    normalized = str(ticker).strip().upper()
+    if not normalized:
+        raise ValueError("include_tickers cannot contain empty values")
+    return normalized
 
 
 def _unit_payload(unit: _PlannedUnit, *, reason: str) -> dict[str, Any]:

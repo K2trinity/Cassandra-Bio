@@ -44,6 +44,7 @@ from config import Settings
 
 # Import the core LangGraph workflow
 from src.services.workflow_service import WorkflowService
+from src.reports.disease.report_modes import normalize_report_mode
 _workflow_service = WorkflowService()
 
 # ============================================================================
@@ -174,6 +175,7 @@ active_analysis: Dict[str, Any] = {
     "status": "idle",
     "query": None,
     "analysis_target_type": "auto",
+    "report_mode": "fast",
     "thread": None,
     "result": None,
     "result_payload": None,
@@ -219,6 +221,7 @@ def _reset_active_analysis():
     active_analysis["progress"] = active_analysis.get("progress", 0)
     active_analysis["result_payload"] = None
     active_analysis["analysis_target_type"] = "auto"
+    active_analysis["report_mode"] = "fast"
     active_analysis["step_status"] = _default_step_status()
 
 
@@ -361,6 +364,7 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
         "task_id": active_analysis.get("task_id"),
         "query": active_analysis.get("query"),
         "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
+        "report_mode": active_analysis.get("report_mode", "fast"),
     })
     _emit_event("step", {
         "step": step,
@@ -370,6 +374,7 @@ def _emit_progress(step: str, status: str, pct: int, message: str = "") -> None:
         "task_id": active_analysis.get("task_id"),
         "query": active_analysis.get("query"),
         "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
+        "report_mode": active_analysis.get("report_mode", "fast"),
     })
 
 
@@ -572,6 +577,7 @@ def analyze():
         pdf_paths = data.get('pdfs', [])
         requested_narrative_language = data.get("narrative_language")
         requested_target_type = data.get("analysis_target_type")
+        requested_report_mode = data.get("report_mode")
     else:
         # Handle FormData (multipart/form-data with file uploads)
         data = {}
@@ -579,6 +585,7 @@ def analyze():
         pdf_files = request.files.getlist('files')
         requested_narrative_language = request.form.get("narrative_language")
         requested_target_type = request.form.get("analysis_target_type")
+        requested_report_mode = request.form.get("report_mode")
         
         # Save uploaded PDFs temporarily
         pdf_paths = []
@@ -604,6 +611,7 @@ def analyze():
 
     try:
         analysis_target_type = _normalize_analysis_target_type(requested_target_type)
+        report_mode = normalize_report_mode(requested_report_mode)
     except ValueError as exc:
         return jsonify({
             "status": "error",
@@ -627,6 +635,7 @@ def analyze():
         "status": "running",
         "query": query,
         "analysis_target_type": analysis_target_type,
+        "report_mode": report_mode,
         "thread": None,
         "result": None,
         "result_payload": None,
@@ -678,6 +687,7 @@ def analyze():
                             "task_id": active_analysis.get("task_id"),
                             "query": active_analysis.get("query"),
                             "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
+                            "report_mode": active_analysis.get("report_mode", "fast"),
                         })
                     _ticker_stop.wait(timeout=3.0)  # tick every ~3s
 
@@ -692,6 +702,7 @@ def analyze():
                 pdf_paths=pdf_paths if pdf_paths else None,
                 narrative_language=narrative_language,
                 analysis_target_type=analysis_target_type,
+                report_mode=report_mode,
             ):
                 # Check for cancellation signal from /api/reset or page refresh.
                 # Guard with task_id to avoid cancelling a NEW analysis that
@@ -704,6 +715,7 @@ def analyze():
                         'task_id': active_analysis.get("task_id"),
                         'query': active_analysis.get("query"),
                         'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
+                        'report_mode': active_analysis.get("report_mode", "fast"),
                     })
                     active_analysis["running"] = False
                     active_analysis["status"] = "cancelled"
@@ -729,6 +741,7 @@ def analyze():
                     pdf_paths=pdf_paths if pdf_paths else None,
                     narrative_language=narrative_language,
                     analysis_target_type=analysis_target_type,
+                    report_mode=report_mode,
                 )
             
             # Store result
@@ -822,6 +835,7 @@ def analyze():
                 'task_id': active_analysis.get("task_id"),
                 'query': query,
                 'analysis_target_type': analysis_target_type,
+                'report_mode': report_mode,
                 'narrative_language': narrative_language,
                 'report_path': pdf_report_path_v2 or report_path,
                 'html_report_path': html_report_path,
@@ -855,6 +869,8 @@ def analyze():
                 'clinical_data': clinical_data,
                 'evidence_stats': evidence_stats,
                 'source_audit': source_audit,
+                'report_store': result.get("report_store"),
+                'report_database': result.get("report_database"),
                 'empty_source_guidance': empty_source_guidance,
                 'kline_bridge': kline_bridge,
                 'kline_bridge_status': result.get("kline_bridge_status") or kline_bridge.get("status"),
@@ -903,6 +919,7 @@ def analyze():
                 'task_id': active_analysis.get("task_id"),
                 'query': active_analysis.get("query"),
                 'analysis_target_type': active_analysis.get("analysis_target_type", "auto"),
+                'report_mode': active_analysis.get("report_mode", "fast"),
                 'step': active_analysis.get("current_step"),
                 'progress': active_analysis.get("progress", 0),
             })
@@ -918,6 +935,7 @@ def analyze():
         "message": "Analysis started. Monitor progress via WebSocket.",
         "query": query,
         "analysis_target_type": analysis_target_type,
+        "report_mode": report_mode,
         "task_id": active_analysis.get("task_id"),
     }), 202
 
@@ -945,6 +963,7 @@ def reset_analysis():
     active_analysis["result_payload"] = None
     active_analysis["task_id"] = None
     active_analysis["analysis_target_type"] = "auto"
+    active_analysis["report_mode"] = "fast"
     active_analysis["progress"] = 0
     active_analysis["current_step"] = None
     active_analysis["step_status"] = _default_step_status()
@@ -973,6 +992,7 @@ def get_status():
         "status": active_analysis.get("status"),
         "query": active_analysis["query"],
         "analysis_target_type": active_analysis.get("analysis_target_type", "auto"),
+        "report_mode": active_analysis.get("report_mode", "fast"),
         "error": active_analysis["error"],
         "task_id": active_analysis.get("task_id"),
         "progress": active_analysis.get("progress", 0),

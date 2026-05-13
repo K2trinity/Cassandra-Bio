@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import uuid
 from typing import Any
 
 from src.backtest import events_db
@@ -8,7 +9,6 @@ from src.kline.event_filter import enrich_event_metadata
 from src.kline.event_trust import (
     apply_event_trust,
     build_query_hash,
-    build_source_run_id,
 )
 from src.kline.ticker_resolver import TickerResolver
 from src.reports.disease.models import ClinicalTrialRecord, DiseaseReportPackage
@@ -64,16 +64,17 @@ class ReportKlineBridge:
                 company_name=company_name,
             )
 
-        source_run_id = build_source_run_id(company.ticker, "report_bridge")
         query_hash = build_query_hash(
             "report_bridge",
             company.ticker,
             {
                 "company_name": company_name,
                 "retained_count": retained_count,
+                "trial_ids": [trial.nct_number for trial in report_package.clinical_trials],
                 "trial_count": trial_count,
             },
         )
+        source_run_id = f"report_bridge:{company.ticker}:{query_hash}"
         trial_payloads = [
             _trial_to_milestone_payload(trial)
             for trial in report_package.clinical_trials
@@ -161,11 +162,17 @@ def _trusted_report_event(
     company_identity: str,
 ) -> dict[str, Any]:
     enriched = enrich_event_metadata(event)
+    source_event_id = str(enriched.get("id") or "")
+    enriched["id"] = _report_event_id(
+        ticker=ticker,
+        source_event_id=source_event_id,
+    )
     metadata = dict(enriched.get("metadata") or {})
     metadata.update(
         {
             "derived_from_report": True,
             "report_bridge": True,
+            "report_bridge_source_event_id": source_event_id,
             "report_company_name": company_name,
             "report_path": report_path,
             "report_target_type": "company",
@@ -181,6 +188,15 @@ def _trusted_report_event(
         company_identity=company_identity,
         ownership_status="owned",
         trust_status="trusted",
+    )
+
+
+def _report_event_id(*, ticker: str, source_event_id: str) -> str:
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"report_bridge|{ticker.strip().upper()}|{source_event_id}",
+        )
     )
 
 

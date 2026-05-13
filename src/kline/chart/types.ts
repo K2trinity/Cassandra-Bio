@@ -12,7 +12,19 @@ export interface OHLCRow {
 export interface BiotechEventMetadata extends Record<string, unknown> {
   backtest_eligible?: boolean;
   confidence_score?: number;
+  /** True when the event was derived from a generated report artifact. */
+  derived_from_report?: boolean;
   impact_score?: number;
+  /** True for trusted events inserted by the report-to-K-line bridge. */
+  report_bridge?: boolean;
+  /** Original ClinicalTrials event id before report-bridge namespacing. */
+  report_bridge_source_event_id?: string;
+  /** Report company name captured by the bridge, when available. */
+  report_company_name?: string;
+  /** Filesystem or artifact path for the originating report, when available. */
+  report_path?: string | null;
+  /** Report target scope such as "company" or "disease", when available. */
+  report_target_type?: string;
   source_tier?: string;
 }
 

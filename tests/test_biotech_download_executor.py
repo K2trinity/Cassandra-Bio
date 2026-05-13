@@ -41,6 +41,16 @@ class FakeTiingoClient:
         )
 
 
+class SequencedTiingoClient:
+    def __init__(self, results: list[ProviderResult]) -> None:
+        self.calls: list[str] = []
+        self.results = list(results)
+
+    def fetch_daily_prices(self, *, ticker: str, start_date: str, end_date: str):
+        self.calls.append(ticker)
+        return self.results.pop(0)
+
+
 class FakeSecClient:
     def __init__(
         self,
@@ -991,6 +1001,7 @@ def test_executor_marks_provider_runtime_budget_exhaustion_rate_limited(
             dry_run=False,
             limit_tickers=1,
             daily_fmp_budget=1,
+            max_provider_attempts=1,
             research_dir=tmp_path,
         ),
         universe_rows=_universe_rows(),
@@ -1043,6 +1054,7 @@ def test_tiingo_rate_limited_and_failed_statuses_update_counts(tmp_path):
         providers=("tiingo",),
         dry_run=False,
         limit_tickers=1,
+        max_retry_sleep_seconds=0.0,
         research_dir=tmp_path / "rate",
     )
 
@@ -1078,6 +1090,152 @@ def test_tiingo_rate_limited_and_failed_statuses_update_counts(tmp_path):
     )
     assert failed.failed_units == 1
     assert failed.rate_limited_units == 0
+
+
+def test_include_tickers_filters_selected_members_without_shrinking_universe(tmp_path):
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    client = FakeTiingoClient()
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("tiingo",),
+            dry_run=False,
+            include_tickers=("MRNA",),
+            research_dir=tmp_path,
+        ),
+        universe_rows=_universe_rows(),
+        tiingo_client=client,
+    )
+
+    assert summary.universe_member_count == 2
+    assert summary.planned_units == 1
+    assert client.calls == [
+        {
+            "ticker": "MRNA",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-08",
+        }
+    ]
+    with open(summary.manifest_path, encoding="utf-8") as file:
+        manifest = json.load(file)
+    assert manifest["coverage"]["selected_tickers"] == ["MRNA"]
+    assert manifest["metadata"]["universe_snapshot_id"].startswith("univ_")
+
+
+def test_provider_retry_records_final_log_retry_count_and_metadata(tmp_path):
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+
+    client = SequencedTiingoClient(
+        [
+            ProviderResult(
+                status="rate_limited",
+                request_hash="req_rate",
+                message="slow down",
+                retry_after_seconds=5,
+            ),
+            ProviderResult(
+                status="success",
+                request_hash="req_success",
+                rows=FakeTiingoClient().fetch_daily_prices(
+                    ticker="ABBA",
+                    start_date="2026-05-01",
+                    end_date="2026-05-08",
+                ).rows,
+            ),
+        ]
+    )
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("tiingo",),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+            max_provider_attempts=2,
+            max_retry_sleep_seconds=0.0,
+        ),
+        universe_rows=_universe_rows(),
+        tiingo_client=client,
+    )
+
+    assert summary.completed_units == 1
+    assert client.calls == ["ABBA", "ABBA"]
+
+    import duckdb
+
+    conn = duckdb.connect(str(tmp_path / "cassandra_research.duckdb"))
+    try:
+        row = conn.execute(
+            """
+            SELECT request_hash, status, retry_count, metadata_json
+            FROM provider_fetch_log
+            WHERE provider = 'tiingo'
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row[0:3] == ("req_success", "success", 1)
+    metadata = json.loads(row[3])
+    assert metadata["provider_attempts"] == 2
+    assert metadata["retry_sleep_seconds"] == [0.0]
+
+
+def test_runtime_rate_limit_retry_uses_retry_policy_sleep_cap(tmp_path, monkeypatch):
+    from src.data_ingestion import retry_policy
+    from src.data_ingestion.download_executor import DownloadRequest, run_download
+    from src.data_ingestion.rate_limit import RateLimitDecision
+
+    class OneRetryLimiter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def allow(self, provider: str) -> RateLimitDecision:
+            self.calls += 1
+            if self.calls == 1:
+                return RateLimitDecision(allowed=False, retry_after_seconds=0.05)
+            return RateLimitDecision(allowed=True, retry_after_seconds=0.0)
+
+    limiter = OneRetryLimiter()
+    sleeps: list[float] = []
+    monkeypatch.setattr(retry_policy.time, "sleep", sleeps.append)
+    client = FakeTiingoClient(
+        ProviderResult(
+            status="success",
+            request_hash="req_success",
+            rows=FakeTiingoClient().fetch_daily_prices(
+                ticker="ABBA",
+                start_date="2026-05-01",
+                end_date="2026-05-08",
+            ).rows,
+        )
+    )
+
+    summary = run_download(
+        DownloadRequest(
+            snapshot_date="2026-05-08",
+            start_date="2026-05-01",
+            end_date="2026-05-08",
+            providers=("tiingo",),
+            dry_run=False,
+            limit_tickers=1,
+            research_dir=tmp_path,
+            max_provider_attempts=2,
+            max_retry_sleep_seconds=0.0,
+        ),
+        universe_rows=_universe_rows(),
+        tiingo_client=client,
+        rate_limiters={"tiingo": limiter},
+    )
+
+    assert summary.completed_units == 1
+    assert limiter.calls == 2
+    assert sleeps == [0.0]
 
 
 def test_normalization_failure_does_not_write_synthetic_provider_fetch(tmp_path):

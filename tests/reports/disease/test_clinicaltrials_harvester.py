@@ -140,14 +140,14 @@ def test_company_harvester_issues_exact_sponsor_layer_queries():
             "pageSize": 50,
             "format": "json",
         },
-        {
-            "query.spons": "Vertex Pharmaceuticals",
-            "filter.advanced": "AREA[HasResults]true",
-            "sort": "LastUpdatePostDate:desc",
-            "pageSize": 30,
-            "format": "json",
-        },
-    ]
+            {
+                "query.spons": "Vertex Pharmaceuticals",
+                "filter.advanced": "AREA[HasResults]true",
+                "sort": "LastUpdatePostDate:desc",
+                "pageSize": 20,
+                "format": "json",
+            },
+        ]
     assert result.raw_count == 0
 
 
@@ -267,6 +267,44 @@ def test_company_harvester_balances_large_layers_before_capping_to_100():
     assert sum(nct_id.startswith("NCTCAT") for nct_id in nct_ids) == 30
     assert sum(nct_id.startswith("NCTEXP") for nct_id in nct_ids) == 50
     assert sum(nct_id.startswith("NCTTRK") for nct_id in nct_ids) == 20
+
+
+def test_company_harvester_scales_layer_queries_and_selection_for_large_modes():
+    profile = _company_profile()
+    calls = []
+
+    def make_many(prefix, count):
+        return [
+            _api_study(
+                f"NCT{prefix}{index:05d}",
+                f"{prefix} study {index}",
+                [f"{prefix} Condition"],
+                f"2026-01-{(index % 28) + 1:02d}",
+            )
+            for index in range(count)
+        ]
+
+    def get_json(url, params):
+        calls.append(dict(params))
+        if params["sort"] == "PrimaryCompletionDate:asc":
+            return {"studies": make_many("CAT", 200)}
+        if params["sort"] == "StudyFirstPostDate:desc":
+            return {"studies": make_many("EXP", 200)}
+        if params["sort"] == "LastUpdatePostDate:desc":
+            return {"studies": make_many("TRK", 200)}
+        raise AssertionError(f"unexpected params: {params}")
+
+    result = ClinicalTrialsCompanyHarvester(get_json=get_json).fetch_raw_studies(
+        profile,
+        max_records=250,
+    )
+
+    assert [call["pageSize"] for call in calls] == [75, 125, 50]
+    nct_ids = _nct_ids(result.studies)
+    assert len(nct_ids) == 250
+    assert sum(nct_id.startswith("NCTCAT") for nct_id in nct_ids) == 75
+    assert sum(nct_id.startswith("NCTEXP") for nct_id in nct_ids) == 125
+    assert sum(nct_id.startswith("NCTTRK") for nct_id in nct_ids) == 50
 
 
 def test_harvester_queries_each_literal_condition_term_and_deduplicates_retained_ncts():

@@ -107,6 +107,7 @@ class FakeOrchestrator:
         output_dir: str,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ) -> dict[str, Any]:
         self.run_calls.append(
             {
@@ -114,6 +115,7 @@ class FakeOrchestrator:
                 "output_dir": output_dir,
                 "narrative_language": narrative_language,
                 "analysis_target_type": analysis_target_type,
+                "report_mode": report_mode,
             }
         )
         return {
@@ -129,6 +131,7 @@ class FakeOrchestrator:
         output_dir: str,
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
+        report_mode: str = "fast",
     ):
         self.stream_calls.append(
             {
@@ -136,6 +139,7 @@ class FakeOrchestrator:
                 "output_dir": output_dir,
                 "narrative_language": narrative_language,
                 "analysis_target_type": analysis_target_type,
+                "report_mode": report_mode,
             }
         )
         for node_name in ["harvester", "extension_handoff", "writer"]:
@@ -335,6 +339,41 @@ def test_orchestrator_applies_max_trials_after_landscape_prioritization(tmp_path
     assert events[3][1]["kline_bridge"]["skip_reason"] == "not_company_report"
 
 
+def test_orchestrator_report_mode_controls_default_retained_limit(tmp_path):
+    studies = [
+        _study(
+            f"NCT{i:08d}",
+            "Alzheimer Disease",
+            "COMPLETED",
+            phases=["PHASE3"],
+            first_posted=f"2024-{((i % 12) + 1):02d}-15",
+            has_results=True,
+        )
+        for i in range(300)
+    ]
+
+    def fake_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {"studies": studies}
+
+    orchestrator = DiseaseReportOrchestrator(
+        clinicaltrials_get_json=fake_get_json,
+        clinicaltrials_get_text=lambda url: "",
+        renderer_adapter=FakeRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
+        current_date_for_tests="2026-04-27",
+    )
+
+    state = orchestrator.run(
+        "Alzheimer disease",
+        output_dir=tmp_path,
+        report_mode="medium",
+    )
+
+    package = state["disease_report_package"]
+    assert state["report_mode"] == "medium"
+    assert len(package["clinical_trials"]) == 250
+
+
 def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
     orchestrator = FakeOrchestrator()
     service = WorkflowService(
@@ -358,6 +397,7 @@ def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
             "analysis_target_type": "auto",
+            "report_mode": "fast",
         }
     ]
 
@@ -377,6 +417,7 @@ def test_workflow_service_run_forwards_target_mode(tmp_path):
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
             "analysis_target_type": "company",
+            "report_mode": "fast",
         }
     ]
 
@@ -410,6 +451,7 @@ def test_workflow_service_stream_uses_three_public_progress_nodes(tmp_path):
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
             "analysis_target_type": "auto",
+            "report_mode": "fast",
         }
     ]
     assert not {
@@ -440,8 +482,23 @@ def test_workflow_service_stream_forwards_target_mode(tmp_path):
             "output_dir": str(tmp_path),
             "narrative_language": "zh",
             "analysis_target_type": "company",
+            "report_mode": "fast",
         }
     ]
+
+
+def test_workflow_service_forwards_report_mode_to_run_and_stream(tmp_path):
+    orchestrator = FakeOrchestrator()
+    service = WorkflowService(
+        orchestrator_factory=lambda: orchestrator,
+        output_dir=tmp_path,
+    )
+
+    service.run("Vertex Pharmaceuticals", report_mode="medium")
+    list(service.stream("Vertex Pharmaceuticals", report_mode="pro"))
+
+    assert orchestrator.run_calls[-1]["report_mode"] == "medium"
+    assert orchestrator.stream_calls[-1]["report_mode"] == "pro"
 
 
 def test_orchestrator_passes_narrative_language_to_service(tmp_path):
@@ -481,6 +538,7 @@ def test_workflow_service_forwards_narrative_language(tmp_path):
             output_dir: str,
             narrative_language: str = "zh",
             analysis_target_type: str = "auto",
+            report_mode: str = "fast",
         ) -> dict[str, Any]:
             return {
                 "status": "writer_complete",
@@ -495,3 +553,37 @@ def test_workflow_service_forwards_narrative_language(tmp_path):
     state = service.run("Alzheimer disease", narrative_language="en")
 
     assert state["narrative_language"] == "en"
+
+
+def test_orchestrator_persists_report_after_writer_and_exposes_store_state(tmp_path):
+    def fake_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {"studies": [_study("NCT_ALZHEIMER", "Alzheimer Disease")]}
+
+    orchestrator = DiseaseReportOrchestrator(
+        clinicaltrials_get_json=fake_get_json,
+        clinicaltrials_get_text=lambda url: "",
+        renderer_adapter=FakeRendererAdapter(),
+        narrative_service=EmptyNarrativeService(),
+        current_date_for_tests="2026-04-27",
+        report_database_path=tmp_path / "events.db",
+    )
+
+    first = orchestrator.run(
+        "Alzheimer disease",
+        output_dir=tmp_path / "reports",
+        max_trials=50,
+        report_mode="medium",
+    )
+    second = orchestrator.run(
+        "Alzheimer disease",
+        output_dir=tmp_path / "reports",
+        max_trials=50,
+        report_mode="medium",
+    )
+
+    assert first["report_mode"] == "medium"
+    assert first["disease_report_package"]["source_audit"]["details"]["report_mode"] == "medium"
+    assert first["report_store"]["inserted"] is True
+    assert first["report_database"] == str(tmp_path / "events.db")
+    assert second["report_store"]["inserted"] is False
+    assert second["report_store"]["report_id"] == first["report_store"]["report_id"]
