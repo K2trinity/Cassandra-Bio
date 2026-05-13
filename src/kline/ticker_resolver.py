@@ -83,6 +83,11 @@ _UNIVERSE: dict[str, KlineCompany] = {
     ),
 }
 
+_LEGAL_ENTITY_SUFFIX_RE = re.compile(
+    r"\b(?:incorporated|inc|corp|corporation|ltd|limited|plc|llc|company|co|ag|sa|nv)\b",
+    flags=re.IGNORECASE,
+)
+
 
 class TickerResolver:
     def normalize(self, value: object) -> str | None:
@@ -107,6 +112,26 @@ class TickerResolver:
     def list_universe(self) -> list[KlineCompany]:
         return [_copy_company(_UNIVERSE[ticker]) for ticker in sorted(_UNIVERSE)]
 
+    def resolve_company_in_universe(self, value: object) -> KlineCompany | None:
+        """Resolve a company name or alias only when it exists in the K-line universe."""
+        normalized_value = _company_lookup_key(value)
+        if not normalized_value:
+            return None
+
+        for company in self.list_universe():
+            candidates = [company.ticker, company.name, *company.aliases]
+            for candidate in candidates:
+                if _company_lookup_key(candidate) == normalized_value:
+                    return company
+        return None
+
 
 def _copy_company(company: KlineCompany) -> KlineCompany:
     return replace(company, aliases=list(company.aliases))
+
+
+def _company_lookup_key(value: object) -> str:
+    text = str(value or "").replace("&", " and ").lower()
+    words = re.findall(r"[a-z0-9]+", text)
+    filtered = [word for word in words if not _LEGAL_ENTITY_SUFFIX_RE.fullmatch(word)]
+    return " ".join(filtered).strip()

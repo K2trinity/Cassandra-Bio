@@ -17,7 +17,9 @@ from .models import ClinicalTrialRecord
 from .narrative import DiseaseReportNarrativeService
 from .normalizer import normalize_trial_payload
 from .package_builder import DiseaseReportPackageBuilder
+from .pipeline import DAGPipeline, PipelineStage
 from .relevance import DiseaseRelevanceGate
+from .report_kline_bridge import ReportKlineBridge
 from .renderer_adapter import DiseaseReportRendererAdapter
 from .resolver import DiseaseResolver
 from .risk_engine import RuleBasedRiskEngine
@@ -39,6 +41,7 @@ class DiseaseReportOrchestrator:
         current_date_for_tests: str | None = None,
         company_route_provider: Any | None = None,
         narrative_service: Any | None = None,
+        report_kline_bridge: Any | None = None,
     ) -> None:
         self.max_workers = max(1, int(max_workers))
         self.resolver = DiseaseResolver()
@@ -59,6 +62,7 @@ class DiseaseReportOrchestrator:
         self.narrative_service = narrative_service or DiseaseReportNarrativeService()
         self.ir_builder = DiseaseReportIRBuilder()
         self.renderer_adapter = renderer_adapter or DiseaseReportRendererAdapter()
+        self.report_kline_bridge = report_kline_bridge or ReportKlineBridge()
 
     def run(
         self,
@@ -94,6 +98,41 @@ class DiseaseReportOrchestrator:
         narrative_language: str = "zh",
         analysis_target_type: str = "auto",
     ) -> Iterator[tuple[str, dict[str, Any]]]:
+        context: dict[str, Any] = {
+            "analysis_target_type": analysis_target_type,
+            "max_trials": max_trials,
+            "narrative_language": narrative_language,
+            "output_dir": output_dir,
+            "user_query": user_query,
+        }
+        yield from self._build_pipeline().run(context)
+
+    def _build_pipeline(self) -> DAGPipeline:
+        return DAGPipeline(
+            [
+                PipelineStage("harvest", self._run_harvest_stage),
+                PipelineStage(
+                    "package",
+                    self._run_package_stage,
+                    depends_on=("harvest",),
+                ),
+                PipelineStage(
+                    "writer",
+                    self._run_writer_stage,
+                    depends_on=("package",),
+                ),
+                PipelineStage(
+                    "report_to_kline_bridge",
+                    self._run_report_to_kline_bridge_stage,
+                    depends_on=("writer",),
+                ),
+            ]
+        )
+
+    def _run_harvest_stage(self, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        user_query = context["user_query"]
+        max_trials = context["max_trials"]
+        analysis_target_type = context["analysis_target_type"]
         profile = resolve_analysis_target(
             user_query,
             requested_target_type=analysis_target_type,
@@ -123,7 +162,6 @@ class DiseaseReportOrchestrator:
             retained_records,
             disease_name=profile.disease_name,
         )
-
         harvest_state = self._build_harvest_state(
             user_query=user_query,
             profile=profile,
@@ -131,26 +169,39 @@ class DiseaseReportOrchestrator:
             raw_records=raw_result.studies,
             rejected_nct_numbers=rejected_nct_numbers,
         )
-        yield "harvester", harvest_state
+        context.update(
+            {
+                "harvest_state": harvest_state,
+                "profile": profile,
+                "raw_records": raw_result.studies,
+                "raw_result": raw_result,
+                "record_limit": record_limit,
+                "rejected_nct_numbers": rejected_nct_numbers,
+                "retained_records": retained_records,
+                "risk_records": risk_records,
+            }
+        )
+        return "harvester", harvest_state
 
+    def _run_package_stage(self, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         package = self.package_builder.build(
-            disease_profile=profile,
-            retained_records=retained_records,
-            raw_count=raw_result.raw_count,
-            rejected_nct_numbers=rejected_nct_numbers,
-            risk_records=risk_records,
-            max_records=record_limit,
+            disease_profile=context["profile"],
+            retained_records=context["retained_records"],
+            raw_count=context["raw_result"].raw_count,
+            rejected_nct_numbers=context["rejected_nct_numbers"],
+            risk_records=context["risk_records"],
+            max_records=context["record_limit"],
         )
         package = self.company_route_provider.enrich(package)
         package_state = self._build_package_state(
-            candidate_state=harvest_state,
+            candidate_state=context["harvest_state"],
             retained_records=list(package.clinical_trials),
-            raw_records=raw_result.studies,
-            rejected_nct_numbers=rejected_nct_numbers,
+            raw_records=context["raw_records"],
+            rejected_nct_numbers=context["rejected_nct_numbers"],
         )
         narratives = self.narrative_service.generate(
             package,
-            language="en" if narrative_language == "en" else "zh",
+            language="en" if context["narrative_language"] == "en" else "zh",
         )
         handoff_state = {
             **package_state,
@@ -159,16 +210,26 @@ class DiseaseReportOrchestrator:
             "disease_report_package": package.model_dump(mode="json"),
             "disease_report_narratives": narratives.model_dump(mode="json"),
         }
-        yield "extension_handoff", handoff_state
+        context.update(
+            {
+                "handoff_state": handoff_state,
+                "narratives": narratives,
+                "package": package,
+            }
+        )
+        return "extension_handoff", handoff_state
 
+    def _run_writer_stage(self, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        package = context["package"]
+        narratives = context["narratives"]
         report_ir = self.ir_builder.build(package, narratives=narratives)
         artifacts = self.renderer_adapter.render_all(
             document_ir=report_ir,
-            output_dir=output_dir,
-            project_name=profile.disease_name,
+            output_dir=context["output_dir"],
+            project_name=package.disease_profile.disease_name,
         )
         writer_state = {
-            **handoff_state,
+            **context["handoff_state"],
             "status": "writer_complete",
             "writer_complete": True,
             "final_report": artifacts.markdown_content,
@@ -179,7 +240,31 @@ class DiseaseReportOrchestrator:
             "final_report_ir_path": artifacts.ir_path,
             "report_ir": report_ir,
         }
-        yield "writer", writer_state
+        context.update({"report_ir": report_ir, "writer_state": writer_state})
+        return "writer", writer_state
+
+    def _run_report_to_kline_bridge_stage(
+        self,
+        context: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        writer_state = context["writer_state"]
+        bridge_result = self.report_kline_bridge.run(
+            context["package"],
+            report_path=writer_state.get("final_report_path"),
+        )
+        bridge_state = {
+            **writer_state,
+            "status": writer_state.get("status", "writer_complete"),
+            "kline_bridge_complete": True,
+            "kline_bridge": bridge_result,
+            "kline_bridge_status": bridge_result.get("status"),
+            "kline_bridge_skip_reason": bridge_result.get("skip_reason"),
+            "kline_ticker": bridge_result.get("ticker"),
+            "kline_url": bridge_result.get("kline_url"),
+            "kline_event_count": bridge_result.get("event_count", 0),
+        }
+        context["bridge_state"] = bridge_state
+        return "report_to_kline_bridge", bridge_state
 
     def _normalize_records(self, raw_records: list[dict[str, Any]]) -> list[ClinicalTrialRecord]:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:

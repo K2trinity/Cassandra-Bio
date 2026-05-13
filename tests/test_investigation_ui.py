@@ -48,6 +48,36 @@ class FakeWorkflowService:
             "harvested_data": [],
             "disease_areas": [],
         }
+        yield "report_to_kline_bridge", {
+            "status": "kline_bridge_complete",
+            "handoff_complete": True,
+            "writer_complete": True,
+            "kline_bridge_complete": True,
+            "final_report": "# Target mode report\nBody",
+            "final_report_markdown": "# Target mode report\nBody",
+            "final_report_path": str(self.markdown_path),
+            "final_report_html_path": str(self.html_path),
+            "final_report_pdf_path": str(self.pdf_path),
+            "clinical_data": {},
+            "evidence_stats": {},
+            "extension_payloads": {},
+            "harvested_data": [],
+            "disease_areas": [],
+            "kline_bridge": {
+                "status": "ready",
+                "skip_reason": None,
+                "company_name": "Eli Lilly and Company",
+                "ticker": "LLY",
+                "kline_url": "/kline/LLY",
+                "event_count": 4,
+                "inserted_event_count": 4,
+            },
+            "kline_bridge_status": "ready",
+            "kline_bridge_skip_reason": None,
+            "kline_ticker": "LLY",
+            "kline_url": "/kline/LLY",
+            "kline_event_count": 4,
+        }
 
     def run(self, **kwargs):
         return {
@@ -100,6 +130,7 @@ def test_investigation_page_uses_fine_grained_workflow_nodes_without_link_progre
         "clinical_analysis",
         "quality_assessment",
         "writing",
+        "kline_bridge",
     ]:
         assert f'data-step="{step}"' in html
         assert f'id="badge-{step}"' in html
@@ -207,6 +238,30 @@ def test_analyze_empty_harvest_payload_explains_source_problem(monkeypatch, tmp_
     assert "prompt/target mismatch" in payload["empty_source_guidance"]["likely_issue"]
     assert "Disease landscape on <disease>" in payload["empty_source_guidance"]["actions"][0]
     assert "source_audit" in payload
+
+
+def test_analyze_completion_exposes_report_to_kline_bridge(monkeypatch, tmp_path):
+    fake_service = FakeWorkflowService(tmp_path)
+    monkeypatch.setattr(app_module, "_workflow_service", fake_service)
+
+    response = app.test_client().post(
+        "/api/analyze",
+        json={
+            "query": "Company pipeline for Eli Lilly and Company",
+            "analysis_target_type": "company",
+        },
+    )
+
+    assert response.status_code == 202
+    thread = app_module.active_analysis["thread"]
+    thread.join(timeout=10)
+
+    payload = app_module.active_analysis["result_payload"]
+    assert payload["kline_bridge"]["status"] == "ready"
+    assert payload["kline_bridge_status"] == "ready"
+    assert payload["kline_ticker"] == "LLY"
+    assert payload["kline_url"] == "/kline/LLY"
+    assert payload["kline_event_count"] == 4
 
 
 def test_investigation_completion_renders_empty_source_guidance():

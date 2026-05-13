@@ -131,6 +131,13 @@ WORKFLOW_STEPS = (
         "detail": "Markdown + HTML + PDF",
         "group": "final",
     },
+    {
+        "id": "kline_bridge",
+        "stage": "validate",
+        "label": "K-line bridge",
+        "detail": "Company events + ticker validation",
+        "group": "final",
+    },
 )
 WORKFLOW_STEP_IDS = tuple(step["id"] for step in WORKFLOW_STEPS)
 WORKFLOW_STEP_BY_ID = {step["id"]: step for step in WORKFLOW_STEPS}
@@ -148,7 +155,11 @@ WORKFLOW_NODE_PROGRESS = {
         ("writing", "active", 86, "Composing the final report..."),
     ),
     "writer": (
-        ("writing", "complete", 96, "Node complete: Report writing."),
+        ("writing", "complete", 94, "Node complete: Report writing."),
+        ("kline_bridge", "active", 96, "Checking whether this report can seed K-line events..."),
+    ),
+    "report_to_kline_bridge": (
+        ("kline_bridge", "complete", 98, "Node complete: K-line bridge."),
     ),
 }
 
@@ -795,6 +806,7 @@ def analyze():
             disease_report_package = result.get("disease_report_package") or {}
             source_audit = result.get("source_audit") or disease_report_package.get("source_audit") or {}
             harvested_count = len(result.get('harvested_data', []))
+            kline_bridge = result.get("kline_bridge") or {}
             empty_source_guidance = _build_empty_source_guidance(
                 query=query,
                 analysis_target_type=analysis_target_type,
@@ -804,7 +816,7 @@ def analyze():
                 harvested_count=harvested_count,
             )
 
-            _emit_progress("writing", "complete", 100, "✅ Analysis complete!")
+            _emit_progress("kline_bridge", "complete", 100, "✅ Analysis complete!")
             completion_payload = {
                 'success': True,
                 'task_id': active_analysis.get("task_id"),
@@ -844,6 +856,16 @@ def analyze():
                 'evidence_stats': evidence_stats,
                 'source_audit': source_audit,
                 'empty_source_guidance': empty_source_guidance,
+                'kline_bridge': kline_bridge,
+                'kline_bridge_status': result.get("kline_bridge_status") or kline_bridge.get("status"),
+                'kline_bridge_skip_reason': (
+                    result.get("kline_bridge_skip_reason")
+                    if result.get("kline_bridge_skip_reason") is not None
+                    else kline_bridge.get("skip_reason")
+                ),
+                'kline_ticker': result.get("kline_ticker") or kline_bridge.get("ticker"),
+                'kline_url': result.get("kline_url") or kline_bridge.get("kline_url"),
+                'kline_event_count': result.get("kline_event_count", kline_bridge.get("event_count", 0)),
                 'extension_payloads': extension_payloads,
                 'contract_version': result.get('dataflow_contract_version'),
             }

@@ -172,6 +172,8 @@ def test_orchestrator_run_returns_app_state_keys(tmp_path):
     assert state["status"] == "writer_complete"
     assert state["handoff_complete"] is True
     assert state["writer_complete"] is True
+    assert state["kline_bridge_complete"] is True
+    assert state["kline_bridge"]["skip_reason"] == "not_company_report"
     assert state["user_query"] == "conduct a disease report on Alzheimer disease"
     assert state["project_name"] == "Alzheimer Disease"
     assert state["analysis_focus"] == "DISEASE_REPORT_PIPELINE"
@@ -237,12 +239,20 @@ def test_orchestrator_stream_yields_harvest_handoff_writer_nodes(tmp_path):
         "harvester",
         "extension_handoff",
         "writer",
+        "report_to_kline_bridge",
     ]
     handoff_state = events[1][1]
     writer_state = events[2][1]
+    bridge_state = events[3][1]
     assert handoff_state["handoff_complete"] is True
     assert writer_state["handoff_complete"] is True
     assert writer_state["writer_complete"] is True
+    assert bridge_state["handoff_complete"] is True
+    assert bridge_state["writer_complete"] is True
+    assert bridge_state["kline_bridge_complete"] is True
+    assert bridge_state["kline_bridge"]["status"] == "skipped"
+    assert bridge_state["kline_bridge"]["skip_reason"] == "not_company_report"
+    assert bridge_state["final_report"] == writer_state["final_report"]
 
 
 def test_orchestrator_applies_max_trials_after_landscape_prioritization(tmp_path):
@@ -317,9 +327,12 @@ def test_orchestrator_applies_max_trials_after_landscape_prioritization(tmp_path
         "harvester",
         "extension_handoff",
         "writer",
+        "report_to_kline_bridge",
     ]
     assert_final_state_contract(events[1][1])
     assert_final_state_contract(events[2][1])
+    assert_final_state_contract(events[3][1])
+    assert events[3][1]["kline_bridge"]["skip_reason"] == "not_company_report"
 
 
 def test_workflow_service_run_uses_disease_orchestrator(tmp_path):
