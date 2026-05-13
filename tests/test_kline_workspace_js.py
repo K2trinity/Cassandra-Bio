@@ -168,7 +168,7 @@ def test_workspace_js_can_load_full_event_history_when_initial_points_are_limite
           if (url === '/api/backtest/options?ticker=MRNA') {
             return Promise.resolve(jsonResponse({}));
           }
-          if (url === '/api/kline/events/MRNA') {
+          if (url === '/api/kline/events/MRNA?layer=catalysts') {
             return Promise.resolve(jsonResponse([
               { id: 'evt-1', ticker: 'MRNA', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical', title: 'Displayed event', summary: 'Initial point.', sentiment: 'positive', priority: 1, confidence: 'high', source: 'clinicaltrials' },
               { id: 'evt-2', ticker: 'MRNA', date: '2026-04-21', type: 'trial_status_change', category: 'clinical', title: 'Hidden event 2', summary: 'Loaded later.', sentiment: 'neutral', priority: 2, confidence: 'medium', source: 'clinicaltrials' },
@@ -193,7 +193,7 @@ def test_workspace_js_can_load_full_event_history_when_initial_points_are_limite
         await settle();
         await settle();
 
-        if (!requests.includes('/api/kline/events/MRNA')) {
+        if (!requests.includes('/api/kline/events/MRNA?layer=catalysts')) {
           throw new Error('full event endpoint was not requested: ' + requests.join(','));
         }
         if (!catalysts.textContent.includes('Hidden event 3')) {

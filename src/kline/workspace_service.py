@@ -327,6 +327,22 @@ def _split_event_layers(
     return hard_events, news_events, macro_events
 
 
+def filter_events_for_layer(
+    events: list[KlineEvent],
+    layer: object,
+) -> list[KlineEvent]:
+    normalized_layer = _normalized_token(layer)
+    if normalized_layer not in {"catalysts", "clinical", "news", "macro"}:
+        return events
+
+    hard_events, news_events, macro_events = _split_event_layers(events)
+    if normalized_layer in {"catalysts", "clinical"}:
+        return hard_events
+    if normalized_layer == "news":
+        return news_events
+    return macro_events
+
+
 def _event_layer_kind(event: KlineEvent) -> str:
     category = _normalized_token(event.category)
     source = _normalized_token(event.source)

@@ -332,6 +332,61 @@ def test_kline_events_api_returns_all_phase2_event_layers(monkeypatch):
     assert [event["id"] for event in body] == ["clinical-1", "news-1", "macro-1"]
 
 
+def test_kline_events_api_can_return_single_event_layer(monkeypatch):
+    from src.kline.models import KlineDataStatus, KlineEvent
+
+    clinical = KlineEvent.example("MRNA")
+    clinical.id = "clinical-1"
+    news = KlineEvent(
+        id="news-1",
+        ticker="MRNA",
+        date="2026-04-21",
+        type="market_news",
+        category="news",
+        title="Market news",
+        summary="Market news",
+        sentiment="positive",
+        priority=3,
+        confidence="medium",
+        source="alphavantage",
+    )
+    macro = KlineEvent(
+        id="macro-1",
+        ticker="MRNA",
+        date="2026-04-22",
+        type="macro_economic",
+        category="macro",
+        title="Macro event",
+        summary="Macro event",
+        sentiment="neutral",
+        priority=3,
+        confidence="low",
+        source="gdelt",
+    )
+
+    class FakeCatalystProvider:
+        def load(self, ticker: str, cache_only: bool = False):
+            assert ticker == "MRNA"
+            assert cache_only is True
+            return [clinical, news, macro], [
+                KlineDataStatus(source="clinicaltrials", status="ready", item_count=3)
+            ]
+
+    monkeypatch.setattr(kline_routes, "catalyst_event_provider", FakeCatalystProvider())
+    client = app.test_client()
+
+    catalyst_response = client.get("/api/kline/events/MRNA?layer=catalysts")
+    news_response = client.get("/api/kline/events/MRNA?layer=news")
+    macro_response = client.get("/api/kline/events/MRNA?layer=macro")
+
+    assert catalyst_response.status_code == 200
+    assert news_response.status_code == 200
+    assert macro_response.status_code == 200
+    assert [event["id"] for event in catalyst_response.get_json()] == ["clinical-1"]
+    assert [event["id"] for event in news_response.get_json()] == ["news-1"]
+    assert [event["id"] for event in macro_response.get_json()] == ["macro-1"]
+
+
 def test_kline_events_api_does_not_build_full_workspace(monkeypatch):
     from src.kline.models import KlineDataStatus, KlineEvent
 

@@ -556,21 +556,25 @@
       text: "Load all"
     });
     button.addEventListener("click", function () {
-      loadAllEvents(workspace, state, button);
+      loadAllEvents(workspace, state, button, layer);
     });
     notice.appendChild(button);
     panel.appendChild(notice);
   }
 
-  function loadAllEvents(workspace, state, button) {
+  function loadAllEvents(workspace, state, button, layer) {
     var ticker = String((workspace && workspace.ticker) || "").trim().toUpperCase();
     var fetchImpl = window.fetch || (typeof fetch === "function" ? fetch : null);
     if (!ticker || typeof fetchImpl !== "function") {
       return;
     }
+    var layerKind = String((layer && (layer.kind || layer.id)) || "catalysts");
     button.disabled = true;
     button.textContent = "Loading";
-    fetchImpl("/api/kline/events/" + encodeURIComponent(ticker)).then(function (response) {
+    fetchImpl(
+      "/api/kline/events/" + encodeURIComponent(ticker) +
+      "?layer=" + encodeURIComponent(layerKind)
+    ).then(function (response) {
       return response.json().then(function (body) {
         return { ok: response.ok, body: body };
       });

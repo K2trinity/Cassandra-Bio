@@ -27,7 +27,7 @@ from src.backtest.multifactor_strategy import (
 from src.backtest.strategy_registry import EVENT_BASELINE, MULTIFACTOR_SCORE
 from src.kline.providers.catalyst_provider import CatalystEventProvider
 from src.kline.ticker_resolver import TickerResolver
-from src.kline.workspace_service import KlineWorkspaceService
+from src.kline.workspace_service import KlineWorkspaceService, filter_events_for_layer
 
 kline_bp = Blueprint("kline", __name__)
 workspace_service = KlineWorkspaceService()
@@ -103,6 +103,7 @@ def api_kline_events(symbol: str):
         events, _statuses = catalyst_event_provider.load(company.ticker, cache_only=True)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    events = filter_events_for_layer(events, request.args.get("layer"))
     return jsonify([event.to_dict() for event in events])
 
 
