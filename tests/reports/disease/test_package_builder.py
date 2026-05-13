@@ -29,6 +29,7 @@ def _trial(
     posted: date | None,
     title: str | None = None,
     *,
+    status: str = "RECRUITING",
     conditions: list[str] | None = None,
     phases: list[str] | None = None,
     has_results: bool = False,
@@ -41,7 +42,7 @@ def _trial(
     return ClinicalTrialRecord(
         study_title=title or f"Study {nct_number}",
         nct_number=nct_number,
-        status="RECRUITING",
+        status=status,
         phases=phases or ["PHASE1"],
         has_results=has_results,
         conditions=conditions or ["Alzheimer Disease"],
@@ -288,12 +289,73 @@ def test_build_populates_company_target_metadata_and_stratum_counts():
         "stratum_counts": {
             "catalyst": 1,
             "track_record": 1,
-            "expansion": 1,
-            "unclassified": 1,
+            "expansion": 2,
         },
         "expansion_condition_counts": {
-            "Alzheimer Disease": 1,
+            "Alzheimer Disease": 2,
         },
+    }
+
+
+def test_build_classifies_company_broad_portfolio_records_without_unclassified_bucket():
+    profile = _profile(
+        target_type="company",
+        target_name="Moderna, Inc.",
+        company_name="Moderna, Inc.",
+    )
+    portfolio_baseline = _trial(
+        "NCT_BASELINE",
+        date(2024, 1, 1),
+        status="UNKNOWN",
+        phases=[],
+        primary_stratum="unclassified",
+    ).model_copy(update={"phases": [], "study_type": "OBSERVATIONAL"})
+
+    package = DiseaseReportPackageBuilder().build(
+        disease_profile=profile,
+        retained_records=[
+            _trial(
+                "NCT_CATALYST",
+                date(2025, 1, 1),
+                status="ACTIVE_NOT_RECRUITING",
+                phases=["PHASE3"],
+                primary_completion_date=date(2026, 9, 1),
+            ),
+            _trial(
+                "NCT_EXPANSION",
+                date(2025, 2, 1),
+                status="RECRUITING",
+                phases=["PHASE1"],
+            ),
+            _trial(
+                "NCT_TRACK",
+                date(2023, 1, 1),
+                status="COMPLETED",
+                phases=[],
+                has_results=True,
+            ).model_copy(update={"phases": []}),
+            portfolio_baseline,
+        ],
+        raw_count=4,
+        rejected_nct_numbers=[],
+        risk_records=[],
+    )
+
+    assert package.source_audit.details["stratum_counts"] == {
+        "catalyst": 1,
+        "expansion": 1,
+        "track_record": 1,
+        "portfolio_baseline": 1,
+    }
+    assert "unclassified" not in package.source_audit.details["stratum_counts"]
+    assert {
+        trial.nct_number: trial.primary_stratum
+        for trial in package.clinical_trials
+    } == {
+        "NCT_CATALYST": "catalyst",
+        "NCT_EXPANSION": "expansion",
+        "NCT_TRACK": "track_record",
+        "NCT_BASELINE": "portfolio_baseline",
     }
 
 

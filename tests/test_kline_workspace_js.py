@@ -138,6 +138,75 @@ def test_workspace_js_fetches_workspace_without_auto_refresh_when_inline_payload
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_workspace_js_can_load_full_event_history_when_initial_points_are_limited():
+    result = _run_workspace_script(r"""
+        const requests = [];
+        const workspace = makeWorkspace({
+          layers: [{
+            kind: 'catalysts',
+            label: 'Catalysts',
+            visible_by_default: true,
+            summary: { count: 3, displayed_count: 1, truncated: true },
+            points: [{
+              id: 'evt-1',
+              ticker: 'MRNA',
+              date: '2026-04-20',
+              type: 'trial_results_posted',
+              category: 'clinical',
+              title: 'Displayed event',
+              summary: 'Initial point.',
+              sentiment: 'positive',
+              priority: 1,
+              confidence: 'high',
+              source: 'clinicaltrials'
+            }]
+          }]
+        });
+        installWorkspace(workspace);
+        window.fetch = function (url) {
+          requests.push(url);
+          if (url === '/api/backtest/options?ticker=MRNA') {
+            return Promise.resolve(jsonResponse({}));
+          }
+          if (url === '/api/kline/events/MRNA') {
+            return Promise.resolve(jsonResponse([
+              { id: 'evt-1', ticker: 'MRNA', date: '2026-04-20', type: 'trial_results_posted', category: 'clinical', title: 'Displayed event', summary: 'Initial point.', sentiment: 'positive', priority: 1, confidence: 'high', source: 'clinicaltrials' },
+              { id: 'evt-2', ticker: 'MRNA', date: '2026-04-21', type: 'trial_status_change', category: 'clinical', title: 'Hidden event 2', summary: 'Loaded later.', sentiment: 'neutral', priority: 2, confidence: 'medium', source: 'clinicaltrials' },
+              { id: 'evt-3', ticker: 'MRNA', date: '2026-04-22', type: 'trial_status_change', category: 'clinical', title: 'Hidden event 3', summary: 'Loaded later.', sentiment: 'neutral', priority: 2, confidence: 'medium', source: 'clinicaltrials' }
+            ]));
+          }
+          throw new Error('unexpected request: ' + url);
+        };
+
+        runWorkspace();
+        await settle();
+        const catalysts = document.querySelector('[data-panel="catalysts"]');
+        if (!catalysts.textContent.includes('Showing 1 of 3 events')) {
+          throw new Error('missing truncated event notice: ' + catalysts.textContent);
+        }
+        const loadAllButton = document.querySelectorAll('button').find((button) => button.textContent.includes('Load all'));
+        if (!loadAllButton) {
+          throw new Error('missing load-all events control');
+        }
+
+        loadAllButton.dispatchEvent({ type: 'click' });
+        await settle();
+        await settle();
+
+        if (!requests.includes('/api/kline/events/MRNA')) {
+          throw new Error('full event endpoint was not requested: ' + requests.join(','));
+        }
+        if (!catalysts.textContent.includes('Hidden event 3')) {
+          throw new Error('catalyst panel did not rerender with full events: ' + catalysts.textContent);
+        }
+        if (chartConfigs[chartConfigs.length - 1].events.length !== 3) {
+          throw new Error('chart did not rerender with full event set');
+        }
+        """)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_workspace_js_fetches_backtest_options_for_current_ticker():
     result = _run_workspace_script(r"""
         const requests = [];

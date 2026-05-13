@@ -489,13 +489,16 @@
     if (!panel) {
       return;
     }
-    var events = catalystLayer(workspace).points || [];
+    var layer = catalystLayer(workspace);
+    var events = layer.points || [];
     panel.replaceChildren();
 
     if (!events.length) {
       panel.appendChild(makeElement("p", { className: "empty-state", text: "No catalysts for this ticker." }));
       return;
     }
+
+    renderEventDisplayNotice(panel, workspace, state, layer);
 
     events.forEach(function (event) {
       var reportDerived = isReportDerivedEvent(event);
@@ -532,6 +535,67 @@
         activatePanel("details");
       });
       panel.appendChild(card);
+    });
+  }
+
+  function renderEventDisplayNotice(panel, workspace, state, layer) {
+    var summary = layer.summary || {};
+    var total = Number(summary.count || 0);
+    var displayed = Number(summary.displayed_count || (layer.points || []).length || 0);
+    if (!summary.truncated || !total || displayed >= total || state.fullEventsLoaded) {
+      return;
+    }
+
+    var notice = makeElement("div", { className: "event-display-notice" });
+    notice.appendChild(makeElement("span", {
+      text: "Showing " + displayed + " of " + total + " events."
+    }));
+    var button = makeElement("button", {
+      type: "button",
+      className: "event-load-all",
+      text: "Load all"
+    });
+    button.addEventListener("click", function () {
+      loadAllEvents(workspace, state, button);
+    });
+    notice.appendChild(button);
+    panel.appendChild(notice);
+  }
+
+  function loadAllEvents(workspace, state, button) {
+    var ticker = String((workspace && workspace.ticker) || "").trim().toUpperCase();
+    var fetchImpl = window.fetch || (typeof fetch === "function" ? fetch : null);
+    if (!ticker || typeof fetchImpl !== "function") {
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Loading";
+    fetchImpl("/api/kline/events/" + encodeURIComponent(ticker)).then(function (response) {
+      return response.json().then(function (body) {
+        return { ok: response.ok, body: body };
+      });
+    }).then(function (result) {
+      if (!result.ok || !Array.isArray(result.body)) {
+        button.disabled = false;
+        button.textContent = "Load all";
+        return;
+      }
+      var layer = catalystLayer(workspace);
+      layer.points = result.body;
+      layer.summary = Object.assign({}, layer.summary || {}, {
+        count: result.body.length,
+        displayed_count: result.body.length,
+        truncated: false,
+        omitted_count: 0
+      });
+      state.fullEventsLoaded = true;
+      renderCatalysts(workspace, state);
+      renderDetails(workspace, state);
+      renderLayerBar(workspace, state);
+      renderChart(workspace, state);
+    }).catch(function () {
+      button.disabled = false;
+      button.textContent = "Load all";
     });
   }
 

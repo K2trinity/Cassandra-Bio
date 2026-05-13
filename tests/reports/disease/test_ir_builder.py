@@ -340,7 +340,63 @@ def test_company_ir_exposes_pipeline_condition_counts_and_company_fourth_summary
         for inline in block.get("inlines", [])
         if {"type": "bold"} in inline.get("marks", [])
     ]
-    assert bold_labels == ["Catalyst Tracker", "Expansion Map", "Track Record"]
+    assert bold_labels == [
+        "Catalyst Tracker",
+        "Expansion Map",
+        "Track Record",
+        "Portfolio Baseline",
+    ]
+
+
+def test_company_ir_explains_portfolio_baseline_and_missing_phase_without_unspecified_labels():
+    package = _company_package()
+    baseline = package.clinical_trials[0].model_copy(
+        update={
+            "nct_number": "NCT00000004",
+            "study_title": "Observational registry",
+            "status": "UNKNOWN",
+            "study_type": "OBSERVATIONAL",
+            "phases": [],
+            "primary_stratum": "portfolio_baseline",
+            "strata": ["portfolio_baseline"],
+            "has_results": False,
+            "study_results": "No posted results",
+        }
+    )
+    package = package.model_copy(
+        update={
+            "clinical_trials": [*package.clinical_trials, baseline],
+            "source_audit": package.source_audit.model_copy(
+                update={
+                    "retained_count": 4,
+                    "details": {
+                        **package.source_audit.details,
+                        "stratum_counts": {
+                            "catalyst": 1,
+                            "expansion": 1,
+                            "track_record": 1,
+                            "portfolio_baseline": 1,
+                        },
+                    },
+                }
+            ),
+        }
+    )
+
+    ir = DiseaseReportIRBuilder().build(package)
+    payload = json.dumps(ir, ensure_ascii=False)
+    landscape_table = _find_table(ir, "clinical_trial_and_pipeline_landscape")
+    rows = _table_rows(landscape_table)
+    summary_chapter = _chapter(ir, "company_catalyst_and_rd_summary")
+
+    assert "Unclassified" not in payload
+    assert "Unspecified" not in payload
+    assert any(row[0] == "Portfolio Baseline" and row[3] == "Not Applicable" for row in rows)
+    assert any(
+        block.get("caption") == "Company portfolio interpretation"
+        for block in summary_chapter["blocks"]
+    )
+    assert "Portfolio Baseline" in payload
 
 
 def test_company_landscape_uses_company_layer_labels():

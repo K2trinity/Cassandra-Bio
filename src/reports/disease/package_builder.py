@@ -17,8 +17,13 @@ COMPANY_STRATUM_ORDER = {
     "catalyst": 0,
     "expansion": 1,
     "track_record": 2,
-    "unclassified": 3,
+    "portfolio_baseline": 3,
+    "unclassified": 4,
 }
+COMPANY_ACTIVE_STATUSES = {"RECRUITING", "NOT_YET_RECRUITING", "ENROLLING_BY_INVITATION"}
+COMPANY_CATALYST_STATUSES = {"ACTIVE_NOT_RECRUITING"}
+COMPANY_TRACK_RECORD_STATUSES = {"COMPLETED", "TERMINATED", "WITHDRAWN", "SUSPENDED"}
+COMPANY_CATALYST_PHASES = {"PHASE2", "PHASE3", "PHASE4"}
 
 
 class DiseaseReportPackageBuilder:
@@ -33,7 +38,12 @@ class DiseaseReportPackageBuilder:
         max_records: int = 50,
     ) -> DiseaseReportPackage:
         deduped_by_nct: dict[str, ClinicalTrialRecord] = {}
-        for record in retained_records:
+        candidate_records = (
+            [_classify_company_record(record) for record in retained_records]
+            if disease_profile.target_type == "company"
+            else retained_records
+        )
+        for record in candidate_records:
             existing = deduped_by_nct.get(record.nct_number)
             candidate = _merge_duplicate_record(
                 disease_profile,
@@ -216,6 +226,12 @@ def _company_sort_key(record: ClinicalTrialRecord) -> tuple[object, ...]:
             or record.results_first_posted
             or record.study_first_posted
         )
+    elif stratum == "portfolio_baseline":
+        date_key = _descending_date_key(
+            record.last_update_posted
+            or record.study_first_posted
+            or record.completion_date
+        )
     else:
         date_key = _descending_date_key(record.study_first_posted)
     return (rank, *date_key, record.nct_number)
@@ -223,6 +239,45 @@ def _company_sort_key(record: ClinicalTrialRecord) -> tuple[object, ...]:
 
 def _report_stratum(record: ClinicalTrialRecord) -> str:
     return _primary_stratum("company", [record.primary_stratum, *record.strata])
+
+
+def _classify_company_record(record: ClinicalTrialRecord) -> ClinicalTrialRecord:
+    explicit_strata = [
+        stratum
+        for stratum in [record.primary_stratum, *record.strata]
+        if stratum and stratum != "unclassified"
+    ]
+    if explicit_strata:
+        primary = _primary_stratum("company", explicit_strata)
+        return record.model_copy(
+            update={
+                "strata": _unique_values(explicit_strata),
+                "primary_stratum": primary,
+            }
+        )
+
+    inferred = _infer_company_stratum(record)
+    return record.model_copy(
+        update={
+            "strata": [inferred],
+            "primary_stratum": inferred,
+        }
+    )
+
+
+def _infer_company_stratum(record: ClinicalTrialRecord) -> str:
+    status = _clean_token(record.status)
+    phases = {_clean_token(phase) for phase in record.phases}
+    if record.has_results or status in COMPANY_TRACK_RECORD_STATUSES:
+        return "track_record"
+    if status in COMPANY_CATALYST_STATUSES or (
+        phases & COMPANY_CATALYST_PHASES
+        and (record.primary_completion_date or record.completion_date)
+    ):
+        return "catalyst"
+    if status in COMPANY_ACTIVE_STATUSES:
+        return "expansion"
+    return "portfolio_baseline"
 
 
 def _primary_stratum(
@@ -248,6 +303,10 @@ def _ascending_date_key(value: date | None) -> tuple[bool, int]:
 
 def _descending_date_key(value: date | None) -> tuple[bool, int]:
     return (value is None, -value.toordinal() if value else 0)
+
+
+def _clean_token(value: object) -> str:
+    return str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
 
 
 def _condition_counts_for_stratum(

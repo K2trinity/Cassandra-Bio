@@ -18,6 +18,7 @@ STRATUM_LABELS = {
     "catalyst": "Catalyst Tracker",
     "expansion": "Expansion Map",
     "track_record": "Track Record",
+    "portfolio_baseline": "Portfolio Baseline",
     "evidence": "Evidence",
     "foundation": "Foundation",
     "frontier": "Frontier",
@@ -100,7 +101,7 @@ CHART_COLORS = [
 ]
 
 DISEASE_STRATUM_ORDER = ["evidence", "foundation", "frontier", "unclassified"]
-COMPANY_STRATUM_ORDER = ["catalyst", "expansion", "track_record", "unclassified"]
+COMPANY_STRATUM_ORDER = ["catalyst", "expansion", "track_record", "portfolio_baseline"]
 
 
 class DiseaseReportIRBuilder:
@@ -265,7 +266,7 @@ class DiseaseReportIRBuilder:
                 _display_strata(trial),
                 trial.study_title,
                 trial.nct_number,
-                _join_list(trial.phases),
+                _phase_display(trial),
                 trial.status,
                 _stop_reason(trial),
                 trial.study_results,
@@ -442,6 +443,7 @@ class DiseaseReportIRBuilder:
                         f"{stratum_counts.get('catalyst', 0)} catalyst records",
                         f"{stratum_counts.get('expansion', 0)} expansion records",
                         f"{stratum_counts.get('track_record', 0)} track-record records",
+                        f"{stratum_counts.get('portfolio_baseline', 0)} portfolio-baseline records",
                     ],
                 ),
                 _bar_widget(
@@ -459,6 +461,21 @@ class DiseaseReportIRBuilder:
                     "Expansion Condition Mix",
                     _count_items(expansion_condition_counts, limit=8),
                     dataset_label="Records",
+                ),
+                _table(
+                    [
+                        "Layer",
+                        "Records",
+                        "With Results",
+                        "Leading Conditions",
+                        "Interpretation",
+                    ],
+                    _company_portfolio_interpretation_rows(package.clinical_trials),
+                    caption="Company portfolio interpretation",
+                    metadata={
+                        "layout": "company-portfolio-interpretation",
+                        "className": "company-portfolio-interpretation",
+                    },
                 ),
                 _table(
                     RISK_ASSESSMENT_COLUMNS,
@@ -484,6 +501,10 @@ class DiseaseReportIRBuilder:
                 _labeled_paragraph(
                     "Track Record",
                     f"{stratum_counts.get('track_record', 0)} result-bearing records provide historical evidence, not inferred success rate.",
+                ),
+                _labeled_paragraph(
+                    "Portfolio Baseline",
+                    f"{stratum_counts.get('portfolio_baseline', 0)} broad sponsor records preserve portfolio coverage without being mislabeled as catalysts.",
                 ),
             ],
         }
@@ -628,7 +649,7 @@ def _company_layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[
             for trial in trials
             if _trial_has_stratum(trial, stratum) and trial.has_results
         )
-        for stratum in ("catalyst", "expansion", "track_record", "unclassified")
+        for stratum in ("catalyst", "expansion", "track_record", "portfolio_baseline")
     }
     return [
         [
@@ -653,11 +674,11 @@ def _company_layer_summary_rows(trials: list[ClinicalTrialRecord]) -> list[list[
             "Result-bearing historical evidence, not inferred success rate",
         ],
         [
-            "Unclassified",
-            counts.get("unclassified", 0),
-            "Records outside configured company layers",
-            result_counts["unclassified"],
-            "Retained sponsor records without configured layer assignment",
+            "Portfolio Baseline",
+            counts.get("portfolio_baseline", 0),
+            "Broad sponsor records outside catalyst/expansion/track-record filters",
+            result_counts["portfolio_baseline"],
+            "Portfolio coverage for context, not a near-term event label",
         ],
     ]
 
@@ -840,11 +861,52 @@ def _count_items(
     return items or [("No records", 0)]
 
 
+def _company_portfolio_interpretation_rows(
+    trials: list[ClinicalTrialRecord],
+) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    interpretations = {
+        "catalyst": "Near-term clinical events and follow-up readouts; read as timing-sensitive, not as guaranteed stock impact.",
+        "expansion": "Recruiting or newly opened studies; read as current R&D allocation by condition.",
+        "track_record": "Completed, stopped, or result-bearing studies; read as historical evidence and operational precedent.",
+        "portfolio_baseline": "Broad sponsor records retained for context; read as portfolio coverage rather than catalyst evidence.",
+    }
+    for stratum in COMPANY_STRATUM_ORDER:
+        members = [trial for trial in trials if _trial_has_stratum(trial, stratum)]
+        if not members:
+            continue
+        rows.append(
+            [
+                STRATUM_LABELS.get(stratum, stratum),
+                len(members),
+                sum(1 for trial in members if trial.has_results),
+                _top_conditions_for_trials(members),
+                interpretations[stratum],
+            ]
+        )
+    return rows or [["No company records", 0, 0, "-", "No company portfolio records retained."]]
+
+
+def _top_conditions_for_trials(trials: list[ClinicalTrialRecord]) -> str:
+    conditions = [
+        condition
+        for trial in trials
+        for condition in trial.conditions
+        if condition
+    ]
+    top_conditions = _top_items(conditions, limit=3)
+    return ", ".join(top_conditions) if top_conditions else "-"
+
+
 def _phase_distribution(trials: list[ClinicalTrialRecord]) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for trial in trials:
-        phases = trial.phases or ["Unspecified"]
-        counter.update(_display_value(phase) for phase in phases if _display_value(phase))
+        phases = trial.phases or [_missing_phase_label(trial)]
+        counter.update(
+            _display_phase_value(phase)
+            for phase in phases
+            if _display_phase_value(phase)
+        )
     return dict(counter)
 
 
@@ -914,7 +976,7 @@ def _mechanism_or_intervention(trial: ClinicalTrialRecord) -> str:
 
 
 def _clinical_stage_status(trial: ClinicalTrialRecord) -> str:
-    stage = _join_list(trial.phases)
+    stage = _phase_display(trial)
     dates = []
     if trial.study_first_posted:
         dates.append(f"first posted {_isoformat(trial.study_first_posted)}")
@@ -986,6 +1048,26 @@ def _join_list(values: list[str]) -> str:
     return ", ".join(value for value in values if value) or "-"
 
 
+def _phase_display(trial: ClinicalTrialRecord) -> str:
+    if not trial.phases:
+        return _missing_phase_label(trial)
+    return ", ".join(_display_phase_value(phase) for phase in trial.phases if phase) or _missing_phase_label(trial)
+
+
+def _missing_phase_label(trial: ClinicalTrialRecord) -> str:
+    study_type = str(trial.study_type or "").strip().upper()
+    if study_type and study_type != "INTERVENTIONAL":
+        return "Not Applicable"
+    return "Phase Not Reported"
+
+
+def _display_phase_value(value: Any) -> str:
+    text = _display_value(value).strip()
+    if text.upper() in {"NA", "N/A", "NOT_APPLICABLE", "NOT APPLICABLE"}:
+        return "Not Applicable"
+    return text
+
+
 def _display_strata(trial: ClinicalTrialRecord) -> str:
     values = trial.strata or [trial.primary_stratum or "unclassified"]
     labels = [STRATUM_LABELS.get(value, value) for value in values if value]
@@ -1035,7 +1117,8 @@ def _company_summary_fallback(
     return (
         f"**Catalyst Tracker:** {stratum_counts.get('catalyst', 0)} event-driven records. "
         f"**Expansion Map:** {stratum_counts.get('expansion', 0)} recruiting records; {expansion_focus}. "
-        f"**Track Record:** {stratum_counts.get('track_record', 0)} posted-results records as historical evidence."
+        f"**Track Record:** {stratum_counts.get('track_record', 0)} posted-results records as historical evidence. "
+        f"**Portfolio Baseline:** {stratum_counts.get('portfolio_baseline', 0)} broad sponsor records keep long-tail context separated from catalyst interpretation."
     )
 
 
