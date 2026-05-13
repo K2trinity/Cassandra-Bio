@@ -99,9 +99,9 @@
   }
 
   function loadTickerOptions() {
-    var list = byId("ticker-options");
+    var select = byId("ticker-select");
     var request = browserFetch();
-    if (!list || !request) {
+    if (!select || !request) {
       return;
     }
     request(tickerOptionsApiUrl()).then(function (response) {
@@ -110,27 +110,52 @@
       });
     }).then(function (result) {
       if (result.ok && Array.isArray(result.body)) {
-        renderTickerOptions(list, result.body);
+        renderTickerOptions(select, result.body);
       }
     }).catch(function () {
-      // The free-form ticker input still works if the suggestion list cannot load.
+      setTickerCount(0);
     });
   }
 
   function renderTickerOptions(list, companies) {
     list.replaceChildren();
+    var currentTicker = readWorkspaceTicker();
+    var hasCurrentTicker = false;
     companies.forEach(function (company) {
       var ticker = String((company && company.ticker) || "").trim().toUpperCase();
       if (!ticker) {
         return;
       }
-      var option = document.createElement("option");
-      option.value = ticker;
-      if (company && company.name) {
-        option.label = ticker + " - " + company.name;
+      if (ticker === currentTicker) {
+        hasCurrentTicker = true;
       }
+      var option = makeElement("option", {
+        text: company && company.name ? ticker + " - " + company.name : ticker
+      });
+      option.value = ticker;
       list.appendChild(option);
     });
+    if (currentTicker && !hasCurrentTicker) {
+      var currentOption = makeElement("option", { text: currentTicker });
+      currentOption.value = currentTicker;
+      list.insertBefore(currentOption, list.firstChild);
+    }
+    if (currentTicker) {
+      list.value = currentTicker;
+    }
+    setTickerCount(companies.length);
+  }
+
+  function setTickerCount(count) {
+    var node = byId("ticker-count");
+    if (!node) {
+      return;
+    }
+    if (!Number.isFinite(Number(count)) || Number(count) <= 0) {
+      node.textContent = "0 tickers";
+      return;
+    }
+    node.textContent = Number(count) + " tickers";
   }
 
   function catalystLayer(workspace) {

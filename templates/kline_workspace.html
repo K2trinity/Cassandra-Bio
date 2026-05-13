@@ -4,7 +4,7 @@
 
 {% block head %}
 <link rel="stylesheet" href="/static/vendor/pokie-chart.css">
-<link rel="stylesheet" href="/static/kline/workspace.css">
+<link rel="stylesheet" href="/static/kline/workspace.css?v=20260513-kline-universe-select">
 {% endblock %}
 
 {% block content %}
@@ -27,10 +27,12 @@
 
     <section class="kline-topbar" aria-label="Workspace controls">
         <div class="ticker-control" data-role="ticker-selector">
-            <label for="ticker-search">Ticker</label>
+            <label for="ticker-select">Ticker</label>
             <form id="ticker-form" class="ticker-form">
-                <input id="ticker-search" name="symbol" value="{{ current_ticker }}" autocomplete="off" spellcheck="false" inputmode="latin" list="ticker-options">
-                <datalist id="ticker-options"></datalist>
+                <select id="ticker-select" name="symbol" aria-label="Ticker">
+                    <option value="{{ current_ticker }}">{{ current_ticker }}</option>
+                </select>
+                <span id="ticker-count" class="ticker-count">loading</span>
                 <button type="submit">Open</button>
             </form>
         </div>
@@ -84,5 +86,5 @@
 
 {% block scripts %}
 <script src="/static/vendor/pokie-chart.umd.js"></script>
-<script src="/static/kline/workspace.js"></script>
+<script src="/static/kline/workspace.js?v=20260513-kline-universe-select"></script>
 {% endblock %}

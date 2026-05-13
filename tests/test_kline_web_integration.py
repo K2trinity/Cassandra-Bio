@@ -90,8 +90,8 @@ def test_kline_page_renders_lightweight_shell_without_workspace_fetch(monkeypatc
     assert 'data-ticker="MRNA"' in html
     assert 'id="kline-workspace-data" type="application/json"' not in html
     assert 'data-role="ticker-selector"' in html
-    assert 'list="ticker-options"' in html
-    assert 'id="ticker-options"' in html
+    assert 'id="ticker-select"' in html
+    assert 'id="ticker-count"' in html
     assert 'id="source-strip"' in html
     assert 'id="company-name"' in html
     assert 'id="last-close"' in html
@@ -104,9 +104,9 @@ def test_kline_page_renders_lightweight_shell_without_workspace_fetch(monkeypatc
     assert 'data-panel="details"' in html
     assert 'data-panel="backtest"' in html
     assert 'data-panel="status"' in html
-    assert "/static/kline/workspace.css" in html
+    assert "/static/kline/workspace.css?v=" in html
     assert "/static/vendor/pokie-chart.umd.js" in html
-    assert "/static/kline/workspace.js" in html
+    assert "/static/kline/workspace.js?v=" in html
     assert LEGACY_KLINE_ANALYSIS_ENDPOINT not in html
     for reference in LEGACY_KLINE_BRIDGE_REFERENCES:
         assert reference not in html
@@ -183,6 +183,7 @@ def test_kline_workspace_static_js_exposes_real_backtest_strategy_controls():
 
     for expected in [
         "/api/kline/tickers",
+        "ticker-count",
         "/api/backtest/options",
         "strategy_id",
         "multifactor_score",

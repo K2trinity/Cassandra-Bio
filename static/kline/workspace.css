@@ -72,7 +72,8 @@
 .ticker-form {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-width: 0;
 }
 
 .ticker-form input,
@@ -117,6 +118,14 @@
 .kline-error a:hover {
   background: #2d3642;
   border-color: #445063;
+}
+
+.ticker-count {
+  align-self: center;
+  color: var(--kline-muted);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .layer-bar button.is-active,
